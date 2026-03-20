@@ -57,6 +57,33 @@ C_RED = "#d75f5f"        # 167 — errors, blocked
 C_LIGHT = "#bcbcbc"      # 250 — light text
 C_DIM = "#808080"        # 244 — dimmed text
 
+
+def _token_color(total_tokens: int) -> str:
+    """Color-code token counts by magnitude for at-a-glance readability."""
+    if total_tokens >= 10_000_000:
+        return C_RED
+    if total_tokens >= 1_000_000:
+        return C_ORANGE
+    if total_tokens >= 100_000:
+        return C_LIGHT
+    return C_DIM
+
+
+def _token_color_markup(text: str, total_tokens: int) -> str:
+    """Wrap text in Rich color markup based on token magnitude."""
+    color = _token_color(total_tokens)
+    return f"[{color}]{text}[/{color}]"
+
+
+def _colored_tokens(session_or_thread) -> str:
+    """Return a Rich-markup token string colored by magnitude."""
+    total = getattr(session_or_thread, 'total_tokens', None)
+    if total is None:
+        total = session_or_thread.total_input_tokens + session_or_thread.total_output_tokens
+    color = _token_color(total)
+    return f"[{color}]{session_or_thread.tokens_display}[/{color}]"
+
+
 STATUS_THEME = {
     Status.QUEUED: C_DIM,
     Status.IN_PROGRESS: C_CYAN,
@@ -355,6 +382,8 @@ class AddScreen(ModalScreen[Workstream | None]):
 class DetailScreen(ModalScreen[None]):
     BINDINGS = [
         Binding("q,escape", "dismiss", "Back"),
+        Binding("j,down", "scroll_down", show=False),
+        Binding("k,up", "scroll_up", show=False),
         Binding("s", "cycle_status", "Status"),
         Binding("S", "cycle_status_back", "Status\u2190"),
         Binding("c", "spawn", "Spawn"),
@@ -372,6 +401,7 @@ class DetailScreen(ModalScreen[None]):
         padding: 1 2; background: $surface; border: solid {C_BLUE};
     }}
     #detail-header {{ text-style: bold; text-align: center; padding-bottom: 1; }}
+    #detail-scroll {{ max-height: 40; }}
     #detail-body {{ padding: 0 1; }}
     #detail-help {{ text-align: center; color: {C_DIM}; padding-top: 1; }}
     """
@@ -385,7 +415,8 @@ class DetailScreen(ModalScreen[None]):
         with Vertical(id="detail-container"):
             yield Static(self._render_header(), id="detail-header")
             yield Rule()
-            yield Static(self._render_body(), id="detail-body")
+            with VerticalScroll(id="detail-scroll"):
+                yield Static(self._render_body(), id="detail-body")
             yield Rule()
             yield Static(
                 f"[{C_DIM}]s/S[/{C_DIM}] status  [{C_DIM}]c[/{C_DIM}] spawn  "
@@ -413,14 +444,15 @@ class DetailScreen(ModalScreen[None]):
         # Auto-discovered sessions
         thread_sessions = _find_sessions_for_ws(self.ws, all_sessions)
         if thread_sessions:
-            total_cost = sum(s.cost_estimate for s in thread_sessions)
+            total_tokens = sum(s.total_input_tokens + s.total_output_tokens for s in thread_sessions)
             total_msgs = sum(s.message_count for s in thread_sessions)
+            _tk = f"{total_tokens / 1_000_000:.1f}M" if total_tokens > 1_000_000 else f"{total_tokens / 1_000:.0f}k" if total_tokens > 1_000 else str(total_tokens)
 
             lines.append(f"[bold {C_BLUE}]Activity[/bold {C_BLUE}]")
             lines.append(
                 f"  [{C_CYAN}]{len(thread_sessions)}[/{C_CYAN}] sessions  "
                 f"[{C_DIM}]\u00b7[/{C_DIM}]  {total_msgs} messages  "
-                f"[{C_DIM}]\u00b7[/{C_DIM}]  [{C_ORANGE}]${total_cost:.2f}[/{C_ORANGE}]"
+                f"[{C_DIM}]\u00b7[/{C_DIM}]  [{C_ORANGE}]{_token_color_markup(_tk, total_tokens)} tokens[/{C_ORANGE}]"
             )
             lines.append(f"  [{C_DIM}]Last active[/{C_DIM}] {thread_sessions[0].age}")
             lines.append("")
@@ -430,7 +462,7 @@ class DetailScreen(ModalScreen[None]):
                 model = _short_model(s.model)
                 title = s.display_name[:50]
                 lines.append(f"  [{C_CYAN}]{title}[/{C_CYAN}]")
-                lines.append(f"    {model} \u00b7 {s.message_count} msgs \u00b7 {s.cost_display} \u00b7 {s.age}")
+                lines.append(f"    {model} \u00b7 {s.message_count} msgs \u00b7 {_colored_tokens(s)} tokens \u00b7 {s.age}")
             if len(thread_sessions) > 8:
                 lines.append(f"  [{C_DIM}]+ {len(thread_sessions) - 8} older[/{C_DIM}]")
             lines.append("")
@@ -464,6 +496,12 @@ class DetailScreen(ModalScreen[None]):
     def _refresh(self):
         self.query_one("#detail-header", Static).update(self._render_header())
         self.query_one("#detail-body", Static).update(self._render_body())
+
+    def action_scroll_down(self):
+        self.query_one("#detail-scroll", VerticalScroll).scroll_down()
+
+    def action_scroll_up(self):
+        self.query_one("#detail-scroll", VerticalScroll).scroll_up()
 
     def action_cycle_status(self):
         statuses = list(Status)
@@ -1179,20 +1217,20 @@ class OrchestratorApp(App):
         ws_table = self.query_one("#ws-table", DataTable)
         ws_table.cursor_type = "row"
         ws_table.zebra_stripes = True
-        ws_table.add_columns("", "Name", "Category", "Updated")
+        ws_table.add_columns("", "Name", "Sess", "Category", "Updated")
 
         # Sessions table (hidden initially)
         sessions_table = self.query_one("#sessions-table", DataTable)
         sessions_table.cursor_type = "row"
         sessions_table.zebra_stripes = True
-        sessions_table.add_columns("Title", "Thread", "Model", "Cost", "Age")
+        sessions_table.add_columns("Title", "Thread", "Model", "Tokens", "Age")
         sessions_table.display = False
 
         # Archived table (hidden initially)
         archived_table = self.query_one("#archived-table", DataTable)
         archived_table.cursor_type = "row"
         archived_table.zebra_stripes = True
-        archived_table.add_columns("", "Name", "Category", "Updated")
+        archived_table.add_columns("", "Name", "Sess", "Category", "Updated")
         archived_table.display = False
 
         # Load data
@@ -1330,15 +1368,16 @@ class OrchestratorApp(App):
         # Auto-discovered Claude sessions — the brain threads
         thread_sessions = self._sessions_for_ws(ws)
         if thread_sessions:
-            total_cost = sum(s.cost_estimate for s in thread_sessions)
+            total_tokens = sum(s.total_input_tokens + s.total_output_tokens for s in thread_sessions)
             total_msgs = sum(s.message_count for s in thread_sessions)
+            _tk = f"{total_tokens / 1_000_000:.1f}M" if total_tokens > 1_000_000 else f"{total_tokens / 1_000:.0f}k" if total_tokens > 1_000 else str(total_tokens)
             last_active = thread_sessions[0].age  # already sorted most recent first
 
             lines.append(f"[bold {C_BLUE}]Activity[/bold {C_BLUE}]")
             lines.append(
                 f"  [{C_CYAN}]{len(thread_sessions)}[/{C_CYAN}] sessions  "
                 f"[{C_DIM}]\u00b7[/{C_DIM}]  {total_msgs} messages  "
-                f"[{C_DIM}]\u00b7[/{C_DIM}]  [{C_ORANGE}]${total_cost:.2f}[/{C_ORANGE}]"
+                f"[{C_DIM}]\u00b7[/{C_DIM}]  [{C_ORANGE}]{_token_color_markup(_tk, total_tokens)} tokens[/{C_ORANGE}]"
             )
             lines.append(f"  [{C_DIM}]Last active[/{C_DIM}] {last_active}")
             lines.append("")
@@ -1349,7 +1388,7 @@ class OrchestratorApp(App):
                 model = _short_model(s.model)
                 title = s.display_name[:32]
                 lines.append(f"  [{C_CYAN}]{title}[/{C_CYAN}]")
-                lines.append(f"    {model} \u00b7 {s.message_count} msgs \u00b7 {s.cost_display} \u00b7 {s.age}")
+                lines.append(f"    {model} \u00b7 {s.message_count} msgs \u00b7 {_colored_tokens(s)} tokens \u00b7 {s.age}")
             if len(thread_sessions) > 5:
                 lines.append(f"  [{C_DIM}]+ {len(thread_sessions) - 5} older[/{C_DIM}]")
             lines.append("")
@@ -1420,7 +1459,6 @@ class OrchestratorApp(App):
         lines.append(f"  [{C_DIM}]Input[/{C_DIM}]    {session.total_input_tokens:,} tokens")
         lines.append(f"  [{C_DIM}]Output[/{C_DIM}]   {session.total_output_tokens:,} tokens")
         lines.append(f"  [{C_DIM}]Total[/{C_DIM}]    {session.tokens_display}")
-        lines.append(f"  [{C_DIM}]Cost[/{C_DIM}]     {session.cost_display}")
         lines.append("")
 
         # Activity
@@ -1461,9 +1499,9 @@ class OrchestratorApp(App):
         lines.append(
             f"  [{C_CYAN}]{thread.session_count}[/{C_CYAN}] sessions  "
             f"[{C_DIM}]\u00b7[/{C_DIM}]  {thread.total_messages} messages  "
-            f"[{C_DIM}]\u00b7[/{C_DIM}]  [{C_ORANGE}]{thread.cost_display}[/{C_ORANGE}]"
+            f"[{C_DIM}]\u00b7[/{C_DIM}]  {_colored_tokens(thread)} tokens"
         )
-        lines.append(f"  [{C_DIM}]Tokens[/{C_DIM}]  {thread.tokens_display}")
+        lines.append(f"  [{C_DIM}]Tokens[/{C_DIM}]  {_colored_tokens(thread)}")
         if thread.models:
             lines.append(f"  [{C_DIM}]Models[/{C_DIM}]  {', '.join(_short_model(m) for m in thread.models)}")
         lines.append(f"  [{C_DIM}]Last[/{C_DIM}]    {thread.age}")
@@ -1477,7 +1515,7 @@ class OrchestratorApp(App):
             live_mark = f"[{C_GREEN}]\u25cf[/{C_GREEN}] " if s.is_live else "  "
             title = s.display_name[:35]
             lines.append(f"  {live_mark}[{C_CYAN}]{title}[/{C_CYAN}]")
-            lines.append(f"      {_short_model(s.model)} \u00b7 {s.message_count} msgs \u00b7 {s.cost_display} \u00b7 {s.age}")
+            lines.append(f"      {_short_model(s.model)} \u00b7 {s.message_count} msgs \u00b7 {_colored_tokens(s)} tokens \u00b7 {s.age}")
         if len(thread.sessions) > 8:
             lines.append(f"  [{C_DIM}]+ {len(thread.sessions) - 8} older[/{C_DIM}]")
         lines.append("")
@@ -1530,12 +1568,13 @@ class OrchestratorApp(App):
         if stale:
             parts.append(f"[{C_DIM}]{stale} stale[/{C_DIM}]")
 
-        # Show total Claude cost if sessions loaded
+        # Show total token usage if sessions loaded
         if self.sessions:
-            total_cost = sum(s.cost_estimate for s in self.sessions)
-            if total_cost >= 0.01:
+            total_tokens = sum(s.total_input_tokens + s.total_output_tokens for s in self.sessions)
+            if total_tokens > 0:
+                _tk = f"{total_tokens / 1_000_000:.1f}M" if total_tokens > 1_000_000 else f"{total_tokens / 1_000:.0f}k" if total_tokens > 1_000 else str(total_tokens)
                 parts.append(f"[{C_DIM}]\u2502[/{C_DIM}]")
-                parts.append(f"[{C_ORANGE}]${total_cost:.0f} Claude[/{C_ORANGE}]")
+                parts.append(f"{_token_color_markup(_tk, total_tokens)} tokens")
 
         return "  ".join(parts)
 
@@ -1684,22 +1723,19 @@ class OrchestratorApp(App):
             if not is_discovered:
                 indicators = _ws_indicators(ws, tmux_check=self._ws_has_tmux)
             thread_sessions = self._sessions_for_ws(ws)
-            if thread_sessions:
-                parts = []
-                if indicators:
-                    parts.append(indicators)
-                parts.append(f"{len(thread_sessions)}s")
-                indicators = " ".join(parts)
 
             name_str = ws.name
             if indicators:
                 name_str += "  " + indicators
             name_cell = Text(name_str)
 
+            sess_count = len(thread_sessions) if thread_sessions else 0
+            sess_cell = Text(str(sess_count) if sess_count else "", style=C_DIM)
+
             cat_cell = Text(ws.category.value, style=CATEGORY_THEME[ws.category])
             updated_cell = Text(_relative_time(ws.updated_at), style=C_DIM)
 
-            table.add_row(status_cell, name_cell, cat_cell, updated_cell, key=ws.id)
+            table.add_row(status_cell, name_cell, sess_cell, cat_cell, updated_cell, key=ws.id)
 
         self._restore_cursor(table, old_key)
         self._update_all_bars()
@@ -1804,10 +1840,10 @@ class OrchestratorApp(App):
                 thread_cell = Text(_short_project(session.project_path), style=C_DIM)
 
             model_cell = Text(_short_model(session.model), style=C_DIM)
-            cost_cell = Text(session.cost_display, style=C_ORANGE)
+            tokens_cell = Text(session.tokens_display, style=_token_color(session.total_input_tokens + session.total_output_tokens))
             age_cell = Text(session.age, style=C_DIM)
 
-            table.add_row(title_cell, thread_cell, model_cell, cost_cell, age_cell,
+            table.add_row(title_cell, thread_cell, model_cell, tokens_cell, age_cell,
                           key=session.session_id)
 
         self._restore_cursor(table, old_key)
@@ -1830,9 +1866,10 @@ class OrchestratorApp(App):
         for ws in self.store.archived:
             status_cell = Text(STATUS_ICONS[ws.status], style=STATUS_THEME[ws.status])
             name_cell = Text(ws.name)
+            sess_cell = Text("", style=C_DIM)
             cat_cell = Text(ws.category.value, style=CATEGORY_THEME[ws.category])
             updated_cell = Text(_relative_time(ws.updated_at), style=C_DIM)
-            table.add_row(status_cell, name_cell, cat_cell, updated_cell, key=ws.id)
+            table.add_row(status_cell, name_cell, sess_cell, cat_cell, updated_cell, key=ws.id)
 
         self._restore_cursor(table, old_key)
 
