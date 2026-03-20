@@ -12,6 +12,12 @@ from pathlib import Path
 from typing import Optional
 
 
+class Origin(str, Enum):
+    MANUAL = "manual"           # Created by user via TUI / brain dump
+    DISCOVERED = "discovered"   # Created by AI synthesizer from thread clusters
+    MERGED = "merged"           # AI-discovered but matched with a manual workstream
+
+
 class Status(str, Enum):
     QUEUED = "queued"
     IN_PROGRESS = "in-progress"
@@ -92,6 +98,8 @@ class Workstream:
     links: list[Link] = field(default_factory=list)
     notes: str = ""
     archived: bool = False
+    origin: Origin = Origin.MANUAL
+    thread_ids: list[str] = field(default_factory=list)
     created_at: str = field(default_factory=lambda: datetime.now().isoformat())
     updated_at: str = field(default_factory=lambda: datetime.now().isoformat())
     status_changed_at: str = field(default_factory=lambda: datetime.now().isoformat())
@@ -140,6 +148,7 @@ class Workstream:
         d = asdict(self)
         d["status"] = self.status.value
         d["category"] = self.category.value
+        d["origin"] = self.origin.value
         return d
 
     @classmethod
@@ -151,6 +160,9 @@ class Workstream:
         # Migration: add fields that may not exist in old data
         d.setdefault("archived", False)
         d.setdefault("status_changed_at", d.get("updated_at", d.get("created_at", "")))
+        d.setdefault("origin", "manual")
+        d["origin"] = Origin(d["origin"])
+        d.setdefault("thread_ids", [])
         return cls(**d)
 
 
