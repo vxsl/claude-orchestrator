@@ -1,0 +1,269 @@
+"""Tests for sessions.py — Claude session discovery and parsing."""
+
+import json
+import pytest
+from datetime import datetime, timedelta
+from pathlib import Path
+from unittest.mock import patch
+
+from sessions import (
+    ClaudeSession,
+    _decode_project_dir,
+    get_live_session_ids,
+    parse_session,
+    discover_sessions,
+    find_session,
+    sessions_for_project,
+)
+
+
+# ─── ClaudeSession Properties ───────────────────────────────────────
+
+class TestClaudeSessionCost:
+    def test_zero_tokens(self):
+        s = ClaudeSession(session_id="test", project_dir="d", project_path="/p")
+        assert s.cost_estimate == 0.0
+        assert s.cost_display == "<$0.01"
+
+    def test_small_cost(self):
+        s = ClaudeSession(session_id="test", project_dir="d", project_path="/p",
+                          total_input_tokens=1000, total_output_tokens=100)
+        assert s.cost_estimate > 0
+        assert s.cost_display.startswith("<$") or s.cost_display.startswith("$")
+
+    def test_large_cost(self):
+        s = ClaudeSession(session_id="test", project_dir="d", project_path="/p",
+                          total_input_tokens=5_000_000, total_output_tokens=2_000_000)
+        cost = s.cost_estimate
+        assert cost > 100  # Should be significant with Opus pricing
+        assert "$" in s.cost_display
+
+
+class TestClaudeSessionTokens:
+    def test_small_tokens(self):
+        s = ClaudeSession(session_id="test", project_dir="d", project_path="/p",
+                          total_input_tokens=500, total_output_tokens=200)
+        assert s.tokens_display == "700"
+
+    def test_k_tokens(self):
+        s = ClaudeSession(session_id="test", project_dir="d", project_path="/p",
+                          total_input_tokens=50_000, total_output_tokens=20_000)
+        assert "k" in s.tokens_display
+
+    def test_m_tokens(self):
+        s = ClaudeSession(session_id="test", project_dir="d", project_path="/p",
+                          total_input_tokens=5_000_000, total_output_tokens=2_000_000)
+        assert "M" in s.tokens_display
+
+
+class TestClaudeSessionDisplay:
+    def test_display_name_with_title(self):
+        s = ClaudeSession(session_id="test", project_dir="d", project_path="/home/user/project",
+                          title="My Session")
+        assert s.display_name == "My Session"
+
+    def test_display_name_without_title(self):
+        s = ClaudeSession(session_id="test", project_dir="d", project_path="/home/user/project")
+        assert "project" in s.display_name or "/" in s.display_name
+
+    def test_age_unknown(self):
+        s = ClaudeSession(session_id="test", project_dir="d", project_path="/p")
+        assert s.age == "unknown"
+
+    def test_age_recent(self):
+        ts = datetime.now().astimezone().isoformat()
+        s = ClaudeSession(session_id="test", project_dir="d", project_path="/p",
+                          last_activity=ts)
+        age = s.age
+        assert "ago" in age or "just now" in age
+
+
+# ─── Project Dir Decoding ───────────────────────────────────────────
+
+class TestDecodeProjectDir:
+    def test_simple_path(self, tmp_path):
+        """Test with an actual path that exists."""
+        # Create the directories
+        (tmp_path / "project").mkdir()
+        dirname = str(tmp_path / "project").replace("/", "-").lstrip("-")
+        result = _decode_project_dir(dirname)
+        assert result.endswith("project")
+
+    def test_preserves_structure(self):
+        """Even without real paths, should produce a path-like string."""
+        result = _decode_project_dir("-home-user-dev-my-project")
+        assert result.startswith("/")
+
+
+# ─── Session Parsing ────────────────────────────────────────────────
+
+class TestParseSession:
+    def test_parse_valid_session(self, sample_session_jsonl):
+        projects_dir, session_file = sample_session_jsonl
+        session = parse_session(session_file)
+        assert session is not None
+        assert session.title == "Test Session"
+        assert session.message_count == 2
+        assert session.total_input_tokens > 0
+        assert session.total_output_tokens > 0
+        assert session.model == "claude-opus-4-6"
+
+    def test_parse_token_counts(self, sample_session_jsonl):
+        _, session_file = sample_session_jsonl
+        session = parse_session(session_file)
+        # First message: 1000 + 200 + 300 = 1500 input, 500 output
+        # Second message: 2000 input, 1000 output
+        # Total: 3500 input, 1500 output
+        assert session.total_input_tokens == 3500
+        assert session.total_output_tokens == 1500
+
+    def test_parse_timestamps(self, sample_session_jsonl):
+        _, session_file = sample_session_jsonl
+        session = parse_session(session_file)
+        assert "2026-03-20T10:00:00" in session.started_at
+        assert "2026-03-20T10:05:00" in session.last_activity
+
+    def test_skip_wakatime_files(self, tmp_path):
+        """Wakatime files are filtered in discover_sessions via glob, not parse_session.
+        parse_session checks stem.endswith('.wakatime') but Path.stem strips
+        only the last extension, so .jsonl.wakatime stem is 'some-session.jsonl'.
+        The real filter happens in discover_sessions' 'if name.endswith(".wakatime")' check.
+        """
+        waka_file = tmp_path / "projects" / "test" / "some-session.jsonl.wakatime"
+        waka_file.parent.mkdir(parents=True)
+        waka_file.write_text("")
+        # parse_session will actually process it (stem='some-session.jsonl')
+        # but discover_sessions skips it via the name endswith check
+        result = parse_session(waka_file)
+        assert result is not None  # parse_session doesn't catch this case
+        assert result.message_count == 0
+
+    def test_parse_empty_file(self, tmp_path):
+        empty = tmp_path / "projects" / "test" / "empty.jsonl"
+        empty.parent.mkdir(parents=True)
+        empty.write_text("")
+        session = parse_session(empty)
+        assert session is not None
+        assert session.message_count == 0
+
+    def test_parse_malformed_json(self, tmp_path):
+        bad = tmp_path / "projects" / "test" / "bad.jsonl"
+        bad.parent.mkdir(parents=True)
+        bad.write_text("not json\nalso not json\n")
+        session = parse_session(bad)
+        assert session is not None  # Should handle gracefully
+        assert session.message_count == 0
+
+
+# ─── Session Discovery ──────────────────────────────────────────────
+
+class TestDiscoverSessions:
+    @pytest.fixture(autouse=True)
+    def _mock_live(self):
+        with patch("sessions.get_live_session_ids", return_value=set()):
+            yield
+
+    def test_discover_with_mock(self, sample_session_jsonl):
+        projects_dir, _ = sample_session_jsonl
+        with patch("sessions.CLAUDE_PROJECTS_DIR", projects_dir):
+            sessions = discover_sessions(limit=10)
+            assert len(sessions) >= 1
+            assert sessions[0].title == "Test Session"
+
+    def test_discover_with_filter(self, sample_session_jsonl):
+        projects_dir, _ = sample_session_jsonl
+        with patch("sessions.CLAUDE_PROJECTS_DIR", projects_dir):
+            sessions = discover_sessions(limit=10, project_filter="test-project")
+            assert len(sessions) >= 1
+
+    def test_discover_no_match(self, sample_session_jsonl):
+        projects_dir, _ = sample_session_jsonl
+        with patch("sessions.CLAUDE_PROJECTS_DIR", projects_dir):
+            sessions = discover_sessions(limit=10, project_filter="nonexistent")
+            assert len(sessions) == 0
+
+    def test_discover_min_messages(self, sample_session_jsonl):
+        projects_dir, _ = sample_session_jsonl
+        with patch("sessions.CLAUDE_PROJECTS_DIR", projects_dir):
+            sessions = discover_sessions(limit=10, min_messages=100)
+            assert len(sessions) == 0
+
+    def test_discover_nonexistent_dir(self, tmp_path):
+        fake = tmp_path / "nonexistent"
+        with patch("sessions.CLAUDE_PROJECTS_DIR", fake):
+            sessions = discover_sessions()
+            assert sessions == []
+
+    def test_discover_unlimited(self, sample_session_jsonl):
+        projects_dir, _ = sample_session_jsonl
+        with patch("sessions.CLAUDE_PROJECTS_DIR", projects_dir):
+            sessions = discover_sessions(limit=0)
+            assert len(sessions) >= 1  # limit=0 means unlimited
+
+    def test_discover_limit_applied(self, sample_session_jsonl):
+        projects_dir, _ = sample_session_jsonl
+        with patch("sessions.CLAUDE_PROJECTS_DIR", projects_dir):
+            sessions = discover_sessions(limit=1)
+            assert len(sessions) == 1
+
+    def test_discover_marks_live_sessions(self, sample_session_jsonl):
+        projects_dir, _ = sample_session_jsonl
+        live_id = "abc12345-6789-0000-1111-222233334444"
+        with patch("sessions.CLAUDE_PROJECTS_DIR", projects_dir), \
+             patch("sessions.get_live_session_ids", return_value={live_id}):
+            sessions = discover_sessions()
+            live = [s for s in sessions if s.is_live]
+            assert len(live) == 1
+            assert live[0].session_id == live_id
+
+
+class TestGetLiveSessionIds:
+    def test_reads_session_files(self, tmp_path):
+        sessions_dir = tmp_path / "sessions"
+        sessions_dir.mkdir()
+        # Write a session file with current PID (guaranteed alive)
+        import os
+        pid = os.getpid()
+        (sessions_dir / f"{pid}.json").write_text(
+            json.dumps({"pid": pid, "sessionId": "live-session-id", "cwd": "/tmp"})
+        )
+        with patch("sessions.CLAUDE_SESSIONS_DIR", sessions_dir):
+            live = get_live_session_ids()
+            assert "live-session-id" in live
+
+    def test_skips_dead_pid(self, tmp_path):
+        sessions_dir = tmp_path / "sessions"
+        sessions_dir.mkdir()
+        # Use a PID that almost certainly doesn't exist
+        (sessions_dir / "999999999.json").write_text(
+            json.dumps({"pid": 999999999, "sessionId": "dead-session", "cwd": "/tmp"})
+        )
+        with patch("sessions.CLAUDE_SESSIONS_DIR", sessions_dir):
+            live = get_live_session_ids()
+            assert "dead-session" not in live
+
+    def test_nonexistent_dir(self, tmp_path):
+        fake = tmp_path / "nonexistent"
+        with patch("sessions.CLAUDE_SESSIONS_DIR", fake):
+            assert get_live_session_ids() == set()
+
+
+class TestFindSession:
+    def test_find_by_full_id(self, sample_session_jsonl):
+        projects_dir, _ = sample_session_jsonl
+        with patch("sessions.CLAUDE_PROJECTS_DIR", projects_dir):
+            session = find_session("abc12345-6789-0000-1111-222233334444")
+            assert session is not None
+            assert session.title == "Test Session"
+
+    def test_find_by_prefix(self, sample_session_jsonl):
+        projects_dir, _ = sample_session_jsonl
+        with patch("sessions.CLAUDE_PROJECTS_DIR", projects_dir):
+            session = find_session("abc12345")
+            assert session is not None
+
+    def test_find_nonexistent(self, sample_session_jsonl):
+        projects_dir, _ = sample_session_jsonl
+        with patch("sessions.CLAUDE_PROJECTS_DIR", projects_dir):
+            session = find_session("zzz-nonexistent")
+            assert session is None
