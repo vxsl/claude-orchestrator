@@ -11,6 +11,7 @@ from typing import Optional
 
 
 CLAUDE_PROJECTS_DIR = Path.home() / ".claude" / "projects"
+CLAUDE_SESSIONS_DIR = Path.home() / ".claude" / "sessions"
 
 
 @dataclass
@@ -27,6 +28,7 @@ class ClaudeSession:
     message_count: int = 0
     model: str = ""
     jsonl_path: str = ""
+    is_live: bool = False
 
     @property
     def cost_estimate(self) -> float:
@@ -203,15 +205,46 @@ def parse_session(jsonl_path: Path) -> Optional[ClaudeSession]:
     return session
 
 
+def get_live_session_ids() -> set[str]:
+    """Read ~/.claude/sessions/*.json to find currently-running session IDs.
+
+    Each file contains a JSON object with pid, sessionId, cwd, startedAt.
+    We verify the PID is still alive before considering it live.
+    """
+    live: set[str] = set()
+    if not CLAUDE_SESSIONS_DIR.exists():
+        return live
+
+    for f in CLAUDE_SESSIONS_DIR.iterdir():
+        if not f.suffix == ".json":
+            continue
+        try:
+            data = json.loads(f.read_text())
+            pid = data.get("pid")
+            session_id = data.get("sessionId")
+            if not session_id or not pid:
+                continue
+            # Check if the process is still running
+            try:
+                os.kill(pid, 0)
+                live.add(session_id)
+            except (OSError, ProcessLookupError):
+                pass
+        except (OSError, json.JSONDecodeError):
+            continue
+
+    return live
+
+
 def discover_sessions(
-    limit: int = 50,
+    limit: int = 0,
     project_filter: str = "",
     min_messages: int = 1,
 ) -> list[ClaudeSession]:
     """Discover Claude sessions from ~/.claude/projects/.
 
     Args:
-        limit: Max number of sessions to return.
+        limit: Max number of sessions to return (0 = unlimited).
         project_filter: Filter by project directory substring.
         min_messages: Minimum number of assistant messages to include.
 
@@ -220,6 +253,7 @@ def discover_sessions(
     if not CLAUDE_PROJECTS_DIR.exists():
         return []
 
+    live_ids = get_live_session_ids()
     sessions: list[ClaudeSession] = []
 
     for proj_dir in CLAUDE_PROJECTS_DIR.iterdir():
@@ -233,11 +267,16 @@ def discover_sessions(
                 continue
             session = parse_session(jsonl_file)
             if session and session.message_count >= min_messages:
+                session.is_live = session.session_id in live_ids
                 sessions.append(session)
 
-    # Sort by last activity, most recent first
+    # Sort: live sessions first, then by last activity (most recent first)
+    sessions.sort(key=lambda s: (not s.is_live, s.last_activity or ""), reverse=False)
     sessions.sort(key=lambda s: s.last_activity or "", reverse=True)
-    return sessions[:limit]
+    sessions.sort(key=lambda s: s.is_live, reverse=True)
+    if limit > 0:
+        sessions = sessions[:limit]
+    return sessions
 
 
 def find_session(session_id: str) -> Optional[ClaudeSession]:
