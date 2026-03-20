@@ -131,6 +131,6 @@ if [[ -n "$WS_ID" && "$ALREADY_LINKED" != "yes" ]]; then
 fi
 
 echo ""
-echo "${C_DIM}returning to orch...${C_RESET}"
-sleep 1
+echo "${C_DIM}press any key to return to orch${C_RESET}"
+read -n1 -s -r 2>/dev/null || true
 tmux select-window -t orch 2>/dev/null || true

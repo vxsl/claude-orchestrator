@@ -28,7 +28,7 @@ ASSIGNMENTS_FILE = CACHE_DIR / "workstream-assignments.json"
 DISCOVERED_FILE = CACHE_DIR / "discovered-workstreams.json"
 
 # Max threads per LLM call
-BATCH_SIZE = 30
+BATCH_SIZE = 15
 
 
 # ─── Cache I/O ──────────────────────────────────────────────────────
@@ -83,7 +83,7 @@ def _thread_context(thread: Thread) -> str:
     if branches:
         parts.append(f"branch:{','.join(sorted(branches))}")
 
-    parts.append(f"{thread.session_count}s")
+    parts.append(f"sessions:{thread.session_count}")
 
     # Heuristic or AI name
     if thread.ai_title:
@@ -124,7 +124,7 @@ def _build_prompt(
     # Unassigned threads
     thread_lines = []
     for t in unassigned:
-        thread_lines.append(f"THREAD:{t.thread_id[:12]} | {_thread_context(t)}")
+        thread_lines.append(f"THREAD:{t.thread_id} | {_thread_context(t)}")
 
     existing_section = "\n".join(existing_lines) if existing_lines else "(none)"
     thread_section = "\n".join(thread_lines)
@@ -163,7 +163,7 @@ def _call_llm(prompt: str) -> list[dict]:
              "--max-budget-usd", "0.05",
              "--allowedTools", ""],
             input=prompt,
-            capture_output=True, text=True, timeout=45,
+            capture_output=True, text=True, timeout=120,
         )
 
         if result.returncode != 0:
