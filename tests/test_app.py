@@ -197,8 +197,8 @@ class TestLaunchOrchClaude:
         ws.add_link("worktree", str(tmp_path), "project")
 
         import unittest.mock as mock
-        with mock.patch("app.subprocess.run") as mock_popen:
-            _launch_orch_claude(MagicMock(), ws, session_id="abc-123", cwd=str(tmp_path))
+        with mock.patch("app.subprocess.Popen") as mock_popen:
+            _launch_orch_claude(ws, session_id="abc-123", cwd=str(tmp_path))
             assert mock_popen.called
             cmd = mock_popen.call_args[0][0]
             assert any("orch-claude" in str(c) for c in cmd)
@@ -211,8 +211,8 @@ class TestLaunchOrchClaude:
         ws = Workstream(name="Test", description="", category=Category.PERSONAL, status=Status.QUEUED)
 
         import unittest.mock as mock
-        with mock.patch("app.subprocess.run") as mock_popen:
-            _launch_orch_claude(MagicMock(), ws, prompt="Help me with this")
+        with mock.patch("app.subprocess.Popen") as mock_popen:
+            _launch_orch_claude(ws, prompt="Help me with this")
             assert mock_popen.called
             cmd = mock_popen.call_args[0][0]
             assert "--prompt" in cmd
@@ -224,8 +224,8 @@ class TestLaunchOrchClaude:
         ws.notes = "x" * 1000
 
         import unittest.mock as mock
-        with mock.patch("app.subprocess.run") as mock_popen:
-            _launch_orch_claude(MagicMock(), ws)
+        with mock.patch("app.subprocess.Popen") as mock_popen:
+            _launch_orch_claude(ws)
             cmd = mock_popen.call_args[0][0]
             idx = cmd.index("--ws-notes")
             notes_val = cmd[idx + 1]
@@ -235,8 +235,8 @@ class TestLaunchOrchClaude:
         ws = Workstream(name="Test", status=Status.IN_PROGRESS)
 
         import unittest.mock as mock
-        with mock.patch("app.subprocess.run") as mock_popen:
-            _launch_orch_claude(MagicMock(), ws)
+        with mock.patch("app.subprocess.Popen") as mock_popen:
+            _launch_orch_claude(ws)
             cmd = mock_popen.call_args[0][0]
             assert "--ws-notes" not in cmd
 
