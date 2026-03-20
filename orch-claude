@@ -1,0 +1,136 @@
+#!/usr/bin/env bash
+# orch-claude — wrapper for launching Claude sessions from the orch TUI
+#
+# Creates a tmux split with a 1-line header pane showing workstream context,
+# runs Claude interactively with context injection, and on exit: auto-links
+# the session, shows a summary, and returns to orch.
+set -euo pipefail
+
+# ─── Mellow palette ─────────────────────────────────────────────
+C_BLUE=$'\033[38;5;109m'
+C_PURPLE=$'\033[38;5;141m'
+C_CYAN=$'\033[38;5;81m'
+C_GREEN=$'\033[38;5;114m'
+C_DIM=$'\033[38;5;244m'
+C_RESET=$'\033[0m'
+C_BOLD=$'\033[1m'
+
+# ─── Parse arguments ────────────────────────────────────────────
+WS_ID="" WS_NAME="" WS_DESC="" WS_STATUS="" WS_CATEGORY="" WS_NOTES=""
+SESSION_ID="" PROMPT="" CWD=""
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --ws-id)       WS_ID="$2"; shift 2;;
+        --ws-name)     WS_NAME="$2"; shift 2;;
+        --ws-desc)     WS_DESC="$2"; shift 2;;
+        --ws-status)   WS_STATUS="$2"; shift 2;;
+        --ws-category) WS_CATEGORY="$2"; shift 2;;
+        --ws-notes)    WS_NOTES="$2"; shift 2;;
+        --resume)      SESSION_ID="$2"; shift 2;;
+        --prompt)      PROMPT="$2"; shift 2;;
+        --cwd)         CWD="$2"; shift 2;;
+        *)             shift;;
+    esac
+done
+
+ORCH_DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
+CWD="${CWD:-$HOME}"
+
+# ─── Determine session ID ───────────────────────────────────────
+IS_NEW=false
+if [[ -z "$SESSION_ID" ]]; then
+    SESSION_ID=$(python3 -c "import uuid; print(uuid.uuid4())")
+    IS_NEW=true
+fi
+
+# ─── Compute JSONL path ─────────────────────────────────────────
+ENCODED_DIR=$(echo "$CWD" | sed 's|/|-|g')
+JSONL_PATH="$HOME/.claude/projects/${ENCODED_DIR}/${SESSION_ID}.jsonl"
+
+# ─── Build context injection ────────────────────────────────────
+CONTEXT="You are working on the brain thread: \"${WS_NAME}\""
+[[ -n "$WS_DESC" ]] && CONTEXT+=$'\n'"Description: ${WS_DESC}"
+[[ -n "$WS_STATUS" ]] && CONTEXT+=$'\n'"Status: ${WS_STATUS}"
+[[ -n "$WS_CATEGORY" ]] && CONTEXT+=$'\n'"Category: ${WS_CATEGORY}"
+if [[ -n "$WS_NOTES" ]]; then
+    # Truncate notes for the prompt
+    NOTES_TRUNC="${WS_NOTES:0:500}"
+    CONTEXT+=$'\n'"Recent notes: ${NOTES_TRUNC}"
+fi
+if [[ -n "$PROMPT" ]]; then
+    CONTEXT+=$'\n\n'"Initial task: ${PROMPT}"
+fi
+
+# ─── Launch header pane ─────────────────────────────────────────
+HEADER_PANE=$(tmux split-window -b -l 1 -P -F '#{pane_id}' \
+    "${ORCH_DIR}/orch-header" \
+    --ws-name "$WS_NAME" \
+    --ws-status "$WS_STATUS" \
+    --ws-category "$WS_CATEGORY" \
+    --session-id "$SESSION_ID" \
+    --jsonl "$JSONL_PATH")
+
+# Focus back to the main pane (below the header)
+tmux select-pane -D
+
+# ─── Build and run Claude command ────────────────────────────────
+cd "$CWD"
+
+CLAUDE_ARGS=()
+if [[ "$IS_NEW" == true ]]; then
+    CLAUDE_ARGS+=(--session-id "$SESSION_ID")
+else
+    CLAUDE_ARGS+=(--resume "$SESSION_ID")
+fi
+CLAUDE_ARGS+=(--append-system-prompt "$CONTEXT")
+CLAUDE_ARGS+=(-n "orch:${WS_NAME}")
+
+claude "${CLAUDE_ARGS[@]}" || true
+
+# ─── Post-session: kill header ───────────────────────────────────
+tmux kill-pane -t "$HEADER_PANE" 2>/dev/null || true
+
+# ─── Auto-link session to workstream (with dedup) ───────────────
+if [[ -n "$WS_ID" ]]; then
+    ALREADY_LINKED=$(python3 -c "
+import sys; sys.path.insert(0, '$ORCH_DIR')
+from models import Store
+ws = Store().get('$WS_ID')
+if ws:
+    for l in ws.links:
+        if l.kind == 'claude-session' and l.value == '$SESSION_ID':
+            print('yes'); break
+" 2>/dev/null) || true
+
+    if [[ "$ALREADY_LINKED" != "yes" ]]; then
+        "${ORCH_DIR}/orch" link "$WS_ID" "claude-session:${SESSION_ID}" -l "session" 2>/dev/null || true
+    fi
+fi
+
+# ─── Post-session summary ───────────────────────────────────────
+echo ""
+echo "${C_PURPLE}${C_BOLD}\u2500\u2500 session ended \u2500\u2500${C_RESET}"
+
+if [[ -f "$JSONL_PATH" ]]; then
+    python3 -c "
+import sys
+sys.path.insert(0, '$ORCH_DIR')
+from sessions import parse_session
+from pathlib import Path
+s = parse_session(Path('$JSONL_PATH'))
+if s:
+    print(f'${C_CYAN}{WS_NAME}${C_RESET}  ${C_DIM}\u2502${C_RESET}  {s.message_count} msgs  \u00b7  {s.tokens_display}  \u00b7  {s.cost_display}')
+" 2>/dev/null || true
+else
+    echo "${C_DIM}no session data found${C_RESET}"
+fi
+
+if [[ -n "$WS_ID" && "$ALREADY_LINKED" != "yes" ]]; then
+    echo "${C_GREEN}\u2713${C_RESET} ${C_DIM}session linked to workstream${C_RESET}"
+fi
+
+echo ""
+echo "${C_DIM}returning to orch...${C_RESET}"
+sleep 1
+tmux select-window -t orch 2>/dev/null || true

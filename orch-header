@@ -1,0 +1,95 @@
+#!/usr/bin/env bash
+# orch-header — live status bar for Claude sessions launched from orch
+# Runs in a 1-line tmux header pane, refreshes every 5s
+set -euo pipefail
+
+# ─── Mellow palette (ANSI 256, matching fzedit/jira-fzf) ────────
+C_BLUE=$'\033[38;5;109m'
+C_PURPLE=$'\033[38;5;141m'
+C_CYAN=$'\033[38;5;81m'
+C_GREEN=$'\033[38;5;114m'
+C_YELLOW=$'\033[38;5;221m'
+C_RED=$'\033[38;5;167m'
+C_DIM=$'\033[38;5;244m'
+C_RESET=$'\033[0m'
+C_BOLD=$'\033[1m'
+C_BG=$'\033[48;5;234m'
+
+status_color() {
+    case "$1" in
+        in-progress)     printf '%s' "$C_CYAN";;
+        queued)          printf '%s' "$C_DIM";;
+        awaiting-review) printf '%s' "$C_PURPLE";;
+        done)            printf '%s' "$C_GREEN";;
+        blocked)         printf '%s' "$C_RED";;
+        *)               printf '%s' "$C_DIM";;
+    esac
+}
+
+cat_color() {
+    case "$1" in
+        work)     printf '%s' "$C_CYAN";;
+        personal) printf '%s' "$C_PURPLE";;
+        meta)     printf '%s' "$C_DIM";;
+        *)        printf '%s' "$C_DIM";;
+    esac
+}
+
+# ─── Parse arguments ────────────────────────────────────────────
+WS_NAME="" WS_STATUS="" WS_CATEGORY="" SESSION_ID="" JSONL_PATH=""
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --ws-name)     WS_NAME="$2"; shift 2;;
+        --ws-status)   WS_STATUS="$2"; shift 2;;
+        --ws-category) WS_CATEGORY="$2"; shift 2;;
+        --session-id)  SESSION_ID="$2"; shift 2;;
+        --jsonl)       JSONL_PATH="$2"; shift 2;;
+        *)             shift;;
+    esac
+done
+
+ORCH_DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
+
+# ─── Render loop ────────────────────────────────────────────────
+while true; do
+    MSGS=0 TOKENS="—" COST="—"
+
+    if [[ -f "$JSONL_PATH" ]]; then
+        read -r MSGS TOKENS COST < <(python3 -c "
+import sys
+sys.path.insert(0, '$ORCH_DIR')
+from sessions import parse_session
+from pathlib import Path
+s = parse_session(Path('$JSONL_PATH'))
+if s:
+    print(f'{s.message_count} {s.tokens_display} {s.cost_display}')
+else:
+    print('0 — —')
+" 2>/dev/null) || true
+    fi
+
+    SC=$(status_color "$WS_STATUS")
+    CC=$(cat_color "$WS_CATEGORY")
+
+    # Build line
+    LEFT="${C_BG}${C_BOLD}${C_BLUE} ORCH ${C_RESET}${C_BG}"
+    LEFT+=" ${C_PURPLE}${WS_NAME}${C_RESET}${C_BG}"
+    LEFT+="  ${SC}${WS_STATUS}${C_RESET}${C_BG}"
+    LEFT+="  ${CC}${WS_CATEGORY}${C_RESET}${C_BG}"
+
+    RIGHT=""
+    if [[ "$MSGS" -gt 0 ]]; then
+        RIGHT+="${C_DIM}${MSGS} msgs${C_RESET}${C_BG}"
+        RIGHT+="  ${C_DIM}${TOKENS}${C_RESET}${C_BG}"
+        RIGHT+="  ${C_DIM}${COST}${C_RESET}${C_BG}"
+        RIGHT+="  ${C_DIM}\u2502${C_RESET}${C_BG}"
+    fi
+    RIGHT+="  ${C_DIM}Ctrl+D exit${C_RESET}"
+
+    # Clear line + print
+    COLS=$(tput cols 2>/dev/null || echo 120)
+    printf '\r\033[2K%s%s  %s%s' "$C_BG" "$LEFT" "$RIGHT" "$C_RESET"
+
+    sleep 5
+done
