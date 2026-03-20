@@ -1,0 +1,6 @@
+#!/bin/bash
+export PYENV_ROOT="$HOME/.pyenv"
+export PATH="$PYENV_ROOT/bin:$PATH"
+eval "$(pyenv init -)"
+SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
+exec python3 "$SCRIPT_DIR/orch.py" "$@"
