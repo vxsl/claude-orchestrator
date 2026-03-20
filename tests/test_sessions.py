@@ -19,24 +19,20 @@ from sessions import (
 
 # ─── ClaudeSession Properties ───────────────────────────────────────
 
-class TestClaudeSessionCost:
-    def test_zero_tokens(self):
+class TestClaudeSessionTokensDisplay:
+    def test_zero_tokens_display(self):
         s = ClaudeSession(session_id="test", project_dir="d", project_path="/p")
-        assert s.cost_estimate == 0.0
-        assert s.cost_display == "<$0.01"
+        assert s.tokens_display == "0"
 
-    def test_small_cost(self):
+    def test_small_tokens_display(self):
         s = ClaudeSession(session_id="test", project_dir="d", project_path="/p",
                           total_input_tokens=1000, total_output_tokens=100)
-        assert s.cost_estimate > 0
-        assert s.cost_display.startswith("<$") or s.cost_display.startswith("$")
+        assert s.tokens_display == "1.1k"
 
-    def test_large_cost(self):
+    def test_large_tokens_display(self):
         s = ClaudeSession(session_id="test", project_dir="d", project_path="/p",
                           total_input_tokens=5_000_000, total_output_tokens=2_000_000)
-        cost = s.cost_estimate
-        assert cost > 100  # Should be significant with Opus pricing
-        assert "$" in s.cost_display
+        assert s.tokens_display == "7.0M"
 
 
 class TestClaudeSessionTokens:

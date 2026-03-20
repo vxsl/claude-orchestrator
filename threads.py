@@ -58,17 +58,6 @@ class Thread:
         return min(s.started_at or s.last_activity or "" for s in self.sessions)
 
     @property
-    def total_cost(self) -> float:
-        return sum(s.cost_estimate for s in self.sessions)
-
-    @property
-    def cost_display(self) -> str:
-        c = self.total_cost
-        if c < 0.01:
-            return "<$0.01"
-        return f"${c:.2f}"
-
-    @property
     def total_messages(self) -> int:
         return sum(s.message_count for s in self.sessions)
 

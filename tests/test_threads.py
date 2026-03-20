@@ -45,10 +45,10 @@ class TestThread:
                    sessions=[self._make_session(), self._make_session(session_id="s2")])
         assert t.session_count == 2
 
-    def test_total_cost(self):
+    def test_total_tokens(self):
         t = Thread(thread_id="t1", name="test", project_path="/p",
                    sessions=[self._make_session(), self._make_session(session_id="s2")])
-        assert t.total_cost > 0
+        assert t.total_tokens > 0
 
     def test_total_messages(self):
         t = Thread(thread_id="t1", name="test", project_path="/p",

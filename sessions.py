@@ -31,21 +31,6 @@ class ClaudeSession:
     is_live: bool = False
 
     @property
-    def cost_estimate(self) -> float:
-        """Rough cost estimate in USD. Uses Opus pricing as conservative estimate."""
-        # Claude Opus: $15/1M input, $75/1M output (approximate)
-        input_cost = (self.total_input_tokens / 1_000_000) * 15
-        output_cost = (self.total_output_tokens / 1_000_000) * 75
-        return input_cost + output_cost
-
-    @property
-    def cost_display(self) -> str:
-        c = self.cost_estimate
-        if c < 0.01:
-            return "<$0.01"
-        return f"${c:.2f}"
-
-    @property
     def tokens_display(self) -> str:
         total = self.total_input_tokens + self.total_output_tokens
         if total > 1_000_000:

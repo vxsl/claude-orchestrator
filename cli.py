@@ -396,7 +396,6 @@ def cmd_sessions(args):
     for s in sessions:
         title = s.display_name
         tokens = s.tokens_display
-        cost = s.cost_display
         model = s.model or "unknown"
 
         print(
@@ -408,7 +407,6 @@ def cmd_sessions(args):
         )
         print(
             f"    {_c('dim', 'tokens:')} {tokens}  "
-            f"{_c('dim', 'cost:')} {cost}  "
             f"{_c('dim', 'msgs:')} {s.message_count}  "
             f"{_c('dim', 'model:')} {model}  "
             f"{_c('dim', 'age:')} {s.age}"
@@ -1009,7 +1007,7 @@ examples:
   orch sessions -p orchestrator        Filter by project name
 
 scans ~/.claude/projects/ for JSONL session files. shows token usage,
-estimated cost (Opus pricing), message count, and last activity.
+token usage, message count, and last activity.
 """)
     p_sessions.add_argument("-p", "--project", help="Filter by project path substring")
     p_sessions.add_argument("-n", "--limit", type=int, default=20,
