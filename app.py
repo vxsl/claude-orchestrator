@@ -28,13 +28,20 @@ from textual.widgets import (
 from textual.widgets.option_list import Option
 
 from models import (
-    Category, Link, Status, Store, Workstream,
+    Category, Link, Origin, Status, Store, Workstream,
     STATUS_ICONS, STATUS_ORDER,
     _relative_time,
 )
 from sessions import discover_sessions, ClaudeSession
 from threads import Thread, discover_threads
 from thread_namer import apply_cached_names, name_uncached_threads
+from workstream_synthesizer import (
+    synthesize_workstreams,
+    get_discovered_workstreams,
+    get_assigned_thread_ids,
+    pin_workstream,
+    dismiss_workstream,
+)
 
 
 # ─── Color Palette (matching fzedit / jira-fzf) ─────────────────────
@@ -286,7 +293,7 @@ class LinksScreen(ModalScreen[None]):
         idx = option_list.highlighted
         if idx is not None and idx < len(self.ws.links):
             link = self.ws.links[idx]
-            _open_link(link, ws=self.ws)
+            _open_link(link, ws=self.ws, app=self.app)
             self.app.notify(f"Opening {link.label}...", timeout=2)
 
 
@@ -492,15 +499,10 @@ class DetailScreen(ModalScreen[None]):
         self.dismiss()
 
     def action_spawn(self):
-        if not _has_tmux():
-            self.app.notify("Not in a tmux session", severity="error", timeout=2)
-            return
-
         def on_prompt(prompt: str | None):
             if prompt is None:
                 return
             _launch_orch_claude(self.ws, prompt=prompt)
-            self.app.notify(f"Session spawned for {self.ws.name}", timeout=2)
 
         self.app.push_screen(SpawnPromptScreen(self.ws), callback=on_prompt)
 
@@ -936,43 +938,12 @@ def _find_sessions_for_ws(ws: Workstream, all_sessions: list[ClaudeSession]) -> 
     return found
 
 
-def _find_tmux_window(ws: Workstream) -> str | None:
-    """Find an existing tmux window for this workstream. Returns window target or None."""
-    spawn_name = f"\U0001f916{ws.name[:18]}"
-    try:
-        result = subprocess.run(
-            ["tmux", "list-windows", "-F", "#{window_index}\t#{window_name}"],
-            capture_output=True, text=True, timeout=5,
-        )
-        if result.returncode != 0:
-            return None
-        for line in result.stdout.strip().split("\n"):
-            if "\t" in line:
-                idx, name = line.split("\t", 1)
-                if name == spawn_name or name == ws.name[:20]:
-                    return idx
-    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
-        pass
-    return None
-
-
 def _do_resume(ws: Workstream, app, sessions: list[ClaudeSession] | None = None):
-    """Smart resume: switch to live window, or auto-discover sessions, fall back to directory."""
+    """Smart resume: auto-discover sessions, fall back to directory."""
     if not _has_tmux():
         app.notify("Not in a tmux session", severity="error", timeout=2)
         return
 
-    # If the session already has a live tmux window, just switch to it
-    win_target = _find_tmux_window(ws)
-    if win_target is not None:
-        subprocess.Popen(
-            ["tmux", "select-window", "-t", win_target],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-        )
-        app.notify(f"Switched to {ws.name}", timeout=2)
-        return
-
-    # Find sessions (auto-discovered + explicitly linked)
     matching = _find_sessions_for_ws(ws, sessions or [])
     dirs = _ws_directories(ws)
 
@@ -985,9 +956,7 @@ def _do_resume(ws: Workstream, app, sessions: list[ClaudeSession] | None = None)
         app.notify(f"Resuming: {session.display_name}", timeout=2)
         return
 
-    # No sessions — open linked directory
     if dirs:
-        # Spawn a new Claude session in the directory
         _launch_orch_claude(ws, cwd=dirs[0])
         app.notify(f"New session in {dirs[0]}", timeout=2)
         return
@@ -995,7 +964,7 @@ def _do_resume(ws: Workstream, app, sessions: list[ClaudeSession] | None = None)
     app.notify("No sessions or directories found", timeout=2)
 
 
-def _open_link(link: Link, ws: Workstream | None = None):
+def _open_link(link: Link, ws: Workstream | None = None, app=None):
     value = os.path.expanduser(link.value)
     if link.kind == "url":
         subprocess.Popen(["xdg-open", link.value], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -1018,15 +987,14 @@ def _open_link(link: Link, ws: Workstream | None = None):
         else:
             subprocess.Popen(["xdg-open", value], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     elif link.kind == "claude-session":
-        if _has_tmux():
-            if ws:
-                _launch_orch_claude(ws, session_id=link.value)
-            else:
-                subprocess.Popen(
-                    ["tmux", "new-window", "-n", f"claude:{link.label}",
-                     "claude", "--resume", link.value],
-                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                )
+        if ws and app:
+            _launch_orch_claude(ws, session_id=link.value)
+        elif _has_tmux():
+            subprocess.Popen(
+                ["tmux", "new-window", "-n", f"claude:{link.label}",
+                 "claude", "--resume", link.value],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            )
 
 
 # ─── Main App ───────────────────────────────────────────────────────
@@ -1133,6 +1101,7 @@ class OrchestratorApp(App):
 
         # View switching
         Binding("tab", "next_view", "Tab", show=True, priority=True),
+        Binding("shift+tab", "prev_view", show=False, priority=True),
 
         # Actions
         Binding("a", "add", "Add", show=True),
@@ -1184,6 +1153,7 @@ class OrchestratorApp(App):
         self.search_text: str = ""
         self.sessions: list[ClaudeSession] = []
         self.threads: list[Thread] = []
+        self.discovered_ws: list[Workstream] = []
         self.preview_visible: bool = True
         self._tmux_paths: set[str] = set()
         self._tmux_names: set[str] = set()
@@ -1205,13 +1175,6 @@ class OrchestratorApp(App):
         yield Static("", id="summary-bar")
 
     def on_mount(self):
-        # Name the orch window for easy tmux navigation
-        if _has_tmux():
-            subprocess.Popen(
-                ["tmux", "rename-window", "orch"],
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-            )
-
         # Workstreams table
         ws_table = self.query_one("#ws-table", DataTable)
         ws_table.cursor_type = "row"
@@ -1262,6 +1225,12 @@ class OrchestratorApp(App):
         modes = list(ViewMode)
         idx = modes.index(self.view_mode)
         self.view_mode = modes[(idx + 1) % len(modes)]
+        self._apply_view()
+
+    def action_prev_view(self):
+        modes = list(ViewMode)
+        idx = modes.index(self.view_mode)
+        self.view_mode = modes[(idx - 1) % len(modes)]
         self._apply_view()
 
     def _apply_view(self):
@@ -1323,12 +1292,8 @@ class OrchestratorApp(App):
         if not self.preview_visible:
             return
         if self.view_mode == ViewMode.WORKSTREAMS:
-            thread = self._selected_thread()
-            if thread:
-                self._render_thread_preview(thread)
-            else:
-                ws = self._selected_ws()
-                self._render_ws_preview(ws)
+            ws = self._selected_ws()
+            self._render_ws_preview(ws)
         elif self.view_mode == ViewMode.SESSIONS:
             session = self._selected_session()
             self._render_session_preview(session)
@@ -1336,10 +1301,18 @@ class OrchestratorApp(App):
             ws = self._selected_archived()
             self._render_ws_preview(ws, archived=True)
 
+    @staticmethod
+    def _hint_line(pairs: list[tuple[str, str]]) -> str:
+        parts = [f"[{C_YELLOW}]{key}[/{C_YELLOW}] {label}" for key, label in pairs]
+        return f"[{C_DIM}]{' \u00b7 '.join(parts)}[/{C_DIM}]"
+
+    def _nav_hints(self) -> str:
+        return self._hint_line([("j/k", "navigate"), ("Tab", "views"), ("?", "help")])
+
     def _render_ws_preview(self, ws: Workstream | None, archived: bool = False):
         content = self.query_one("#preview-content", Static)
         if not ws:
-            content.update(f"[{C_DIM}]Select a thread[/{C_DIM}]")
+            content.update(f"[{C_DIM}]Select a thread[/{C_DIM}]\n\n{self._nav_hints()}")
             return
 
         lines = []
@@ -1355,7 +1328,7 @@ class OrchestratorApp(App):
             lines.append("")
 
         # Auto-discovered Claude sessions — the brain threads
-        thread_sessions = _find_sessions_for_ws(ws, self.sessions)
+        thread_sessions = self._sessions_for_ws(ws)
         if thread_sessions:
             total_cost = sum(s.cost_estimate for s in thread_sessions)
             total_msgs = sum(s.message_count for s in thread_sessions)
@@ -1413,12 +1386,22 @@ class OrchestratorApp(App):
         # Timeline (compact)
         lines.append(f"[{C_DIM}]Created {_relative_time(ws.created_at)} \u00b7 Updated {_relative_time(ws.updated_at)}[/{C_DIM}]")
 
+        # Action hints
+        lines.append("")
+        if archived:
+            lines.append(self._nav_hints())
+        else:
+            lines.append(self._hint_line([
+                ("r", "resume"), ("c", "new session"), ("s", "status"),
+                ("n", "note"), ("o", "open"),
+            ]))
+
         content.update("\n".join(lines))
 
     def _render_session_preview(self, session: ClaudeSession | None):
         content = self.query_one("#preview-content", Static)
         if not session:
-            content.update(f"[{C_DIM}]No session selected[/{C_DIM}]")
+            content.update(f"[{C_DIM}]No session selected[/{C_DIM}]\n\n{self._nav_hints()}")
             return
 
         lines = []
@@ -1456,6 +1439,10 @@ class OrchestratorApp(App):
 
         # Session ID (small, for linking)
         lines.append(f"[{C_DIM}]Session: {session.session_id[:16]}...[/{C_DIM}]")
+
+        # Action hints
+        lines.append("")
+        lines.append(self._hint_line([("r", "resume"), ("l", "link to workstream")]))
 
         content.update("\n".join(lines))
 
@@ -1497,6 +1484,10 @@ class OrchestratorApp(App):
 
         # Thread ID for reference
         lines.append(f"[{C_DIM}]Thread: {thread.thread_id[:16]}...[/{C_DIM}]")
+
+        # Action hints
+        lines.append("")
+        lines.append(self._hint_line([("r", "resume"), ("l", "link to workstream")]))
 
         content.update("\n".join(lines))
 
@@ -1550,7 +1541,7 @@ class OrchestratorApp(App):
 
     def _render_view_bar(self) -> str:
         views = [
-            (ViewMode.WORKSTREAMS, f"Threads ({len(self.store.active) + len(self.threads)})"),
+            (ViewMode.WORKSTREAMS, f"Workstreams ({len(self.store.active) + len(self.discovered_ws)})"),
             (ViewMode.SESSIONS, f"Sessions ({len(self.sessions)})"),
             (ViewMode.ARCHIVED, f"Archived ({len(self.store.archived)})"),
         ]
@@ -1622,37 +1613,31 @@ class OrchestratorApp(App):
 
     # ── Workstreams / Threads table ──
 
-    def _get_unified_items(self) -> list[Workstream | Thread]:
-        """Build unified list: pinned workstreams + auto-discovered threads.
+    def _get_unified_items(self) -> list[Workstream]:
+        """Build unified list: manual workstreams + AI-discovered workstreams.
 
-        Pinned workstreams absorb any threads whose project_path matches their
-        linked directories, so we don't show duplicates.
+        Everything is a Workstream. Manual ones from data.json,
+        discovered ones from the synthesizer cache.
         """
-        items: list[Workstream | Thread] = []
+        manual = self._get_filtered_streams()
+        discovered = list(self.discovered_ws)
 
-        # Collect pinned workstreams and track which project paths they claim
-        pinned_streams = self._get_filtered_streams()
-        claimed_paths: set[str] = set()
-        for ws in pinned_streams:
-            items.append(ws)
-            for link in ws.links:
-                if link.kind in ("worktree", "file"):
-                    expanded = os.path.expanduser(link.value).rstrip("/")
-                    claimed_paths.add(expanded)
+        # Apply search filter to discovered
+        if self.search_text:
+            q = self.search_text.lower()
+            discovered = [w for w in discovered
+                          if q in w.name.lower() or q in w.description.lower()]
 
-        # Add auto-discovered threads that aren't claimed by a pinned workstream
-        for thread in self.threads:
-            tp = thread.project_path.rstrip("/")
-            if any(tp == cp or tp.startswith(cp + "/") for cp in claimed_paths):
-                continue
-            # Apply search filter
-            if self.search_text:
-                q = self.search_text.lower()
-                if q not in thread.display_name.lower() and q not in thread.project_path.lower():
-                    continue
-            items.append(thread)
+        # Apply category filter to discovered
+        if self.filter_mode == "work":
+            discovered = [w for w in discovered if w.category == Category.WORK]
+        elif self.filter_mode == "personal":
+            discovered = [w for w in discovered if w.category == Category.PERSONAL]
 
-        return items
+        # Sort discovered by last activity
+        discovered.sort(key=lambda w: w.updated_at or "", reverse=True)
+
+        return manual + discovered
 
     def _get_filtered_streams(self) -> list[Workstream]:
         if self.filter_mode == "all":
@@ -1681,73 +1666,72 @@ class OrchestratorApp(App):
 
         items = self._get_unified_items()
 
-        for item in items:
-            if isinstance(item, Workstream):
-                ws = item
-                status_cell = Text(STATUS_ICONS[ws.status], style=STATUS_THEME[ws.status])
+        for ws in items:
+            is_discovered = ws.origin == Origin.DISCOVERED
+            is_live = getattr(ws, "_is_live", False)
 
-                indicators = _ws_indicators(ws, tmux_check=self._ws_has_tmux)
-                thread_sessions = _find_sessions_for_ws(ws, self.sessions)
-                if thread_sessions:
-                    parts = []
-                    if indicators:
-                        parts.append(indicators)
-                    parts.append(f"{len(thread_sessions)}s")
-                    indicators = " ".join(parts)
-
-                name_str = ws.name
-                if indicators:
-                    name_str += "  " + indicators
-                name_cell = Text(name_str)
-
-                cat_cell = Text(ws.category.value, style=CATEGORY_THEME[ws.category])
-                updated_cell = Text(_relative_time(ws.updated_at), style=C_DIM)
-
-                table.add_row(status_cell, name_cell, cat_cell, updated_cell, key=ws.id)
-            else:
-                thread = item
-                # Live indicator
-                if thread.is_live:
+            # Status column
+            if is_discovered:
+                if is_live:
                     status_cell = Text("\u25cf", style=C_GREEN)
                 else:
                     status_cell = Text("\u25cb", style=C_DIM)
+            else:
+                status_cell = Text(STATUS_ICONS[ws.status], style=STATUS_THEME[ws.status])
 
-                name_str = thread.display_name[:40]
-                if thread.session_count > 1:
-                    name_str += f"  {thread.session_count}s"
+            # Name + indicators
+            indicators = ""
+            if not is_discovered:
+                indicators = _ws_indicators(ws, tmux_check=self._ws_has_tmux)
+            thread_sessions = self._sessions_for_ws(ws)
+            if thread_sessions:
+                parts = []
+                if indicators:
+                    parts.append(indicators)
+                parts.append(f"{len(thread_sessions)}s")
+                indicators = " ".join(parts)
 
-                name_cell = Text(name_str)
-                # Show AI category if available, else project path
-                if thread.ai_category:
-                    cat_style = CATEGORY_THEME.get(
-                        Category(thread.ai_category) if thread.ai_category in [c.value for c in Category] else None,
-                        C_DIM)
-                    cat_cell = Text(thread.ai_category, style=cat_style)
-                else:
-                    cat_cell = Text(thread.short_project, style=C_DIM)
-                updated_cell = Text(thread.age, style=C_DIM)
+            name_str = ws.name
+            if indicators:
+                name_str += "  " + indicators
+            name_cell = Text(name_str)
 
-                table.add_row(status_cell, name_cell, cat_cell, updated_cell,
-                              key=f"thread:{thread.thread_id}")
+            cat_cell = Text(ws.category.value, style=CATEGORY_THEME[ws.category])
+            updated_cell = Text(_relative_time(ws.updated_at), style=C_DIM)
+
+            table.add_row(status_cell, name_cell, cat_cell, updated_cell, key=ws.id)
 
         self._restore_cursor(table, old_key)
         self._update_all_bars()
         self._update_preview()
 
     def _selected_ws(self) -> Workstream | None:
+        """Get the selected workstream (manual or discovered)."""
         table = self.query_one("#ws-table", DataTable)
         key = self._get_cursor_key(table)
-        if key and not key.startswith("thread:"):
-            return self.store.get(key)
-        return None
+        if not key:
+            return None
+        ws = self.store.get(key)
+        if ws:
+            return ws
+        return next((w for w in self.discovered_ws if w.id == key), None)
 
-    def _selected_thread(self) -> Thread | None:
-        table = self.query_one("#ws-table", DataTable)
-        key = self._get_cursor_key(table)
-        if key and key.startswith("thread:"):
-            thread_id = key[7:]  # strip "thread:" prefix
-            return next((t for t in self.threads if t.thread_id == thread_id), None)
-        return None
+    def _sessions_for_ws(self, ws: Workstream) -> list[ClaudeSession]:
+        """Find sessions for a workstream via thread_ids or directory matching."""
+        if ws.thread_ids:
+            thread_map = {t.thread_id: t for t in self.threads}
+            sessions = []
+            seen = set()
+            for tid in ws.thread_ids:
+                t = thread_map.get(tid)
+                if t:
+                    for s in t.sessions:
+                        if s.session_id not in seen:
+                            sessions.append(s)
+                            seen.add(s.session_id)
+            sessions.sort(key=lambda s: s.last_activity or "", reverse=True)
+            return sessions
+        return _find_sessions_for_ws(ws, self.sessions)
 
     # ── Sessions & threads loading ──
 
@@ -1757,29 +1741,39 @@ class OrchestratorApp(App):
     @work(thread=True, exclusive=True, group="sessions")
     def _do_load_sessions(self):
         threads = discover_threads()
-        # Apply cached AI names immediately (fast, no API call)
         apply_cached_names(threads)
-        # Flatten for raw sessions view
+
         sessions = []
         for t in threads:
             sessions.extend(t.sessions)
         sessions.sort(key=lambda s: s.last_activity or "", reverse=True)
-        self.call_from_thread(self._apply_sessions, sessions, threads)
-        # Name uncached threads in background (Sonnet API call)
+
+        # Phase 1: show cached data immediately
+        discovered = get_discovered_workstreams(threads)
+        self.call_from_thread(self._apply_sessions, sessions, threads, discovered)
+
+        # Phase 2: name uncached threads (Haiku)
         named = name_uncached_threads(threads)
         if named > 0:
-            # Re-apply names and refresh
             apply_cached_names(threads)
-            self.call_from_thread(self._apply_ai_names, threads)
 
-    def _apply_sessions(self, sessions: list[ClaudeSession], threads: list[Thread]):
+        # Phase 3: synthesize workstreams for unassigned threads (Haiku)
+        new_count = synthesize_workstreams(threads, self.store.active)
+        if new_count > 0 or named > 0:
+            discovered = get_discovered_workstreams(threads)
+            self.call_from_thread(self._apply_synthesis, threads, discovered)
+
+    def _apply_sessions(self, sessions: list[ClaudeSession],
+                        threads: list[Thread], discovered: list[Workstream]):
         self.sessions = sessions
         self.threads = threads
+        self.discovered_ws = discovered
         self._refresh_ws_table()
         self._refresh_sessions_table()
 
-    def _apply_ai_names(self, threads: list[Thread]):
+    def _apply_synthesis(self, threads: list[Thread], discovered: list[Workstream]):
         self.threads = threads
+        self.discovered_ws = discovered
         self._refresh_ws_table()
 
     def _refresh_sessions_table(self):
@@ -2028,7 +2022,7 @@ class OrchestratorApp(App):
             return
         if ws.links:
             if len(ws.links) == 1:
-                _open_link(ws.links[0], ws=ws)
+                _open_link(ws.links[0], ws=ws, app=self)
                 self.notify(f"Opening {ws.links[0].label}...", timeout=2)
             else:
                 self.push_screen(LinksScreen(ws, self.store))
@@ -2123,40 +2117,16 @@ class OrchestratorApp(App):
         if not ws:
             self.notify("No workstream selected", timeout=2)
             return
-        if not _has_tmux():
-            self.notify("Not in a tmux session", severity="error", timeout=2)
-            return
 
         def on_prompt(prompt: str | None):
             if prompt is None:
                 return
             _launch_orch_claude(ws, prompt=prompt)
-            self.notify(f"Session spawned for {ws.name}", timeout=2)
-            self.set_timer(2, self._poll_tmux)
 
         self.push_screen(SpawnPromptScreen(ws), callback=on_prompt)
 
     def action_resume(self):
         if self.view_mode == ViewMode.WORKSTREAMS:
-            thread = self._selected_thread()
-            if thread:
-                # Resume the most recent session in this thread
-                if thread.sessions:
-                    most_recent = sorted(thread.sessions,
-                                         key=lambda s: s.last_activity or "",
-                                         reverse=True)[0]
-                    if not _has_tmux():
-                        self.notify("Not in a tmux session", severity="error", timeout=2)
-                        return
-                    import subprocess
-                    subprocess.Popen(
-                        ["tmux", "new-window", "-n", f"claude:{thread.display_name[:20]}",
-                         "-c", thread.project_path,
-                         "claude", "--resume", most_recent.session_id],
-                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                    )
-                    self.notify(f"Resuming {most_recent.session_id[:8]}...", timeout=2)
-                return
             ws = self._selected_ws()
             if ws:
                 _do_resume(ws, self, self.sessions)
@@ -2168,23 +2138,20 @@ class OrchestratorApp(App):
         if not session:
             self.notify("No session selected", timeout=2)
             return
-        if not _has_tmux():
-            self.notify("Not in a tmux session", severity="error", timeout=2)
-            return
 
-        # Try to find a linked workstream for full wrapper experience
         ws = self._find_ws_for_session(session)
         if ws:
             _launch_orch_claude(ws, session_id=session.session_id, cwd=session.project_path)
         else:
-            # Fallback: raw resume for unlinked sessions
-            title = session.display_name[:20]
-            subprocess.Popen(
-                ["tmux", "new-window", "-n", f"claude:{title}",
-                 "claude", "--resume", session.session_id],
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            self._suspend_claude(
+                ["claude", "--resume", session.session_id],
+                cwd=session.project_path,
             )
-        self.notify(f"Resuming: {session.display_name}", timeout=2)
+
+    def _suspend_claude(self, cmd: list[str], cwd: str | None = None):
+        """Suspend the TUI and run a claude command in the foreground."""
+        with self.suspend():
+            subprocess.run(cmd, cwd=cwd)
 
     def _find_ws_for_session(self, session: ClaudeSession) -> Workstream | None:
         """Reverse-lookup: find a workstream that owns this session."""
