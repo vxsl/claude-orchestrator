@@ -953,7 +953,9 @@ def _find_sessions_for_ws(ws: Workstream, all_sessions: list[ClaudeSession]) -> 
                     found.append(s)
                     seen.add(s.session_id)
 
-    # 2. Auto-match by directory — any linked dir matches against session project paths
+    # 2. Auto-match by directory — exact match only (no subdirectory matching,
+    #    which would cause a monorepo root to vacuum up every worktree's sessions).
+    #    The synthesizer + thread_ids is the proper grouping mechanism now.
     ws_dirs = set()
     for link in ws.links:
         if link.kind in ("worktree", "file"):
@@ -966,11 +968,9 @@ def _find_sessions_for_ws(ws: Workstream, all_sessions: list[ClaudeSession]) -> 
             if s.session_id in seen:
                 continue
             sp = s.project_path.rstrip("/")
-            for d in ws_dirs:
-                if sp == d or sp.startswith(d + "/"):
-                    found.append(s)
-                    seen.add(s.session_id)
-                    break
+            if sp in ws_dirs:
+                found.append(s)
+                seen.add(s.session_id)
 
     found.sort(key=lambda s: s.last_activity or "", reverse=True)
     return found
