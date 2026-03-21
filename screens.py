@@ -373,7 +373,6 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         Binding("a", "archive_thread", "Archive/restore", priority=True),
         Binding("h", "focus_sessions", show=False, priority=True),
         Binding("l", "focus_archived", show=False, priority=True),
-        Binding("enter", "enter_session", "Enter session", show=False),
     ] + _VimOptionListMixin.VIM_BINDINGS
 
     DEFAULT_CSS = f"""
@@ -671,22 +670,6 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
             if s.session_id == sid:
                 return s
         return None
-
-    def action_enter_session(self):
-        """Screen-level Enter handler — works even when OptionList lacks focus."""
-        olist = self._focused_olist()
-        if olist.highlighted is not None and olist.option_count > 0:
-            try:
-                opt = olist.get_option_at_index(olist.highlighted)
-                sid = opt.id.removeprefix("a:")
-                session = self._find_session_by_id(sid)
-                if session:
-                    mark_thread_seen(session.session_id)
-                    dirs = ws_directories(self.ws)
-                    resume_session_now(self.ws, session, dirs, self.app)
-                    return
-            except Exception:
-                pass
 
     def on_option_list_option_selected(self, event: OptionList.OptionSelected):
         oid = event.option_id
