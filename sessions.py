@@ -215,8 +215,13 @@ def parse_session(jsonl_path: Path) -> Optional[ClaudeSession]:
                     if msg_type == "user" and ts:
                         session.last_user_message_at = ts
 
-                # system:turn_duration marks Claude finished its turn
-                if msg_type == "system" and data.get("subtype") == "turn_duration":
+                # Turn completion: turn_duration is the primary signal,
+                # but idle-only entries (last-prompt, custom-title,
+                # file-history-snapshot) also prove the turn ended —
+                # covers interrupted turns where turn_duration is never written.
+                if (msg_type == "system" and data.get("subtype") == "turn_duration"
+                        or msg_type in ("last-prompt", "custom-title",
+                                        "file-history-snapshot")):
                     session.turn_complete = True
 
                 # Extract usage and stop_reason from assistant messages
@@ -286,7 +291,9 @@ def refresh_session_tail(session: ClaudeSession, tail_bytes: int = 8192) -> bool
                     session.last_user_message_at = ts
             if msg_type == "assistant" and "message" in data:
                 session.last_stop_reason = data["message"].get("stop_reason") or ""
-            if msg_type == "system" and data.get("subtype") == "turn_duration":
+            if (msg_type == "system" and data.get("subtype") == "turn_duration"
+                    or msg_type in ("last-prompt", "custom-title",
+                                    "file-history-snapshot")):
                 session.turn_complete = True
 
             # Track new session IDs from resumed sessions
