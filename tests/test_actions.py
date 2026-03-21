@@ -8,7 +8,7 @@ from sessions import ClaudeSession
 from actions import (
     ws_directories, ws_working_dir,
     find_sessions_for_ws, launch_orch_claude,
-    has_tmux, do_resume,
+    has_tmux, do_resume, switch_to_tmux_window,
 )
 from screens import ThreadPickerScreen
 
@@ -133,3 +133,49 @@ class TestDoResume:
         do_resume(ws, app, [])
         app.notify.assert_called_once()
         assert "tmux" in app.notify.call_args[0][0].lower()
+
+
+class TestSwitchToTmuxWindow:
+    """Regression: switch_to_tmux_window must link into the current session
+    before selecting, otherwise select-window silently switches the window
+    in a different session (e.g. orch-workers) while the user sees nothing."""
+
+    @patch("actions.subprocess.run")
+    def test_links_before_selecting(self, mock_run):
+        """The window should be linked into the current session before select-window."""
+        # display-message returns current session name
+        # link-window succeeds
+        # select-window succeeds
+        mock_run.side_effect = [
+            MagicMock(stdout="orch\n", returncode=0),   # display-message
+            MagicMock(returncode=0, stderr=""),           # link-window
+            MagicMock(returncode=0),                      # select-window
+        ]
+        assert switch_to_tmux_window("@232") is True
+
+        calls = mock_run.call_args_list
+        # First call: get current session
+        assert "display-message" in calls[0][0][0]
+        # Second call: link-window into current session
+        link_args = calls[1][0][0]
+        assert "link-window" in link_args
+        assert "@232" in link_args
+        assert "orch:" in link_args[-1]
+        # Third call: select-window
+        assert "select-window" in calls[2][0][0]
+
+    @patch("actions.subprocess.run")
+    def test_link_failure_still_tries_select(self, mock_run):
+        """Even if link-window fails (already linked), select-window should proceed."""
+        mock_run.side_effect = [
+            MagicMock(stdout="orch\n", returncode=0),    # display-message
+            MagicMock(returncode=1, stderr="already linked"),  # link-window fails
+            MagicMock(returncode=0),                      # select-window succeeds
+        ]
+        assert switch_to_tmux_window("@232") is True
+
+    @patch("actions.subprocess.run")
+    def test_no_current_session_returns_false(self, mock_run):
+        """If we can't determine the current tmux session, bail out."""
+        mock_run.return_value = MagicMock(stdout="", returncode=0)
+        assert switch_to_tmux_window("@232") is False
