@@ -1065,13 +1065,13 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         # Recompute activity fresh so snippet styling stays in sync with state
         olist = self.query_one("#detail-sessions", OptionList)
         for i, _cached_act in self._animating_sessions:
-            if i < olist.option_count:
+            if i < olist.option_count and i < len(self._detail_sessions):
                 act = session_activity(self._detail_sessions[i], self._last_seen_cache)
                 prompt = _render_session_option(self._detail_sessions[i], act, self._throbber_frame)
                 olist.replace_option_prompt_at_index(i, prompt)
         arch_olist = self.query_one("#detail-archived", OptionList)
         for i, _cached_act in self._animating_archived:
-            if i < arch_olist.option_count:
+            if i < arch_olist.option_count and i < len(self._archived_sessions):
                 act = session_activity(self._archived_sessions[i], self._last_seen_cache)
                 prompt = _render_session_option(self._archived_sessions[i], act, self._throbber_frame)
                 arch_olist.replace_option_prompt_at_index(i, prompt)
@@ -1498,6 +1498,12 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         else:
             self._apply_title_filter()
 
+    def check_action(self, action: str, parameters) -> bool:
+        """Block all non-search actions while in search mode."""
+        if self._searching and action not in ("search", "dismiss"):
+            return False
+        return True
+
     def on_key(self, event) -> None:
         if not self._searching:
             return
@@ -1510,15 +1516,31 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
             event.stop()
             event.prevent_default()
             self._commit_search()
+        elif key == "ctrl+w":
+            event.stop()
+            event.prevent_default()
+            # Delete last word
+            txt = self._search_text.rstrip()
+            if txt:
+                last_space = txt.rfind(" ")
+                self._search_text = txt[:last_space + 1] if last_space >= 0 else ""
+            else:
+                self._search_text = ""
+            self._on_search_text_changed()
+        elif key == "ctrl+u":
+            event.stop()
+            event.prevent_default()
+            self._search_text = ""
+            self._on_search_text_changed()
         elif key == "backspace":
             event.stop()
             event.prevent_default()
             self._search_text = self._search_text[:-1]
             self._on_search_text_changed()
-        elif len(key) == 1 and key.isprintable():
+        elif event.character and event.character.isprintable():
             event.stop()
             event.prevent_default()
-            self._search_text += event.character or key
+            self._search_text += event.character
             self._on_search_text_changed()
         elif key == "space":
             event.stop()
