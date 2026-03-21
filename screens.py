@@ -1520,10 +1520,16 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         self._refresh()
 
     def action_resume(self):
-        from actions import do_resume
-        do_resume(self.ws, self.app,
-                  getattr(self.app, 'sessions', getattr(getattr(self.app, 'state', None), 'sessions', [])),
-                  sessions_for_ws_fn=lambda ws: getattr(self.app, 'state', self.app).sessions_for_ws(ws) if hasattr(getattr(self.app, 'state', self.app), 'sessions_for_ws') else [])
+        """Resume the currently highlighted session (same as Enter)."""
+        olist = self._focused_olist()
+        idx = olist.highlighted
+        if self._active_pane in ("sessions", "archived"):
+            sessions = self._archived_sessions if self._active_pane == "archived" else self._detail_sessions
+            if idx is not None and idx < len(sessions):
+                session = sessions[idx]
+                mark_thread_seen(session.session_id)
+                dirs = ws_directories(self.ws)
+                resume_session_now(self.ws, session, dirs, self.app)
 
     def action_add_link(self):
         def on_link(link: Link | None):
