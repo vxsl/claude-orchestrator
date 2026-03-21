@@ -547,6 +547,15 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
                 prompt = _render_session_option(self._archived_sessions[i], act, self._throbber_frame)
                 arch_olist.replace_option_prompt_at_index(i, prompt)
 
+    @staticmethod
+    def _parse_ts(ts: str) -> datetime:
+        """Parse a timestamp string, handling both UTC 'Z' suffix and naive local."""
+        ts = ts.replace("Z", "+00:00")
+        try:
+            return datetime.fromisoformat(ts)
+        except (ValueError, TypeError):
+            return datetime.min
+
     def _load_detail_sessions(self):
         app = self.app
         if hasattr(app, 'state'):
@@ -556,7 +565,8 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
             for s in all_sessions:
                 if s.session_id in archived:
                     archived_at = archived[s.session_id]
-                    if (s.last_activity or "") > archived_at:
+                    last_act = s.last_activity or ""
+                    if last_act and archived_at and self._parse_ts(last_act) > self._parse_ts(archived_at):
                         revived.add(s.session_id)
             if revived:
                 for sid in revived:
@@ -575,7 +585,7 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         if self._detail_sessions:
             olist.display = True
             no_sess.display = False
-            old_sid = self._highlighted_session_id(olist, self._detail_sessions)
+            old_sid = self._highlighted_session_id(olist)
             self._build_session_list()
             self._restore_highlight_by_sid(olist, self._detail_sessions, old_sid)
         else:
@@ -589,7 +599,7 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         if self._archived_sessions:
             arch_olist.display = True
             no_arch.display = False
-            old_sid = self._highlighted_session_id(arch_olist, self._archived_sessions)
+            old_sid = self._highlighted_session_id(arch_olist)
             self._build_archived_list()
             self._restore_highlight_by_sid(arch_olist, self._archived_sessions, old_sid)
         else:
@@ -602,11 +612,15 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         self._update_pane_labels()
 
     @staticmethod
-    def _highlighted_session_id(olist: OptionList, sessions: list) -> str | None:
-        """Get the session_id of the currently highlighted option."""
-        idx = olist.highlighted
-        if idx is not None and idx < len(sessions):
-            return sessions[idx].session_id
+    def _highlighted_session_id(olist: OptionList) -> str | None:
+        """Get the session_id of the currently highlighted option via its option ID."""
+        if olist.highlighted is not None and olist.option_count > 0:
+            try:
+                oid = olist.get_option_at_index(olist.highlighted).id
+                if oid:
+                    return oid.removeprefix("a:")
+            except Exception:
+                pass
         return None
 
     @staticmethod
@@ -780,7 +794,8 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
                 return
             sid = self._detail_sessions[idx].session_id
             if sid not in self.ws.archived_sessions:
-                self.ws.archived_sessions[sid] = datetime.now().isoformat()
+                from datetime import timezone
+                self.ws.archived_sessions[sid] = datetime.now(timezone.utc).isoformat()
                 self.store.update(self.ws)
         self._refresh()
 
