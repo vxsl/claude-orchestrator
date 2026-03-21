@@ -39,6 +39,7 @@ from workstream_synthesizer import (
     synthesize_workstreams, get_discovered_workstreams, get_assigned_thread_ids,
     pin_workstream, dismiss_workstream,
 )
+from description_refresher import refresh_descriptions
 
 # Import from new modules
 from rendering import (
@@ -64,7 +65,7 @@ from screens import (
     SessionsChanged,
     HelpScreen, QuickNoteScreen, TodoScreen, LinksScreen,
     AddScreen, DetailScreen, BrainDumpScreen, BrainPreviewScreen,
-    AddLinkScreen, LinkSessionScreen, ThreadPickerScreen, ConfirmScreen,
+    AddLinkScreen, LinkSessionScreen, SessionPickerScreen, ConfirmScreen,
     RepoPickerScreen, WorkstreamPickerScreen, _SENTINEL_NEW,
 )
 
@@ -281,7 +282,7 @@ class OrchestratorApp(App):
         sessions_table = self.query_one("#sessions-table", DataTable)
         sessions_table.cursor_type = "row"
         sessions_table.zebra_stripes = False
-        sessions_table.add_columns("Title", "Thread", "Model", "Tokens", "Age")
+        sessions_table.add_columns("Title", "Workstream", "Model", "Tokens", "Age")
         sessions_table.display = False
 
         archived_table = self.query_one("#archived-table", DataTable)
@@ -431,7 +432,7 @@ class OrchestratorApp(App):
         content = self.query_one("#preview-content", Static)
         olist = self.query_one("#preview-sessions", OptionList)
         if not ws:
-            content.update(f"[{C_DIM}]Select a thread[/{C_DIM}]\n\n{self._nav_hints()}")
+            content.update(f"[{C_DIM}]Select a workstream[/{C_DIM}]\n\n{self._nav_hints()}")
             olist.display = False
             self.state.preview_sessions = []
             return
@@ -447,16 +448,16 @@ class OrchestratorApp(App):
             lines.append(ws.description)
             lines.append("")
 
-        thread_sessions = self.state.sessions_for_ws(ws)
-        if thread_sessions:
-            total_tokens = sum(s.total_input_tokens + s.total_output_tokens for s in thread_sessions)
-            total_msgs = sum(s.message_count for s in thread_sessions)
+        ws_sessions = self.state.sessions_for_ws(ws)
+        if ws_sessions:
+            total_tokens = sum(s.total_input_tokens + s.total_output_tokens for s in ws_sessions)
+            total_msgs = sum(s.message_count for s in ws_sessions)
             _tk = f"{total_tokens / 1_000_000:.1f}M" if total_tokens > 1_000_000 else f"{total_tokens / 1_000:.0f}k" if total_tokens > 1_000 else str(total_tokens)
-            last_active = thread_sessions[0].age
+            last_active = ws_sessions[0].age
 
             lines.append(f"[bold {C_BLUE}]Activity[/bold {C_BLUE}]")
             lines.append(
-                f"  [{C_CYAN}]{len(thread_sessions)}[/{C_CYAN}] sessions  "
+                f"  [{C_CYAN}]{len(ws_sessions)}[/{C_CYAN}] sessions  "
                 f"[{C_DIM}]\u00b7[/{C_DIM}]  {total_msgs} messages  "
                 f"[{C_DIM}]\u00b7[/{C_DIM}]  {_token_color_markup(_tk, total_tokens)}"
             )
@@ -504,9 +505,9 @@ class OrchestratorApp(App):
 
         content.update("\n".join(lines))
 
-        self.state.preview_sessions = thread_sessions
+        self.state.preview_sessions = ws_sessions
         self.state.last_seen_cache = load_last_seen()
-        if thread_sessions:
+        if ws_sessions:
             olist.display = True
             self._refresh_preview_sessions()
         else:
@@ -660,7 +661,7 @@ class OrchestratorApp(App):
         if self.state.view_mode == ViewMode.WORKSTREAMS:
             count = self._active_table().row_count
             return (
-                f"  {count} threads  "
+                f"  {count} workstreams  "
                 f"[{C_DIM}]\u2502[/{C_DIM}]  "
                 f"[{C_DIM}]r[/{C_DIM}] resume  "
                 f"[{C_DIM}]c[/{C_DIM}] new session  "
@@ -676,7 +677,7 @@ class OrchestratorApp(App):
                 f"  {count} sessions  "
                 f"[{C_DIM}]\u2502[/{C_DIM}]  "
                 f"[{C_DIM}]r[/{C_DIM}] resume  "
-                f"[{C_DIM}]l[/{C_DIM}] link to thread  "
+                f"[{C_DIM}]l[/{C_DIM}] link to workstream  "
                 f"[{C_DIM}]Tab[/{C_DIM}] views  "
                 f"[{C_DIM}]R[/{C_DIM}] refresh"
             )
@@ -724,7 +725,7 @@ class OrchestratorApp(App):
             indicators = ""
             if not is_discovered:
                 indicators = _ws_indicators(ws, tmux_check=self.state.ws_has_tmux)
-            thread_sessions = self.state.sessions_for_ws(ws)
+            ws_sessions = self.state.sessions_for_ws(ws)
 
             name_str = ws.name
             if indicators:
@@ -734,7 +735,7 @@ class OrchestratorApp(App):
             wt_text, wt_color = _worktree_styled(ws)
             repo_cell = Text(wt_text, style=wt_color or C_DIM)
 
-            sess_count = len(thread_sessions) if thread_sessions else 0
+            sess_count = len(ws_sessions) if ws_sessions else 0
             sess_cell = Text(str(sess_count) if sess_count else "", style=C_DIM)
 
             cat_cell = Text(ws.category.value, style=CATEGORY_THEME[ws.category])
@@ -756,9 +757,9 @@ class OrchestratorApp(App):
             return None
         return self.state.get_ws(key)
 
-    def _sessions_for_ws(self, ws: Workstream, include_archived_threads: bool = False) -> list[ClaudeSession]:
+    def _sessions_for_ws(self, ws: Workstream, include_archived_sessions: bool = False) -> list[ClaudeSession]:
         """Delegate to state — kept for backward compat with DetailScreen."""
-        return self.state.sessions_for_ws(ws, include_archived_threads)
+        return self.state.sessions_for_ws(ws, include_archived_sessions)
 
     # ── Sessions table ──
 
@@ -813,6 +814,11 @@ class OrchestratorApp(App):
             discovered = get_discovered_workstreams(threads)
             self.call_from_thread(self._apply_synthesis, threads, discovered)
 
+        # Lightweight description re-evaluation (rate-limited internally to 6h per ws)
+        desc_updated = refresh_descriptions(self.state.store, sessions)
+        if desc_updated > 0:
+            self.call_from_thread(self._refresh_ws_table)
+
     def _apply_sessions(self, sessions: list[ClaudeSession],
                         threads: list[Thread], discovered: list[Workstream]):
         self.state.update_sessions(sessions, threads, discovered)
@@ -846,15 +852,15 @@ class OrchestratorApp(App):
 
             linked_ws = ws_lookup.get(session.session_id)
             if linked_ws:
-                thread_cell = Text(linked_ws, style=C_CYAN)
+                ws_cell = Text(linked_ws, style=C_CYAN)
             else:
-                thread_cell = Text(_short_project(session.project_path), style=C_DIM)
+                ws_cell = Text(_short_project(session.project_path), style=C_DIM)
 
             model_cell = Text(_short_model(session.model), style=C_DIM)
             tokens_cell = Text(session.tokens_display, style=_token_color(session.total_input_tokens + session.total_output_tokens))
             age_cell = Text(session.age, style=C_DIM)
 
-            table.add_row(title_cell, thread_cell, model_cell, tokens_cell, age_cell,
+            table.add_row(title_cell, ws_cell, model_cell, tokens_cell, age_cell,
                           key=session.session_id)
 
         self._restore_cursor(table, old_key)

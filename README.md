@@ -1,6 +1,6 @@
-# orch — Claude Brain Thread Manager
+# orch — Claude Brain Workstream Manager
 
-A terminal-native hub for managing parallel threads of work across Claude sessions. Think of each thread as a topic you're exploring with Claude — the tool tracks context, auto-discovers sessions, and lets you resume any thread with a single keypress.
+A terminal-native hub for managing parallel workstreams across Claude sessions. Think of each workstream as a topic you're exploring with Claude — the tool tracks context, auto-discovers sessions, and lets you resume any workstream with a single keypress.
 
 Built with Python and [Textual](https://textual.textualize.io/). Designed to match the fzedit/jira-fzf mellow color palette.
 
@@ -18,9 +18,9 @@ The TUI is the primary interface. Everything else is secondary.
 
 Press `Tab` to cycle between three views:
 
-### Threads (main view)
+### Workstreams (main view)
 
-Your brain threads — topics you're working on with Claude. Each thread shows:
+Your brain workstreams — topics you're working on with Claude. Each workstream shows:
 - Status icon (colored: ● active, ◉ review, ✓ done, ✗ blocked, ○ queued)
 - Name with inline indicators (⚡ live tmux, ⏰ stale, link type icons, session count)
 - Category (work / personal / meta)
@@ -28,7 +28,7 @@ Your brain threads — topics you're working on with Claude. Each thread shows:
 
 The **preview pane** (right side, toggle with `p`) shows:
 - Description
-- **Auto-discovered Claude sessions** — activity summary (session count, messages, cost), recent thread titles
+- **Auto-discovered Claude sessions** — activity summary (session count, messages, cost), recent session titles
 - Context (linked directories)
 - Notes
 - Timeline
@@ -37,10 +37,10 @@ The **preview pane** (right side, toggle with `p`) shows:
 
 All Claude sessions from `~/.claude/projects/`, sorted by recent activity. Shows:
 - Session title
-- Linked thread name (or project directory if unlinked)
+- Linked workstream name (or project directory if unlinked)
 - Model, cost, age
 
-Press `r` to resume a session, `l` to link it to a thread.
+Press `r` to resume a session, `l` to link it to a workstream.
 
 ### Archived
 
@@ -57,20 +57,20 @@ Threads you've archived. Press `u` to unarchive, `d` to delete permanently.
 | `Ctrl+D` / `Ctrl+U` | Half-page down / up |
 | `g` / `G` | Jump to top / bottom |
 | `Enter` | Open detail / resume session |
-| `Tab` | Cycle views (Threads → Sessions → Archived) |
+| `Tab` | Cycle views (Workstreams → Sessions → Archived) |
 | `Escape` | Back / close / clear search |
 
-### Thread Actions
+### Workstream Actions
 
 | Key | Action |
 |-----|--------|
-| `r` | **Resume** — auto-finds the most recent Claude session for this thread and resumes it. Falls back to opening the linked directory. |
-| `c` | **New session** — opens a prompt editor, then launches Claude with thread context injected |
+| `r` | **Resume** — auto-finds the most recent Claude session for this workstream and resumes it. Falls back to opening the linked directory. |
+| `c` | **New session** — opens a prompt editor, then launches Claude with workstream context injected |
 | `n` | **Quick note** — inline timestamped note (type and press Enter) |
 | `s` / `S` | Cycle status forward / backward |
-| `a` | Add new thread |
-| `b` | Brain dump — multi-line editor that parses stream-of-consciousness into threads |
-| `E` | Rename thread (inline) |
+| `a` | Add new workstream |
+| `b` | Brain dump — multi-line editor that parses stream-of-consciousness into workstreams |
+| `E` | Rename workstream (inline) |
 | `e` | Edit notes (full editor) |
 | `l` | Add link |
 | `o` | Open links |
@@ -97,10 +97,10 @@ Threads you've archived. Press `u` to unarchive, `d` to delete permanently.
 
 ## Auto-Session Discovery
 
-The killer feature. When you link a directory to a thread (worktree or file link), orch automatically finds all Claude sessions in that directory by scanning `~/.claude/projects/`. No manual session linking needed.
+The killer feature. When you link a directory to a workstream (worktree or file link), orch automatically finds all Claude sessions in that directory by scanning `~/.claude/projects/`. No manual session linking needed.
 
 **How it works:**
-1. You create a thread and add a directory link: `:link worktree:~/dev/my-project`
+1. You create a workstream and add a directory link: `:link worktree:~/dev/my-project`
 2. Orch scans `~/.claude/projects/` for sessions whose project path matches
 3. The preview pane shows all matching sessions with activity stats
 4. `r` resumes the most recent one automatically
@@ -119,16 +119,16 @@ A 1-line tmux pane at the top showing:
 Updates every 5 seconds with live stats from the session JSONL.
 
 ### Context Injection
-Claude receives your thread context via `--append-system-prompt`:
+Claude receives your workstream context via `--append-system-prompt`:
 ```
-You are working on the brain thread: "FE testing deep dive"
+You are working on the brain workstream: "FE testing deep dive"
 Description: Vitest DX + browser testing + coverage badge for Dove
 Status: in-progress
 Category: work
 ```
 
 ### Auto-Linking
-When you exit Claude (`Ctrl+D` or `/exit`), the session ID is automatically linked back to the thread. No manual `orch link` needed.
+When you exit Claude (`Ctrl+D` or `/exit`), the session ID is automatically linked back to the workstream. No manual `orch link` needed.
 
 ### Post-Session Summary
 ```

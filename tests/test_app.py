@@ -6,7 +6,7 @@ from pathlib import Path
 
 from models import Category, Link, Status, Store, Workstream
 from app import OrchestratorApp
-from screens import ThreadPickerScreen
+from screens import SessionPickerScreen
 from rendering import (
     ViewMode,
     _ws_indicators,
@@ -614,7 +614,7 @@ class TestDoResume:
     @patch("actions.has_tmux", return_value=True)
     @patch("actions.find_sessions_for_ws")
     def test_multiple_sessions_shows_picker(self, mock_find, mock_tmux):
-        """With 2+ matching sessions, show ThreadPickerScreen."""
+        """With 2+ matching sessions, show SessionPickerScreen."""
         sessions = [self._make_session(f"s{i}") for i in range(3)]
         mock_find.return_value = sessions
         ws = Workstream(name="test", category=Category.META)
@@ -624,7 +624,7 @@ class TestDoResume:
 
         app.push_screen.assert_called_once()
         screen_arg = app.push_screen.call_args[0][0]
-        assert isinstance(screen_arg, ThreadPickerScreen)
+        assert isinstance(screen_arg, SessionPickerScreen)
         assert len(screen_arg.thread_sessions) == 3
 
     @patch("actions.has_tmux", return_value=False)

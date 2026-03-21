@@ -240,11 +240,11 @@ class AppState:
 
     # ── Session matching ──
 
-    def sessions_for_ws(self, ws: Workstream, include_archived_threads: bool = False) -> list[ClaudeSession]:
+    def sessions_for_ws(self, ws: Workstream, include_archived_sessions: bool = False) -> list[ClaudeSession]:
         """Find sessions for a workstream via thread_ids or directory matching."""
         from actions import find_sessions_for_ws
 
-        hidden_sids = set(ws.archived_sessions) if not include_archived_threads else set()
+        hidden_sids = set(ws.archived_sessions) if not include_archived_sessions else set()
 
         effective_tids = ws.thread_ids
         if not effective_tids and self.threads:

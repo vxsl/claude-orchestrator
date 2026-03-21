@@ -311,12 +311,12 @@ def do_resume(ws: Workstream, app, sessions: list[ClaudeSession] | None = None,
         if len(matching) == 1:
             resume_session_now(ws, matching[0], dirs, app)
         else:
-            from screens import ThreadPickerScreen
+            from screens import SessionPickerScreen
 
             def on_pick(session: ClaudeSession | None):
                 if session:
                     resume_session_now(ws, session, dirs, app)
-            app.push_screen(ThreadPickerScreen(ws, matching), callback=on_pick)
+            app.push_screen(SessionPickerScreen(ws, matching), callback=on_pick)
         return
 
     if dirs:

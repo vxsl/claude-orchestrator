@@ -49,7 +49,7 @@ ENCODED_DIR=$(echo "$CWD" | sed 's|/|-|g')
 JSONL_PATH="$HOME/.claude/projects/${ENCODED_DIR}/${SESSION_ID}.jsonl"
 
 # ─── Build context injection ────────────────────────────────────
-CONTEXT="You are working on the brain thread: \"${WS_NAME}\""
+CONTEXT="You are working on the brain workstream: \"${WS_NAME}\""
 [[ -n "$WS_DESC" ]] && CONTEXT+=$'\n'"Description: ${WS_DESC}"
 [[ -n "$WS_STATUS" ]] && CONTEXT+=$'\n'"Status: ${WS_STATUS}"
 [[ -n "$WS_CATEGORY" ]] && CONTEXT+=$'\n'"Category: ${WS_CATEGORY}"

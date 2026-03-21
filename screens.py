@@ -97,8 +97,8 @@ class HelpScreen(ModalScreen[None]):
   [{C_YELLOW}]Tab[/{C_YELLOW}]              Cycle views
   [{C_YELLOW}]Escape[/{C_YELLOW}]           Back / close
 
-[bold {C_CYAN}]Actions (Threads)[/bold {C_CYAN}]
-  [{C_YELLOW}]a[/{C_YELLOW}]   Add new thread
+[bold {C_CYAN}]Actions (Workstreams)[/bold {C_CYAN}]
+  [{C_YELLOW}]a[/{C_YELLOW}]   Add new workstream
   [{C_YELLOW}]b[/{C_YELLOW}]   Brain dump (multi-line)
   [{C_YELLOW}]n[/{C_YELLOW}]   Quick todo (inline)
   [{C_YELLOW}]s/S[/{C_YELLOW}] Cycle status forward / backward
@@ -106,7 +106,7 @@ class HelpScreen(ModalScreen[None]):
   [{C_YELLOW}]r[/{C_YELLOW}]   Resume most recent session
   [{C_YELLOW}]l[/{C_YELLOW}]   Add link
   [{C_YELLOW}]e[/{C_YELLOW}]   Todo list (full screen)
-  [{C_YELLOW}]E[/{C_YELLOW}]   Rename thread
+  [{C_YELLOW}]E[/{C_YELLOW}]   Rename workstream
   [{C_YELLOW}]o[/{C_YELLOW}]   Open links
   [{C_YELLOW}]x[/{C_YELLOW}]   Archive
   [{C_YELLOW}]d[/{C_YELLOW}]   Delete
@@ -114,7 +114,7 @@ class HelpScreen(ModalScreen[None]):
 [bold {C_CYAN}]Inside Claude Session[/bold {C_CYAN}]
   [{C_YELLOW}]Ctrl+D[/{C_YELLOW}]  Clean exit (returns to orch)
   [{C_YELLOW}]/exit[/{C_YELLOW}]   Clean exit (alternative)
-  [{C_DIM}]Session auto-links to thread on exit[/{C_DIM}]
+  [{C_DIM}]Session auto-links to workstream on exit[/{C_DIM}]
   [{C_DIM}]Header bar shows live stats[/{C_DIM}]
 
 [bold {C_CYAN}]Actions (Sessions)[/bold {C_CYAN}]
@@ -691,7 +691,7 @@ class AddScreen(ModalScreen[Workstream | None]):
 
     def compose(self) -> ComposeResult:
         with Vertical(id="add-container"):
-            yield Label("New Thread", id="add-title")
+            yield Label("New Workstream", id="add-title")
             yield Input(placeholder="Name", id="add-name")
             yield Input(placeholder="Description (optional)", id="add-desc")
             yield Select(
@@ -739,7 +739,7 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         Binding("e", "open_todos", "Todos"),
         Binding("o", "open_links", "Open links"),
         Binding("x", "archive", "Archive"),
-        Binding("a", "archive_thread", "Archive/restore", priority=True),
+        Binding("a", "archive_session", "Archive/restore", priority=True),
         Binding("h", "focus_sessions", show=False, priority=True),
         Binding("l", "focus_archived", show=False, priority=True),
     ] + _VimOptionListMixin.VIM_BINDINGS
@@ -959,7 +959,7 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
     def _load_detail_sessions(self):
         app = self.app
         if hasattr(app, 'state'):
-            all_sessions = app.state.sessions_for_ws(self.ws, include_archived_threads=True)
+            all_sessions = app.state.sessions_for_ws(self.ws, include_archived_sessions=True)
             archived = self.ws.archived_sessions
             log.debug("load_detail: ws=%s all=%d archived_map=%s",
                       self.ws.name, len(all_sessions),
@@ -1218,26 +1218,26 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         self.app.notify(f"Archived: {self.ws.name}", timeout=2)
         self.dismiss()
 
-    def action_archive_thread(self):
+    def action_archive_session(self):
         olist = self._focused_olist()
         idx = olist.highlighted
-        log.debug("archive_thread: pane=%s idx=%s option_count=%d detail=%d archived=%d",
+        log.debug("archive_session: pane=%s idx=%s option_count=%d detail=%d archived=%d",
                   self._active_pane, idx, olist.option_count,
                   len(self._detail_sessions), len(self._archived_sessions))
         if self._active_pane == "archived":
             if idx is None or idx >= len(self._archived_sessions):
-                log.warning("archive_thread: idx out of range for archived")
+                log.warning("archive_session: idx out of range for archived")
                 return
             sid = self._archived_sessions[idx].session_id
-            log.debug("archive_thread: unarchiving sid=%s", sid)
+            log.debug("archive_session: unarchiving sid=%s", sid)
             self.ws.archived_sessions.pop(sid, None)
             self.store.update(self.ws)
         else:
             if idx is None or idx >= len(self._detail_sessions):
-                log.warning("archive_thread: idx out of range for detail")
+                log.warning("archive_session: idx out of range for detail")
                 return
             sid = self._detail_sessions[idx].session_id
-            log.debug("archive_thread: archiving sid=%s", sid)
+            log.debug("archive_session: archiving sid=%s", sid)
             if sid not in self.ws.archived_sessions:
                 self.ws.archived_sessions[sid] = datetime.now(timezone.utc).isoformat()
                 self.store.update(self.ws)
@@ -1482,10 +1482,10 @@ class LinkSessionScreen(_VimOptionListMixin, ModalScreen[Workstream | None]):
         self.dismiss(None)
 
 
-# ─── Thread Picker Screen ────────────────────────────────────────────
+# ─── Session Picker Screen ────────────────────────────────────────────
 
-class ThreadPickerScreen(_VimOptionListMixin, ModalScreen[ClaudeSession | None]):
-    """Pick a thread to resume from a workstream's matching sessions."""
+class SessionPickerScreen(_VimOptionListMixin, ModalScreen[ClaudeSession | None]):
+    """Pick a session to resume from a workstream's matching sessions."""
 
     _option_list_id = "threadpick-list"
     BINDINGS = [
@@ -1494,7 +1494,7 @@ class ThreadPickerScreen(_VimOptionListMixin, ModalScreen[ClaudeSession | None])
     ] + _VimOptionListMixin.VIM_BINDINGS
 
     DEFAULT_CSS = f"""
-    ThreadPickerScreen {{ align: center middle; }}
+    SessionPickerScreen {{ align: center middle; }}
     #threadpick-container {{
         width: 90%; height: auto; max-height: 85%;
         padding: 1 2; background: {BG_BASE}; border: round $primary 30%;
@@ -1510,7 +1510,7 @@ class ThreadPickerScreen(_VimOptionListMixin, ModalScreen[ClaudeSession | None])
     def __init__(self, ws: Workstream, sessions: list[ClaudeSession]):
         super().__init__()
         self.ws = ws
-        self.thread_sessions = sessions
+        self.picker_sessions = sessions
         self._throbber_frame: int = 0
         self._last_seen_cache: dict[str, str] = {}
 
@@ -1532,12 +1532,12 @@ class ThreadPickerScreen(_VimOptionListMixin, ModalScreen[ClaudeSession | None])
 
     def _refresh_session_liveness(self):
         from actions import refresh_liveness
-        refresh_liveness(self.thread_sessions)
+        refresh_liveness(self.picker_sessions)
 
     def _tick_throbber(self):
         self._throbber_frame += 1
         olist = self.query_one("#threadpick-list", OptionList)
-        for i, s in enumerate(self.thread_sessions):
+        for i, s in enumerate(self.picker_sessions):
             act = session_activity(s, self._last_seen_cache)
             if act in (ThreadActivity.THINKING, ThreadActivity.AWAITING_INPUT):
                 prompt = _render_session_option(s, act, self._throbber_frame)
@@ -1546,14 +1546,14 @@ class ThreadPickerScreen(_VimOptionListMixin, ModalScreen[ClaudeSession | None])
     @work(thread=True)
     def _generate_titles(self):
         from thread_namer import get_session_title, title_sessions
-        untitled = [s for s in self.thread_sessions if not get_session_title(s)]
+        untitled = [s for s in self.picker_sessions if not get_session_title(s)]
         if untitled:
             title_sessions(untitled)
             self.app.call_from_thread(self._rebuild_options)
 
     def _build_options(self) -> list[Option]:
         options = []
-        for i, s in enumerate(self.thread_sessions):
+        for i, s in enumerate(self.picker_sessions):
             act = session_activity(s, self._last_seen_cache)
             prompt = _render_session_option(s, act, self._throbber_frame)
             options.append(Option(prompt, id=str(i)))
@@ -1574,10 +1574,10 @@ class ThreadPickerScreen(_VimOptionListMixin, ModalScreen[ClaudeSession | None])
     def action_confirm(self):
         option_list = self.query_one("#threadpick-list", OptionList)
         idx = option_list.highlighted
-        if idx is not None and idx < len(self.thread_sessions):
-            self.dismiss(self.thread_sessions[idx])
+        if idx is not None and idx < len(self.picker_sessions):
+            self.dismiss(self.picker_sessions[idx])
             return
-        self.app.notify("No thread selected", severity="error", timeout=2)
+        self.app.notify("No session selected", severity="error", timeout=2)
 
     def action_cancel(self):
         self.dismiss(None)

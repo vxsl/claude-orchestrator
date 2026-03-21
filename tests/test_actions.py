@@ -10,7 +10,7 @@ from actions import (
     find_sessions_for_ws, launch_orch_claude,
     has_tmux, do_resume, switch_to_tmux_window,
 )
-from screens import ThreadPickerScreen
+from screens import SessionPickerScreen
 
 
 class TestWsDirectories:
@@ -124,7 +124,7 @@ class TestDoResume:
                   sessions_for_ws_fn=lambda w: sessions)
         app.push_screen.assert_called_once()
         screen_arg = app.push_screen.call_args[0][0]
-        assert isinstance(screen_arg, ThreadPickerScreen)
+        assert isinstance(screen_arg, SessionPickerScreen)
 
     @patch("actions.has_tmux", return_value=False)
     def test_no_tmux_notifies(self, mock_tmux):
