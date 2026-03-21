@@ -1152,7 +1152,10 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
 
         # Apply search filter if active, otherwise show all
         if self._search_text:
-            self._apply_search_filter()
+            if self._content_ready:
+                self._run_content_search_sync()
+            else:
+                self._apply_title_filter()
             return
 
         self._detail_sessions = list(self._all_sessions)
