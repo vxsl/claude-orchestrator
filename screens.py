@@ -38,7 +38,7 @@ from models import (
 from sessions import ClaudeSession
 from threads import Thread, ThreadActivity, session_activity, load_last_seen, mark_thread_seen
 from rendering import (
-    C_BLUE, C_CYAN, C_DIM, C_GREEN, C_ORANGE, C_PURPLE, C_RED, C_YELLOW,
+    C_BLUE, C_CYAN, C_DIM, C_GREEN, C_LIGHT, C_ORANGE, C_PURPLE, C_RED, C_YELLOW,
     BG_BASE, BG_RAISED, BG_SURFACE,
     STATUS_THEME, CATEGORY_THEME,
     LINK_TYPE_ICONS, LINK_ORDER, LINK_KINDS,
@@ -877,11 +877,14 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         dock: bottom;
         display: none;
         margin: 0 1;
+        height: 1;
         background: {BG_RAISED};
-        border: round {C_DIM};
+        color: {C_LIGHT};
+        border: none;
+        padding: 0 1;
     }}
     #detail-search:focus {{
-        border: round {C_BLUE};
+        border: none;
     }}
     #detail-help {{
         height: 1;
