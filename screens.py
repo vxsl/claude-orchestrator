@@ -905,14 +905,17 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
     def _tick_throbber(self):
         self._throbber_frame += 1
         # Only update options that are actually animating (cached from last build)
+        # Recompute activity fresh so snippet styling stays in sync with state
         olist = self.query_one("#detail-sessions", OptionList)
-        for i, act in self._animating_sessions:
+        for i, _cached_act in self._animating_sessions:
             if i < olist.option_count:
+                act = session_activity(self._detail_sessions[i], self._last_seen_cache)
                 prompt = _render_session_option(self._detail_sessions[i], act, self._throbber_frame)
                 olist.replace_option_prompt_at_index(i, prompt)
         arch_olist = self.query_one("#detail-archived", OptionList)
-        for i, act in self._animating_archived:
+        for i, _cached_act in self._animating_archived:
             if i < arch_olist.option_count:
+                act = session_activity(self._archived_sessions[i], self._last_seen_cache)
                 prompt = _render_session_option(self._archived_sessions[i], act, self._throbber_frame)
                 arch_olist.replace_option_prompt_at_index(i, prompt)
 
