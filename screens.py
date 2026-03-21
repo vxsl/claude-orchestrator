@@ -802,6 +802,10 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
     }}
     .detail-list-pane {{
         width: 1fr;
+        border: solid {C_DIM};
+    }}
+    .detail-list-pane.pane-focused {{
+        border: solid {C_BLUE};
     }}
     .detail-list-label {{
         padding: 0 3;
@@ -830,14 +834,20 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
     }}
     #detail-scroll {{
         width: 3fr;
-        border-top: blank;
+        border: solid {C_DIM};
+    }}
+    #detail-scroll.pane-focused {{
+        border: solid {C_BLUE};
     }}
     #detail-body {{
         padding: 1 3;
     }}
     #detail-feed-pane {{
         width: 2fr; min-width: 28;
-        border-left: blank;
+        border: solid {C_DIM};
+    }}
+    #detail-feed-pane.pane-focused {{
+        border: solid {C_BLUE};
     }}
     .detail-feed-label {{
         padding: 0 3;
@@ -914,6 +924,7 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         self._load_detail_sessions()
         self._load_feed()
         self.query_one("#detail-sessions", OptionList).focus()
+        self._update_pane_labels()
         self._throbber_timer = self.set_interval(0.3, self._tick_throbber)
         self.set_interval(3, self._refresh_session_liveness)
         self.set_interval(10, self._poll_feed)
@@ -942,6 +953,14 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         olist.focus()
         self._update_pane_labels()
 
+    # Map pane names to the container widget that should get the focus border
+    _PANE_BORDER_CONTAINERS = {
+        "sessions": "#detail-sessions-pane",
+        "archived": "#detail-archived-pane",
+        "body": "#detail-scroll",
+        "feed": "#detail-feed-pane",
+    }
+
     def _update_pane_labels(self):
         sess_label = self.query_one("#detail-sessions-label", Static)
         arch_label = self.query_one("#detail-archived-label", Static)
@@ -966,6 +985,17 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
             feed_label.update(f"[{C_DIM}]Feed[/{C_DIM}] [{C_GREEN}]({n_feed})[/{C_GREEN}]")
         else:
             feed_label.update(f"[{C_DIM}]Feed[/{C_DIM}]")
+
+        # Toggle focus border on pane containers
+        for pane_name, selector in self._PANE_BORDER_CONTAINERS.items():
+            try:
+                container = self.query_one(selector)
+                if pane_name == self._active_pane:
+                    container.add_class("pane-focused")
+                else:
+                    container.remove_class("pane-focused")
+            except Exception:
+                pass
 
     def _refresh_session_liveness(self):
         from actions import refresh_liveness
