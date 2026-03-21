@@ -62,7 +62,7 @@ from actions import (
 )
 from screens import (
     SessionsChanged,
-    HelpScreen, QuickNoteScreen, NotesScreen, TodoScreen, LinksScreen,
+    HelpScreen, QuickNoteScreen, TodoScreen, LinksScreen,
     AddScreen, DetailScreen, BrainDumpScreen, BrainPreviewScreen,
     AddLinkScreen, LinkSessionScreen, ThreadPickerScreen, ConfirmScreen,
 )

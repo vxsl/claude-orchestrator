@@ -214,17 +214,6 @@ class AppState:
         self.store.update(ws)
         return ws
 
-    def add_note(self, ws_id: str, text: str) -> bool:
-        """Add a timestamped note. Returns True if successful."""
-        ws = self.get_ws(ws_id)
-        if not ws or not text.strip():
-            return False
-        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
-        entry = f"[{timestamp}] {text.strip()}"
-        ws.notes = (ws.notes + "\n" + entry) if ws.notes else entry
-        self.store.update(ws)
-        return True
-
     # ── Todo operations ───────────────────────────────────────────
 
     def add_todo(self, ws_id: str, text: str, context: str = "") -> TodoItem | None:

@@ -182,39 +182,6 @@ class QuickNoteScreen(ModalScreen[str | None]):
         self.dismiss(None)
 
 
-# ─── Notes Screen ───────────────────────────────────────────────────
-
-class NotesScreen(ModalScreen[None]):
-    BINDINGS = [Binding("escape", "save_and_close", "Save & back", priority=True)]
-
-    DEFAULT_CSS = f"""
-    NotesScreen {{ align: center middle; }}
-    #notes-container {{
-        width: 80; height: auto; max-height: 80%;
-        padding: 1 2; background: {BG_BASE}; border: round $primary 30%;
-    }}
-    #notes-title {{ text-style: bold; color: {C_PURPLE}; padding-bottom: 1; }}
-    #notes-editor {{ height: 20; margin: 0 0 1 0; }}
-    #notes-hint {{ text-align: center; color: {C_DIM}; }}
-    """
-
-    def __init__(self, ws: Workstream, store: Store):
-        super().__init__()
-        self.ws = ws
-        self.store = store
-
-    def compose(self) -> ComposeResult:
-        with Vertical(id="notes-container"):
-            yield Label(f"Notes: {self.ws.name}", id="notes-title")
-            yield TextArea(self.ws.notes or "", id="notes-editor")
-            yield Static(f"[{C_DIM}]Esc[/{C_DIM}] save & back", id="notes-hint")
-
-    def action_save_and_close(self):
-        editor = self.query_one("#notes-editor", TextArea)
-        self.ws.notes = editor.text
-        self.store.update(self.ws)
-        self.dismiss()
-
 
 # ─── Vim OptionList Navigation Mixin ─────────────────────────────────
 
@@ -278,7 +245,6 @@ class TodoScreen(_VimOptionListMixin, ModalScreen[None]):
         Binding("J", "move_down", "Move \u2193", show=False),
         Binding("h", "focus_active", show=False, priority=True),
         Binding("l", "focus_archived", show=False, priority=True),
-        Binding("N", "edit_notes", "Old notes"),
     ] + _VimOptionListMixin.VIM_BINDINGS
 
     DEFAULT_CSS = f"""
@@ -484,7 +450,7 @@ class TodoScreen(_VimOptionListMixin, ModalScreen[None]):
         pairs = [
             ("a", "add"), ("Enter", "done"), ("e", "edit"), ("c", "spawn"),
             ("x", "archive"), ("d", "delete"), ("Ctrl+E", "context"),
-            ("J/K", "reorder"), ("h/l", "panes"), ("N", "notes"), ("q", "back"),
+            ("J/K", "reorder"), ("h/l", "panes"), ("q", "back"),
         ]
         return "  ".join(f"[{C_YELLOW}]{k}[/{C_YELLOW}] {v}" for k, v in pairs)
 
@@ -582,13 +548,6 @@ class TodoScreen(_VimOptionListMixin, ModalScreen[None]):
         self.query_one("#todo-archived", OptionList).focus()
         self._update_pane_labels()
         self._update_context_preview()
-
-    def action_edit_notes(self):
-        """Escape hatch to the old free-text notes editor."""
-        def on_close(_):
-            self.ws = self.store.get(self.ws.id) or self.ws
-        self.app.push_screen(NotesScreen(self.ws, self.store), callback=on_close)
-
 
 class _TodoEditScreen(ModalScreen[str | None]):
     """Single-line input pre-filled with existing text."""
@@ -1165,11 +1124,6 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
                     lines.append(f"  {icon} {t.text}")
             if len(active_todos) > 6:
                 lines.append(f"  [{C_DIM}]... +{len(active_todos) - 6} more[/{C_DIM}]")
-            lines.append("")
-        if self.ws.notes:
-            lines.append(f"[bold {C_BLUE}]Notes[/bold {C_BLUE}]")
-            for line in self.ws.notes.split("\n"):
-                lines.append(f"  {line}")
             lines.append("")
         lines.append(
             f"[{C_DIM}]Created {_relative_time(self.ws.created_at)} \u00b7 "

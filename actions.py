@@ -150,13 +150,6 @@ def launch_orch_claude(
     if cwd is None:
         cwd = ws_working_dir(ws)
 
-    # Save the prompt as a note so it's never lost
-    if prompt and prompt.strip() and store:
-        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
-        entry = f"[{timestamp}] spawn: {prompt.strip()}"
-        ws.notes = (ws.notes + "\n" + entry) if ws.notes else entry
-        store.update(ws)
-
     orch_session = os.environ.get("TMUX_SESSION", "orch")
     window_name = f"\U0001f916{ws.name[:18]}"
 

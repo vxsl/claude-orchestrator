@@ -260,35 +260,6 @@ class TestStatusCycling:
 
 # ─── Notes ───────────────────────────────────────────────────────────
 
-class TestNotes:
-    def test_add_note(self, populated_state):
-        ws = populated_state.store.active[0]
-        assert populated_state.add_note(ws.id, "test note")
-        reloaded = populated_state.store.get(ws.id)
-        assert "test note" in reloaded.notes
-
-    def test_add_note_with_timestamp(self, populated_state):
-        ws = populated_state.store.active[0]
-        populated_state.add_note(ws.id, "hello")
-        reloaded = populated_state.store.get(ws.id)
-        assert "[" in reloaded.notes  # timestamp bracket
-
-    def test_add_note_empty_fails(self, populated_state):
-        ws = populated_state.store.active[0]
-        assert not populated_state.add_note(ws.id, "")
-        assert not populated_state.add_note(ws.id, "   ")
-
-    def test_add_note_nonexistent_fails(self, state):
-        assert not state.add_note("nonexistent", "note")
-
-    def test_add_multiple_notes(self, populated_state):
-        ws = populated_state.store.active[0]
-        populated_state.add_note(ws.id, "first")
-        populated_state.add_note(ws.id, "second")
-        reloaded = populated_state.store.get(ws.id)
-        assert "first" in reloaded.notes
-        assert "second" in reloaded.notes
-
 
 # ─── Todos ──────────────────────────────────────────────────────────
 
