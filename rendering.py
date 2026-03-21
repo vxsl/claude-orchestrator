@@ -146,11 +146,7 @@ def _repo_label(repo_path: str) -> str:
 
 
 def _worktree_label(ws: Workstream) -> str:
-    """Best directory label for a workstream: worktree link > repo_path > empty.
-
-    Prefers worktree links because they're more specific (e.g. 'ul.UB-6668-...'
-    vs just 'ul' from repo_path).
-    """
+    """Plain-text worktree/repo label for a workstream."""
     import os
     for link in ws.links:
         if link.kind == "worktree":
@@ -164,6 +160,59 @@ def _worktree_label(ws: Workstream) -> str:
             if os.path.isdir(expanded):
                 return Path(expanded).name
     return ""
+
+
+# ─── Worktree coloring (matches dev-workflow-tools p10k prompt) ────
+
+# Same 10-color palette as p10k-worktree.zsh (ANSI 256 codes → hex)
+_WORKTREE_COLORS = [
+    "#ffd700",  # 220 Yellow/Orange
+    "#5fd7ff",  # 81  Bright Cyan
+    "#af87ff",  # 141 Purple
+    "#87d787",  # 114 Green
+    "#d75f5f",  # 167 Red/Pink
+    "#ffaf00",  # 214 Orange
+    "#87afaf",  # 109 Blue
+    "#d7875f",  # 173 Brown/Orange
+    "#87d7ff",  # 117 Light Blue
+    "#ff5faf",  # 205 Pink
+]
+
+
+def _worktree_color(name: str) -> str:
+    """Hash-based color for a worktree name, matching the zsh prompt."""
+    import binascii
+    h = binascii.crc32(name.encode()) & 0xFFFFFFFF
+    return _WORKTREE_COLORS[h % len(_WORKTREE_COLORS)]
+
+
+def _parse_worktree_display(dirname: str) -> tuple[str, str]:
+    """Parse 'repo.branch-name' → (repo, display).
+
+    Display is the ticket ID (e.g. 'UB-6709') if found, else the full dirname.
+    """
+    import re
+    if "." in dirname:
+        repo, branch = dirname.split(".", 1)
+        m = re.match(r"^([A-Z]+-\d+)", branch)
+        if m:
+            return repo, m.group(1)
+        return repo, branch
+    return dirname, dirname
+
+
+def _worktree_styled(ws: Workstream) -> tuple[str, str]:
+    """Return (display_text, hex_color) for the worktree column.
+
+    Uses the p10k-worktree color scheme: hash-based color from the worktree name.
+    Returns ("", "") if no worktree info available.
+    """
+    label = _worktree_label(ws)
+    if not label:
+        return "", ""
+    _repo, display = _parse_worktree_display(label)
+    color = _worktree_color(label)
+    return display, color
 
 
 def _short_model(model: str) -> str:

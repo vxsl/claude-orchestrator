@@ -49,7 +49,7 @@ from rendering import (
     ViewMode,
     _token_color, _token_color_markup, _colored_tokens,
     _status_markup, _category_markup, _link_icon,
-    _ws_indicators, _short_project, _short_model, _worktree_label,
+    _ws_indicators, _short_project, _short_model, _worktree_styled,
     THROBBER_FRAMES, _ACTIVITY_PRIORITY,
     _activity_icon, _activity_badge, _best_activity,
     _render_session_option, _session_title,
@@ -731,7 +731,8 @@ class OrchestratorApp(App):
                 name_str += "  " + indicators
             name_cell = Text.from_markup(name_str)
 
-            repo_cell = Text(_worktree_label(ws), style=C_DIM)
+            wt_text, wt_color = _worktree_styled(ws)
+            repo_cell = Text(wt_text, style=wt_color or C_DIM)
 
             sess_count = len(thread_sessions) if thread_sessions else 0
             sess_cell = Text(str(sess_count) if sess_count else "", style=C_DIM)
@@ -879,7 +880,8 @@ class OrchestratorApp(App):
         for ws in self.state.store.archived:
             status_cell = Text(STATUS_ICONS[ws.status], style=STATUS_THEME[ws.status])
             name_cell = Text(ws.name)
-            repo_cell = Text(_worktree_label(ws), style=C_DIM)
+            wt_text, wt_color = _worktree_styled(ws)
+            repo_cell = Text(wt_text, style=wt_color or C_DIM)
             sess_cell = Text("", style=C_DIM)
             cat_cell = Text(ws.category.value, style=CATEGORY_THEME[ws.category])
             updated_cell = Text(_relative_time(ws.updated_at), style=C_DIM)

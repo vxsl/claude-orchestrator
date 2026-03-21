@@ -10,6 +10,7 @@ from rendering import (
     _status_markup, _category_markup,
     _ws_indicators, _short_project, _short_model,
     _activity_icon, _activity_badge, _best_activity,
+    _parse_worktree_display, _worktree_color, _WORKTREE_COLORS,
     C_DIM, C_RED, C_ORANGE, C_LIGHT,
 )
 
@@ -64,6 +65,33 @@ class TestActivityBadge:
 class TestBestActivity:
     def test_empty_is_idle(self):
         assert _best_activity([]) == ThreadActivity.IDLE
+
+
+class TestWorktreeDisplay:
+    def test_parse_ticket_branch(self):
+        repo, display = _parse_worktree_display("ul.UB-6668-implement-new-metric")
+        assert repo == "ul"
+        assert display == "UB-6668"
+
+    def test_parse_plain_branch(self):
+        repo, display = _parse_worktree_display("ul.feature-branch")
+        assert repo == "ul"
+        assert display == "feature-branch"
+
+    def test_parse_no_dot(self):
+        repo, display = _parse_worktree_display("claude-orchestrator")
+        assert repo == "claude-orchestrator"
+        assert display == "claude-orchestrator"
+
+    def test_color_consistent(self):
+        c1 = _worktree_color("ul.UB-6668-something")
+        c2 = _worktree_color("ul.UB-6668-something")
+        assert c1 == c2
+        assert c1 in _WORKTREE_COLORS
+
+    def test_color_varies(self):
+        colors = {_worktree_color(f"repo-{i}") for i in range(20)}
+        assert len(colors) > 1
 
 
 class TestViewMode:
