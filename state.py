@@ -10,6 +10,79 @@ from __future__ import annotations
 import os
 from datetime import datetime
 from pathlib import Path
+from typing import Sequence
+
+
+# ── Fuzzy matching ──────────────────────────────────────────────────
+
+def fuzzy_match(query: str, text: str) -> int | None:
+    """Score *query* as a fuzzy subsequence of *text*.
+
+    Returns an integer score (higher is better) or ``None`` when *query*
+    is not a subsequence of *text*.  Scoring rewards:
+    * consecutive matching characters (streak bonus)
+    * matches at word boundaries (after ``-_./`` or camelCase transition)
+    * match starting at position 0 of *text*
+
+    Both *query* and *text* are compared case-insensitively, but an
+    exact-case hit gets a small bonus per character.
+    """
+    if not query:
+        return 0
+    if not text:
+        return None
+
+    q = query.lower()
+    t = text.lower()
+    qi = 0  # index into q
+    score = 0
+    streak = 0
+    prev_match_idx = -2  # impossible start so first match isn't "consecutive"
+
+    for ti, ch in enumerate(t):
+        if qi < len(q) and ch == q[qi]:
+            # Base point for a match
+            score += 1
+
+            # Consecutive bonus (grows with streak length)
+            if ti == prev_match_idx + 1:
+                streak += 1
+                score += streak * 2
+            else:
+                streak = 0
+
+            # Word-boundary bonus
+            if ti == 0:
+                score += 5
+            elif t[ti - 1] in " -_./\\":
+                score += 4
+            elif t[ti - 1].islower() and ch != t[ti]:
+                # camelCase boundary (original char is upper)
+                score += 3
+
+            # Exact-case bonus
+            if text[ti] == query[qi]:
+                score += 1
+
+            prev_match_idx = ti
+            qi += 1
+
+    # All query chars consumed?
+    if qi < len(q):
+        return None
+
+    return score
+
+
+def fuzzy_filter(query: str, items: Sequence[str]) -> list[tuple[int, int]]:
+    """Return ``(index, score)`` pairs for items matching *query*, best first."""
+    results = []
+    for i, text in enumerate(items):
+        s = fuzzy_match(query, text)
+        if s is not None:
+            results.append((i, s))
+    results.sort(key=lambda t: t[1], reverse=True)
+    return results
 
 from models import (
     Category, Link, Origin, Status, Store, TodoItem, Workstream,
@@ -85,8 +158,18 @@ class AppState:
             streams = list(self.store.active)
 
         if self.search_text:
-            q = self.search_text.lower()
-            streams = [w for w in streams if q in w.name.lower() or q in w.description.lower()]
+            scored = []
+            for w in streams:
+                # Best fuzzy score across name and description
+                s1 = fuzzy_match(self.search_text, w.name)
+                s2 = fuzzy_match(self.search_text, w.description)
+                best = max(s for s in (s1, s2) if s is not None) if any(s is not None for s in (s1, s2)) else None
+                if best is not None:
+                    scored.append((w, best))
+            scored.sort(key=lambda t: t[1], reverse=True)
+            streams = [w for w, _ in scored]
+            # When searching, fuzzy rank takes priority over sort
+            return streams
 
         return self.store.sorted(streams, self.sort_mode)
 
@@ -97,9 +180,15 @@ class AppState:
 
         # Apply search filter to discovered
         if self.search_text:
-            q = self.search_text.lower()
-            discovered = [w for w in discovered
-                          if q in w.name.lower() or q in w.description.lower()]
+            scored = []
+            for w in discovered:
+                s1 = fuzzy_match(self.search_text, w.name)
+                s2 = fuzzy_match(self.search_text, w.description)
+                best = max(s for s in (s1, s2) if s is not None) if any(s is not None for s in (s1, s2)) else None
+                if best is not None:
+                    scored.append((w, best))
+            scored.sort(key=lambda t: t[1], reverse=True)
+            discovered = [w for w, _ in scored]
 
         # Apply category filter to discovered
         if self.filter_mode == "work":

@@ -13,7 +13,7 @@ from unittest.mock import patch
 from models import Category, Link, Status, Store, TodoItem, Workstream, Origin
 from sessions import ClaudeSession
 from threads import Thread, ThreadActivity
-from state import AppState
+from state import AppState, fuzzy_match, fuzzy_filter
 from rendering import ViewMode
 
 
@@ -917,3 +917,73 @@ class TestNotificationsForWs:
              patch("notifications.DISMISSED_FILE", tmp_path / "dismissed.json"):
             result = state.notifications_for_ws(ws)
         assert len(result) == 1
+
+
+# ─── Fuzzy Match ────────────────────────────────────────────────────
+
+
+class TestFuzzyMatch:
+    def test_empty_query_matches_everything(self):
+        assert fuzzy_match("", "anything") == 0
+
+    def test_empty_text_returns_none(self):
+        assert fuzzy_match("abc", "") is None
+
+    def test_no_match(self):
+        assert fuzzy_match("xyz", "hello world") is None
+
+    def test_exact_match(self):
+        score = fuzzy_match("hello", "hello")
+        assert score is not None and score > 0
+
+    def test_subsequence_match(self):
+        score = fuzzy_match("hlo", "hello")
+        assert score is not None and score > 0
+
+    def test_case_insensitive(self):
+        score = fuzzy_match("HEL", "hello")
+        assert score is not None and score > 0
+
+    def test_exact_case_scores_higher(self):
+        lower = fuzzy_match("hello", "hello")
+        upper = fuzzy_match("HELLO", "hello")
+        assert lower > upper  # exact case gets bonus
+
+    def test_consecutive_chars_score_higher(self):
+        consecutive = fuzzy_match("abc", "abcdef")
+        scattered = fuzzy_match("abc", "axbxcx")
+        assert consecutive > scattered
+
+    def test_word_boundary_bonus(self):
+        boundary = fuzzy_match("co", "claude-orchestrator")
+        mid_word = fuzzy_match("la", "claude-orchestrator")
+        assert boundary > mid_word  # 'o' at word boundary after '-'
+
+    def test_start_of_string_bonus(self):
+        at_start = fuzzy_match("c", "claude")
+        in_middle = fuzzy_match("a", "claude")
+        assert at_start > in_middle
+
+    def test_partial_query_not_consumed(self):
+        assert fuzzy_match("abcz", "abc") is None
+
+
+class TestFuzzyFilter:
+    def test_returns_sorted_by_score(self):
+        items = ["axbxcx", "abc", "the abc thing"]
+        results = fuzzy_filter("abc", items)
+        # "abc" should score highest (consecutive + start)
+        assert len(results) >= 2
+        indices = [i for i, _ in results]
+        assert indices[0] == 1  # "abc" is best match
+
+    def test_filters_non_matches(self):
+        items = ["hello", "world", "xyz"]
+        results = fuzzy_filter("hel", items)
+        assert len(results) == 1
+        assert results[0][0] == 0
+
+    def test_empty_query_matches_all(self):
+        items = ["a", "b", "c"]
+        results = fuzzy_filter("", items)
+        assert len(results) == 3

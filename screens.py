@@ -55,6 +55,7 @@ from actions import (
     launch_orch_claude, ws_directories, resume_session_now, open_link,
 )
 from notifications import Notification, dismiss_notification, dismiss_all_for_dirs
+from state import fuzzy_match
 
 
 # ─── Messages ────────────────────────────────────────────────────────
@@ -781,6 +782,7 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         Binding("l", "focus_archived", show=False, priority=True),
         Binding("d", "dismiss_notification", "Dismiss", show=False),
         Binding("D", "dismiss_all_notifications", "Dismiss all", show=False),
+        Binding("/", "search", "Search", show=False),
     ] + _VimOptionListMixin.VIM_BINDINGS
 
     DEFAULT_CSS = f"""
@@ -870,6 +872,16 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         padding: 1 3;
         color: {C_DIM};
     }}
+    #detail-search {{
+        dock: bottom;
+        height: auto;
+        display: none;
+        margin: 0 1;
+        background: {BG_BASE};
+    }}
+    #detail-search:focus {{
+        border: tall {C_BLUE};
+    }}
     #detail-help {{
         height: 1;
         padding: 0 2;
@@ -893,6 +905,10 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         self._active_pane: str = "sessions"
         self._animating_sessions: list[tuple[int, ThreadActivity]] = []
         self._animating_archived: list[tuple[int, ThreadActivity]] = []
+        self._search_text: str = ""
+        # Full unfiltered lists (set once sessions are loaded)
+        self._all_sessions: list[ClaudeSession] = []
+        self._all_archived: list[ClaudeSession] = []
 
     def compose(self) -> ComposeResult:
         with Vertical(id="detail-container"):
@@ -920,6 +936,7 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
                     yield OptionList(id="detail-feed")
                     yield Static(f"[{C_DIM}]No notifications[/{C_DIM}]", id="detail-no-feed")
 
+            yield Input(placeholder="fuzzy search sessions…", id="detail-search")
             yield Static(self._render_help(), id="detail-help")
 
     def on_mount(self):
@@ -1097,14 +1114,22 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
                     del self.ws.archived_sessions[sid]
                 self.store.update(self.ws)
             hidden = set(self.ws.archived_sessions)
-            self._detail_sessions = [s for s in all_sessions if s.session_id not in hidden]
-            self._archived_sessions = [s for s in all_sessions if s.session_id in hidden]
+            self._all_sessions = [s for s in all_sessions if s.session_id not in hidden]
+            self._all_archived = [s for s in all_sessions if s.session_id in hidden]
             log.debug("load_detail: active=%d archived=%d",
-                      len(self._detail_sessions), len(self._archived_sessions))
+                      len(self._all_sessions), len(self._all_archived))
         else:
             from actions import find_sessions_for_ws
-            self._detail_sessions = find_sessions_for_ws(self.ws, getattr(app, 'sessions', []))
-            self._archived_sessions = []
+            self._all_sessions = find_sessions_for_ws(self.ws, getattr(app, 'sessions', []))
+            self._all_archived = []
+
+        # Apply search filter if active, otherwise show all
+        if self._search_text:
+            self._apply_search_filter()
+            return
+
+        self._detail_sessions = list(self._all_sessions)
+        self._archived_sessions = list(self._all_archived)
 
         olist = self.query_one("#detail-sessions", OptionList)
         no_sess = self.query_one("#detail-no-sessions", Static)
@@ -1420,10 +1445,108 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
             ("n", "+todo"), ("e", "todos"),
             ("o", "open"), ("x", "archive ws"),
             ("a", "archive/restore"),
-            ("^j/^k", "panels"), ("d/D", "dismiss"),
+            ("^j/^k", "panels"), ("/", "search"),
             ("q", "back"),
         ]
         return "  ".join(f"[{C_YELLOW}]{k}[/{C_YELLOW}] {v}" for k, v in pairs)
+
+    # ── Fuzzy search ──
+
+    def action_search(self):
+        search = self.query_one("#detail-search", Input)
+        search.display = True
+        search.value = self._search_text
+        search.focus()
+
+    def _cancel_search(self):
+        search = self.query_one("#detail-search", Input)
+        search.value = ""
+        search.display = False
+        self._search_text = ""
+        self._apply_search_filter()
+        self._focused_olist().focus()
+
+    @on(Input.Changed, "#detail-search")
+    def _on_search_changed(self, event: Input.Changed):
+        self._search_text = event.value.strip()
+        self._apply_search_filter()
+
+    @on(Input.Submitted, "#detail-search")
+    def _on_search_submitted(self, event: Input.Submitted):
+        # Keep filter active, just move focus back to the list
+        search = self.query_one("#detail-search", Input)
+        search.display = False
+        self._focused_olist().focus()
+
+    def on_key(self, event) -> None:
+        # Intercept Escape while search input is focused
+        search = self.query_one("#detail-search", Input)
+        if search.display and search.has_focus and event.key == "escape":
+            event.stop()
+            event.prevent_default()
+            self._cancel_search()
+            return
+
+    def _session_search_text(self, s: ClaudeSession) -> str:
+        """Build searchable text for a session."""
+        parts = [s.display_name or ""]
+        if s.last_message_text:
+            parts.append(s.last_message_text)
+        if s.model:
+            parts.append(s.model)
+        return " ".join(parts)
+
+    def _apply_search_filter(self):
+        """Filter session lists by current search text and rebuild the UI."""
+        if self._search_text:
+            # Filter active sessions
+            scored = []
+            for s in self._all_sessions:
+                sc = fuzzy_match(self._search_text, self._session_search_text(s))
+                if sc is not None:
+                    scored.append((s, sc))
+            scored.sort(key=lambda t: t[1], reverse=True)
+            self._detail_sessions = [s for s, _ in scored]
+
+            # Filter archived sessions
+            scored_arch = []
+            for s in self._all_archived:
+                sc = fuzzy_match(self._search_text, self._session_search_text(s))
+                if sc is not None:
+                    scored_arch.append((s, sc))
+            scored_arch.sort(key=lambda t: t[1], reverse=True)
+            self._archived_sessions = [s for s, _ in scored_arch]
+        else:
+            self._detail_sessions = list(self._all_sessions)
+            self._archived_sessions = list(self._all_archived)
+
+        # Rebuild option lists
+        olist = self.query_one("#detail-sessions", OptionList)
+        no_sess = self.query_one("#detail-no-sessions", Static)
+        if self._detail_sessions:
+            olist.display = True
+            no_sess.display = False
+            self._build_session_list()
+            if olist.option_count > 0:
+                olist.highlighted = 0
+        else:
+            olist.display = False
+            no_sess.display = True
+
+        arch_olist = self.query_one("#detail-archived", OptionList)
+        no_arch = self.query_one("#detail-no-archived", Static)
+        if self._archived_sessions:
+            arch_olist.display = True
+            no_arch.display = False
+            self._build_archived_list()
+            if arch_olist.option_count > 0:
+                arch_olist.highlighted = 0
+        else:
+            arch_olist.display = False
+            no_arch.display = True
+
+        self._update_pane_labels()
+        self._update_animating_cache()
 
     def _refresh(self):
         self.query_one("#detail-title", Static).update(self._render_title())
