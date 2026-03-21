@@ -21,15 +21,34 @@ if TYPE_CHECKING:
 
 # ─── Tmux Utilities ─────────────────────────────────────────────────
 
+WORKER_SESSION = "orch-workers"
+
+
 def has_tmux() -> bool:
     return bool(os.environ.get("TMUX"))
 
 
+def _ensure_worker_session() -> None:
+    """Ensure a persistent tmux session for Claude workers (survives orch restarts)."""
+    result = subprocess.run(
+        ["tmux", "has-session", "-t", WORKER_SESSION],
+        capture_output=True, timeout=5,
+    )
+    if result.returncode != 0:
+        subprocess.run(
+            ["tmux", "new-session", "-d", "-s", WORKER_SESSION],
+            capture_output=True, timeout=5,
+        )
+
+
 def find_tmux_window_for_session(session_id: str) -> str | None:
-    """Find a tmux window already running a Claude session (via @orch_session_id tag)."""
+    """Find a tmux window already running a Claude session (via @orch_session_id tag).
+
+    Searches all tmux sessions so we find windows that survived an orch restart.
+    """
     try:
         result = subprocess.run(
-            ["tmux", "list-windows", "-F",
+            ["tmux", "list-windows", "-a", "-F",
              "#{@orch_session_id}\t#{window_id}"],
             capture_output=True, text=True, timeout=5,
         )
@@ -47,13 +66,35 @@ def find_tmux_window_for_session(session_id: str) -> str | None:
 
 
 def switch_to_tmux_window(window_id: str) -> bool:
-    """Switch to an existing tmux window by ID."""
+    """Switch to an existing tmux window by ID.
+
+    If the window is in a different tmux session (e.g. orch-workers after an
+    orch restart), links it into the current session first.
+    """
     try:
         result = subprocess.run(
             ["tmux", "select-window", "-t", window_id],
             capture_output=True, timeout=5,
         )
-        return result.returncode == 0
+        if result.returncode == 0:
+            return True
+
+        # Window is in a different session — link it into ours first
+        cur = subprocess.run(
+            ["tmux", "display-message", "-p", "#{session_name}"],
+            capture_output=True, text=True, timeout=5,
+        ).stdout.strip()
+        if cur:
+            subprocess.run(
+                ["tmux", "link-window", "-s", window_id, "-t", f"{cur}:"],
+                capture_output=True, timeout=5,
+            )
+            result = subprocess.run(
+                ["tmux", "select-window", "-t", window_id],
+                capture_output=True, timeout=5,
+            )
+            return result.returncode == 0
+        return False
     except Exception:
         return False
 
@@ -104,12 +145,10 @@ def launch_orch_claude(
         ws.notes = (ws.notes + "\n" + entry) if ws.notes else entry
         store.update(ws)
 
-    tmux_session = os.environ.get("TMUX_SESSION", "orch")
+    orch_session = os.environ.get("TMUX_SESSION", "orch")
+    window_name = f"\U0001f916{ws.name[:18]}"
 
-    cmd = [
-        "tmux", "new-window", "-t", tmux_session,
-        "-n", f"\U0001f916{ws.name[:18]}",
-        "-c", cwd,
+    wrapper_args = [
         wrapper,
         "--ws-id", ws.id,
         "--ws-name", ws.name,
@@ -120,22 +159,55 @@ def launch_orch_claude(
     ]
 
     if ws.notes:
-        cmd += ["--ws-notes", ws.notes[:500]]
+        wrapper_args += ["--ws-notes", ws.notes[:500]]
 
     if session_id:
-        cmd += ["--resume", session_id]
+        wrapper_args += ["--resume", session_id]
     elif prompt:
-        cmd += ["--prompt", prompt]
+        wrapper_args += ["--prompt", prompt]
 
     try:
-        proc = subprocess.Popen(cmd, stderr=subprocess.PIPE)
-        try:
-            proc.wait(timeout=2)
-            if proc.returncode != 0:
-                err = proc.stderr.read().decode().strip() if proc.stderr else "unknown error"
-                return False, err
-        except subprocess.TimeoutExpired:
-            pass  # Still running = success (tmux window is up)
+        # Create window in a persistent worker session so Claude survives
+        # if the orch session is destroyed (e.g. destroy-unattached).
+        _ensure_worker_session()
+
+        # Check if worker session was just created (has only the default shell).
+        # If so, use that window directly instead of leaving an orphan.
+        wc = subprocess.run(
+            ["tmux", "list-windows", "-t", WORKER_SESSION, "-F", "#{window_id}"],
+            capture_output=True, text=True, timeout=5,
+        )
+        worker_windows = wc.stdout.strip().split("\n") if wc.returncode == 0 else []
+
+        result = subprocess.run(
+            ["tmux", "new-window", "-t", WORKER_SESSION,
+             "-n", window_name, "-c", cwd,
+             "-P", "-F", "#{window_id}"] + wrapper_args,
+            capture_output=True, text=True, timeout=5,
+        )
+        if result.returncode != 0:
+            return False, result.stderr.strip()
+
+        window_id = result.stdout.strip()
+
+        # If the worker session previously had only one default shell window,
+        # kill it now that we have a real window.
+        if len(worker_windows) == 1 and worker_windows[0] != window_id:
+            subprocess.run(
+                ["tmux", "kill-window", "-t", worker_windows[0]],
+                capture_output=True, timeout=5,
+            )
+
+        # Link the window into the orch session so the user sees it
+        subprocess.run(
+            ["tmux", "link-window", "-s", window_id, "-t", f"{orch_session}:"],
+            capture_output=True, timeout=5,
+        )
+        subprocess.run(
+            ["tmux", "select-window", "-t", window_id],
+            capture_output=True, timeout=5,
+        )
+
         return True, ""
     except Exception as e:
         return False, str(e)

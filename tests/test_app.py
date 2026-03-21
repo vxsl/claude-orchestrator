@@ -192,6 +192,37 @@ class TestShortModel:
         assert _short_model("") == "\u2014"
 
 
+def _mock_tmux_run(cmd, **kwargs):
+    """Mock subprocess.run for tmux commands used by launch_orch_claude."""
+    import subprocess
+    args = cmd if isinstance(cmd, list) else [cmd]
+    if args[:2] == ["tmux", "has-session"]:
+        # Worker session doesn't exist yet
+        return subprocess.CompletedProcess(args, returncode=1)
+    if args[:2] == ["tmux", "new-session"]:
+        return subprocess.CompletedProcess(args, returncode=0)
+    if args[:2] == ["tmux", "list-windows"]:
+        return subprocess.CompletedProcess(args, returncode=0, stdout="@99\n", stderr="")
+    if args[:2] == ["tmux", "new-window"]:
+        return subprocess.CompletedProcess(args, returncode=0, stdout="@100\n", stderr="")
+    if args[:2] == ["tmux", "kill-window"]:
+        return subprocess.CompletedProcess(args, returncode=0)
+    if args[:2] == ["tmux", "link-window"]:
+        return subprocess.CompletedProcess(args, returncode=0)
+    if args[:2] == ["tmux", "select-window"]:
+        return subprocess.CompletedProcess(args, returncode=0)
+    return subprocess.CompletedProcess(args, returncode=0, stdout="", stderr="")
+
+
+def _find_new_window_cmd(mock_run):
+    """Extract the tmux new-window call args from a mock."""
+    for call in mock_run.call_args_list:
+        args = call[0][0]
+        if args[:2] == ["tmux", "new-window"]:
+            return args
+    return None
+
+
 class TestLaunchOrchClaude:
     """Test that _launch_orch_claude builds the correct command."""
 
@@ -201,10 +232,10 @@ class TestLaunchOrchClaude:
         ws.add_link("worktree", str(tmp_path), "project")
 
         import unittest.mock as mock
-        with mock.patch("actions.subprocess.Popen") as mock_popen:
+        with mock.patch("actions.subprocess.run", side_effect=_mock_tmux_run) as mock_run:
             _launch_orch_claude(ws, session_id="abc-123", cwd=str(tmp_path))
-            assert mock_popen.called
-            cmd = mock_popen.call_args[0][0]
+            cmd = _find_new_window_cmd(mock_run)
+            assert cmd is not None
             assert any("orch-claude" in str(c) for c in cmd)
             assert "--ws-id" in cmd
             assert "--resume" in cmd
@@ -215,10 +246,10 @@ class TestLaunchOrchClaude:
         ws = Workstream(name="Test", description="", category=Category.PERSONAL, status=Status.QUEUED)
 
         import unittest.mock as mock
-        with mock.patch("actions.subprocess.Popen") as mock_popen:
+        with mock.patch("actions.subprocess.run", side_effect=_mock_tmux_run) as mock_run:
             _launch_orch_claude(ws, prompt="Help me with this")
-            assert mock_popen.called
-            cmd = mock_popen.call_args[0][0]
+            cmd = _find_new_window_cmd(mock_run)
+            assert cmd is not None
             assert "--prompt" in cmd
             assert "Help me with this" in cmd
             assert "--resume" not in cmd
@@ -228,9 +259,9 @@ class TestLaunchOrchClaude:
         ws.notes = "x" * 1000
 
         import unittest.mock as mock
-        with mock.patch("actions.subprocess.Popen") as mock_popen:
+        with mock.patch("actions.subprocess.run", side_effect=_mock_tmux_run) as mock_run:
             _launch_orch_claude(ws)
-            cmd = mock_popen.call_args[0][0]
+            cmd = _find_new_window_cmd(mock_run)
             idx = cmd.index("--ws-notes")
             notes_val = cmd[idx + 1]
             assert len(notes_val) <= 500
@@ -239,10 +270,27 @@ class TestLaunchOrchClaude:
         ws = Workstream(name="Test", status=Status.IN_PROGRESS)
 
         import unittest.mock as mock
-        with mock.patch("actions.subprocess.Popen") as mock_popen:
+        with mock.patch("actions.subprocess.run", side_effect=_mock_tmux_run) as mock_run:
             _launch_orch_claude(ws)
-            cmd = mock_popen.call_args[0][0]
+            cmd = _find_new_window_cmd(mock_run)
             assert "--ws-notes" not in cmd
+
+    def test_creates_window_in_worker_session(self):
+        """Claude windows are created in orch-workers, then linked into orch."""
+        ws = Workstream(name="Test", status=Status.IN_PROGRESS)
+
+        import unittest.mock as mock
+        with mock.patch("actions.subprocess.run", side_effect=_mock_tmux_run) as mock_run:
+            ok, err = _launch_orch_claude(ws)
+            assert ok
+            cmds = [c[0][0] for c in mock_run.call_args_list]
+            # Should create/check worker session
+            assert any(c[:3] == ["tmux", "has-session", "-t"] and "orch-workers" in c for c in cmds)
+            # new-window targets orch-workers
+            nw = _find_new_window_cmd(mock_run)
+            assert "orch-workers" in nw
+            # link-window is called to make it visible in orch
+            assert any(c[:2] == ["tmux", "link-window"] for c in cmds)
 
 
 # ─── App Smoke Tests (async) ────────────────────────────────────────
