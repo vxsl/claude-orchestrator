@@ -873,19 +873,6 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         padding: 1 3;
         color: {C_DIM};
     }}
-    #detail-search {{
-        dock: bottom;
-        display: none;
-        margin: 0 1;
-        height: 1;
-        background: {BG_RAISED};
-        color: {C_LIGHT};
-        border: none;
-        padding: 0 1;
-    }}
-    #detail-search:focus {{
-        border: none;
-    }}
     #detail-help {{
         height: 1;
         padding: 0 2;
@@ -910,6 +897,7 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         self._animating_sessions: list[tuple[int, ThreadActivity]] = []
         self._animating_archived: list[tuple[int, ThreadActivity]] = []
         self._search_text: str = ""
+        self._searching: bool = False
         self._content_cache: dict[str, list] = {}  # session_id -> list[SessionMessage]
         self._content_ready: bool = False
         self._content_results: list[SessionSearchResult] = []
@@ -944,7 +932,6 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
                     yield OptionList(id="detail-feed")
                     yield Static(f"[{C_DIM}]No notifications[/{C_DIM}]", id="detail-no-feed")
 
-            yield Input(placeholder="search conversations…", id="detail-search")
             yield Static(self._render_help(), id="detail-help")
 
     def on_mount(self):
@@ -1458,35 +1445,48 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         ]
         return "  ".join(f"[{C_YELLOW}]{k}[/{C_YELLOW}] {v}" for k, v in pairs)
 
-    # ── Content search ──
+    # ── Content search (vim-style / in help bar) ──
+
+    def _render_search_bar(self) -> str:
+        """Render the help bar content when in search mode."""
+        cursor = f"[bold {C_BLUE}]▎[/bold {C_BLUE}]"
+        return f"[{C_YELLOW}]/[/{C_YELLOW}]{self._search_text}{cursor}"
+
+    def _update_help_bar(self):
+        help_bar = self.query_one("#detail-help", Static)
+        if self._searching:
+            help_bar.update(self._render_search_bar())
+        else:
+            help_bar.update(self._render_help())
 
     def action_search(self):
-        search = self.query_one("#detail-search", Input)
-        search.display = True
-        search.value = self._search_text
-        search.focus()
+        self._searching = True
+        self._search_text = ""
+        self._update_help_bar()
         # Start warming the content cache in background
         if not self._content_ready:
             self._warm_content_cache()
 
     def _cancel_search(self):
-        search = self.query_one("#detail-search", Input)
-        search.value = ""
-        search.display = False
+        self._searching = False
         self._search_text = ""
         self._content_search_active = False
         self._content_results = []
+        self._update_help_bar()
         # Restore normal session lists
         self._detail_sessions = list(self._all_sessions)
         self._archived_sessions = list(self._all_archived)
         self._rebuild_session_lists()
-        self._focused_olist().focus()
 
-    @on(Input.Changed, "#detail-search")
-    def _on_search_changed(self, event: Input.Changed):
-        self._search_text = event.value.strip()
+    def _commit_search(self):
+        """Exit search mode but keep results visible."""
+        self._searching = False
+        self._update_help_bar()
+
+    def _on_search_text_changed(self):
+        """Called whenever search text changes."""
+        self._update_help_bar()
         if not self._search_text:
-            # Empty query: restore normal view
             self._content_search_active = False
             self._content_results = []
             self._detail_sessions = list(self._all_sessions)
@@ -1494,29 +1494,37 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
             self._rebuild_session_lists()
             return
         if self._content_ready:
-            # Cache is warm — do real-time content search
             self._run_content_search_sync()
         else:
-            # Cache not ready yet — fall back to fuzzy title filter
             self._apply_title_filter()
 
-    @on(Input.Submitted, "#detail-search")
-    def _on_search_submitted(self, event: Input.Submitted):
-        # Keep results visible, move focus back to list
-        search = self.query_one("#detail-search", Input)
-        search.display = False
-        olist = self.query_one("#detail-sessions", OptionList)
-        olist.focus()
-        self._active_pane = "sessions"
-        self._update_pane_labels()
-
     def on_key(self, event) -> None:
-        search = self.query_one("#detail-search", Input)
-        if search.display and search.has_focus and event.key == "escape":
+        if not self._searching:
+            return
+        key = event.key
+        if key == "escape":
             event.stop()
             event.prevent_default()
             self._cancel_search()
-            return
+        elif key == "enter":
+            event.stop()
+            event.prevent_default()
+            self._commit_search()
+        elif key == "backspace":
+            event.stop()
+            event.prevent_default()
+            self._search_text = self._search_text[:-1]
+            self._on_search_text_changed()
+        elif len(key) == 1 and key.isprintable():
+            event.stop()
+            event.prevent_default()
+            self._search_text += event.character or key
+            self._on_search_text_changed()
+        elif key == "space":
+            event.stop()
+            event.prevent_default()
+            self._search_text += " "
+            self._on_search_text_changed()
 
     @work(thread=True, exclusive=True, group="content_cache")
     def _warm_content_cache(self):
