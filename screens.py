@@ -7,7 +7,7 @@ and return results via dismiss(). No direct access to app state.
 from __future__ import annotations
 
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 from textual import on, work
@@ -549,12 +549,15 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
 
     @staticmethod
     def _parse_ts(ts: str) -> datetime:
-        """Parse a timestamp string, handling both UTC 'Z' suffix and naive local."""
+        """Parse a timestamp string, returning a UTC-aware datetime."""
         ts = ts.replace("Z", "+00:00")
         try:
-            return datetime.fromisoformat(ts)
+            dt = datetime.fromisoformat(ts)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return dt
         except (ValueError, TypeError):
-            return datetime.min
+            return datetime.min.replace(tzinfo=timezone.utc)
 
     def _load_detail_sessions(self):
         app = self.app
@@ -794,7 +797,6 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
                 return
             sid = self._detail_sessions[idx].session_id
             if sid not in self.ws.archived_sessions:
-                from datetime import timezone
                 self.ws.archived_sessions[sid] = datetime.now(timezone.utc).isoformat()
                 self.store.update(self.ws)
         self._refresh()

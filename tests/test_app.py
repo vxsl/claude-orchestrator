@@ -589,3 +589,34 @@ class TestDoResume:
 
         app.notify.assert_called_once()
         assert "tmux" in app.notify.call_args[0][0].lower()
+
+
+# ─── _parse_ts Regression Tests ─────────────────────────────────────
+
+class TestParseTs:
+    """Regression: comparing UTC-aware (Z suffix) and naive timestamps must not raise."""
+
+    def test_utc_z_vs_naive_no_error(self):
+        """The original bug: last_activity has 'Z', archived_at is naive."""
+        from screens import DetailScreen
+        from datetime import timezone
+
+        aware = DetailScreen._parse_ts("2026-03-21T09:09:52.535Z")
+        naive_input = DetailScreen._parse_ts("2026-03-21T10:16:25.734370")
+
+        # Both should be comparable without TypeError
+        assert naive_input > aware
+
+    def test_both_aware(self):
+        from screens import DetailScreen
+
+        a = DetailScreen._parse_ts("2026-03-21T09:00:00Z")
+        b = DetailScreen._parse_ts("2026-03-21T10:00:00+00:00")
+        assert b > a
+
+    def test_invalid_returns_min(self):
+        from screens import DetailScreen
+        from datetime import timezone
+
+        result = DetailScreen._parse_ts("not-a-date")
+        assert result.tzinfo is not None  # must be aware so comparisons work
