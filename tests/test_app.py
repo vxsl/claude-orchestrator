@@ -734,3 +734,32 @@ class TestHierarchyNavigation:
             screen_before = pilot.app.screen.__class__.__name__
             await pilot.press("ctrl+h")
             assert pilot.app.screen.__class__.__name__ == screen_before
+
+
+class TestCtrlHBindingOnScreens:
+    """Regression: ctrl+h must be a screen-level BINDING, not just app.on_key().
+
+    ModalScreens don't bubble key events to App in a real terminal,
+    so every modal must declare its own ctrl+h binding.
+    """
+
+    @pytest.mark.parametrize("screen_cls_name", [
+        "HelpScreen", "QuickNoteScreen", "TodoScreen",
+        "_TodoEditScreen", "_TodoContextScreen", "LinksScreen",
+        "AddScreen", "DetailScreen", "BrainDumpScreen",
+        "BrainPreviewScreen", "AddLinkScreen", "LinkSessionScreen",
+        "SessionPickerScreen", "RepoPickerScreen",
+        "WorkstreamPickerScreen", "ConfirmScreen",
+    ])
+    def test_screen_has_ctrl_h_binding(self, screen_cls_name):
+        """Every modal screen must have ctrl+h in its BINDINGS."""
+        import screens as screens_module
+        cls = getattr(screens_module, screen_cls_name)
+        binding_keys = []
+        for b in cls.BINDINGS:
+            if isinstance(b, tuple):
+                binding_keys.append(b[0])
+            else:
+                binding_keys.append(b.key)
+        assert any("ctrl+h" in k for k in binding_keys), \
+            f"{screen_cls_name} missing ctrl+h in BINDINGS"

@@ -69,7 +69,10 @@ class SessionsChanged(Message):
 # ─── Help Screen ────────────────────────────────────────────────────
 
 class HelpScreen(ModalScreen[None]):
-    BINDINGS = [Binding("question_mark,escape", "dismiss", "Close")]
+    BINDINGS = [
+        Binding("question_mark,escape", "dismiss", "Close"),
+        Binding("ctrl+h", "go_back", "^H back"),
+    ]
 
     def action_go_back(self):
         self.dismiss()
@@ -154,7 +157,7 @@ class HelpScreen(ModalScreen[None]):
 # ─── Quick Note Screen ───────────────────────────────────────────────
 
 class QuickNoteScreen(ModalScreen[str | None]):
-    BINDINGS = []
+    BINDINGS = [Binding("ctrl+h", "go_back", "^H back")]
 
     def action_go_back(self):
         self.dismiss(None)
@@ -243,6 +246,7 @@ class TodoScreen(_VimOptionListMixin, ModalScreen[None]):
 
     BINDINGS = [
         Binding("escape", "dismiss", "Back"),
+        Binding("ctrl+h", "go_back", "^H back"),
         Binding("a", "add_todo", "Add"),
         Binding("enter,space", "toggle_done", "Toggle done", priority=True),
         Binding("e", "edit_todo", "Edit"),
@@ -596,7 +600,7 @@ class TodoScreen(_VimOptionListMixin, ModalScreen[None]):
 
 class _TodoEditScreen(ModalScreen[str | None]):
     """Single-line input pre-filled with existing text."""
-    BINDINGS = []
+    BINDINGS = [Binding("ctrl+h", "go_back", "^H back")]
 
     def action_go_back(self):
         self.dismiss(None)
@@ -635,7 +639,7 @@ class _TodoEditScreen(ModalScreen[str | None]):
 
 class _TodoContextScreen(ModalScreen[None]):
     """TextArea editor for a todo item's context field."""
-    BINDINGS = []
+    BINDINGS = [Binding("ctrl+h", "go_back", "^H back")]
 
     def action_go_back(self):
         self.action_save_and_close()
@@ -682,6 +686,7 @@ class LinksScreen(_VimOptionListMixin, ModalScreen[None]):
     _option_list_id = "links-list"
     BINDINGS = [
         Binding("escape", "dismiss", "Back"),
+        Binding("ctrl+h", "go_back", "^H back"),
         Binding("enter", "open_link", "Open"),
     ] + _VimOptionListMixin.VIM_BINDINGS
 
@@ -731,7 +736,7 @@ class LinksScreen(_VimOptionListMixin, ModalScreen[None]):
 # ─── Add Screen ─────────────────────────────────────────────────────
 
 class AddScreen(ModalScreen[Workstream | None]):
-    BINDINGS = []
+    BINDINGS = [Binding("ctrl+h", "go_back", "^H back")]
 
     def action_go_back(self):
         self.dismiss(None)
@@ -788,6 +793,8 @@ class AddScreen(ModalScreen[Workstream | None]):
 
 class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
     BINDINGS = [
+        Binding("ctrl+h", "go_back", "^H back"),
+        Binding("ctrl+l", "go_forward", "^L resume"),
         Binding("s", "cycle_status", "Status"),
         Binding("S", "cycle_status_back", "Status\u2190"),
         Binding("c", "spawn", "Spawn"),
@@ -1837,6 +1844,7 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
 class BrainDumpScreen(ModalScreen[str | None]):
     BINDINGS = [
         Binding("ctrl+s", "submit", "Submit", priority=True),
+        Binding("ctrl+h", "go_back", "^H back"),
     ]
 
     def action_go_back(self):
@@ -1885,6 +1893,7 @@ class BrainPreviewScreen(ModalScreen[bool]):
     BINDINGS = [
         Binding("enter,y", "confirm", "Add all"),
         Binding("escape,n", "cancel", "Cancel"),
+        Binding("ctrl+h", "go_back", "^H back"),
     ]
 
     def action_go_back(self):
@@ -1931,7 +1940,7 @@ class BrainPreviewScreen(ModalScreen[bool]):
 # ─── Add Link Screen ────────────────────────────────────────────────
 
 class AddLinkScreen(ModalScreen[Link | None]):
-    BINDINGS = []
+    BINDINGS = [Binding("ctrl+h", "go_back", "^H back")]
 
     def action_go_back(self):
         self.dismiss(None)
@@ -1994,6 +2003,7 @@ class LinkSessionScreen(_VimOptionListMixin, ModalScreen[Workstream | None]):
     _option_list_id = "linksession-list"
     BINDINGS = [
         Binding("escape", "cancel", "Cancel"),
+        Binding("ctrl+h", "go_back", "^H back"),
         Binding("enter", "confirm", "Link"),
     ] + _VimOptionListMixin.VIM_BINDINGS
 
@@ -2054,6 +2064,7 @@ class SessionPickerScreen(_VimOptionListMixin, ModalScreen[ClaudeSession | None]
     _option_list_id = "threadpick-list"
     BINDINGS = [
         Binding("escape", "cancel", "Cancel"),
+        Binding("ctrl+h", "go_back", "^H back"),
         Binding("enter", "confirm", "Resume"),
     ] + _VimOptionListMixin.VIM_BINDINGS
 
@@ -2158,6 +2169,7 @@ class RepoPickerScreen(_VimOptionListMixin, ModalScreen[str | None]):
     _option_list_id = "repopick-list"
     BINDINGS = [
         Binding("escape", "cancel", "Cancel"),
+        Binding("ctrl+h", "go_back", "^H back"),
         Binding("enter", "confirm", "Select"),
     ] + _VimOptionListMixin.VIM_BINDINGS
 
@@ -2230,6 +2242,7 @@ class WorkstreamPickerScreen(_VimOptionListMixin, ModalScreen[Workstream | str |
     _option_list_id = "wspick-list"
     BINDINGS = [
         Binding("escape", "cancel", "Cancel"),
+        Binding("ctrl+h", "go_back", "^H back"),
         Binding("enter", "confirm", "Select"),
     ] + _VimOptionListMixin.VIM_BINDINGS
 
@@ -2300,6 +2313,7 @@ class ConfirmScreen(ModalScreen[bool]):
     BINDINGS = [
         Binding("y", "confirm", "Yes"),
         Binding("n,escape", "deny", "No"),
+        Binding("ctrl+h", "go_back", "^H back"),
     ]
 
     def action_go_back(self):
