@@ -141,6 +141,7 @@ def launch_orch_claude(
     session_id: str | None = None,
     prompt: str | None = None,
     cwd: str | None = None,
+    switch_to: bool = True,
 ) -> tuple[bool, str]:
     """Launch Claude via the orch-claude wrapper in a new tmux window.
 
@@ -203,11 +204,12 @@ def launch_orch_claude(
         )
         log.debug("launch_orch_claude: link-window rc=%d stderr=%s",
                   link_result.returncode, (link_result.stderr or "").strip())
-        sel_result = subprocess.run(
-            ["tmux", "select-window", "-t", window_id],
-            capture_output=True, text=True, timeout=5,
-        )
-        log.debug("launch_orch_claude: select-window rc=%d", sel_result.returncode)
+        if switch_to:
+            sel_result = subprocess.run(
+                ["tmux", "select-window", "-t", window_id],
+                capture_output=True, text=True, timeout=5,
+            )
+            log.debug("launch_orch_claude: select-window rc=%d", sel_result.returncode)
 
         return True, ""
     except Exception as e:

@@ -506,7 +506,7 @@ class TodoScreen(_VimOptionListMixin, ModalScreen[None]):
         prompt = item.text
         if item.context:
             prompt = f"{item.text}\n\n{item.context}"
-        ok, err = launch_orch_claude(self.ws, store=self.store, prompt=prompt)
+        ok, err = launch_orch_claude(self.ws, store=self.store, prompt=prompt, switch_to=False)
         if ok:
             self._app_state.toggle_todo(self.ws.id, item.id)  # mark done
             self._rebuild()
@@ -1092,7 +1092,7 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
             _tk = f"{total_tok / 1_000_000:.1f}M" if total_tok > 1_000_000 else f"{total_tok / 1_000:.0f}k" if total_tok > 1_000 else str(total_tok)
             parts.append(
                 f"[{C_DIM}]{n} sessions \u00b7 {total_msgs} msgs \u00b7 "
-                f"{_token_color_markup(_tk, total_tok)} tok[/{C_DIM}]"
+                f"{_token_color_markup(_tk, total_tok)}[/{C_DIM}]"
             )
         return "  ".join(parts)
 
