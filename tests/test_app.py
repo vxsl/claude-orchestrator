@@ -480,10 +480,10 @@ class TestQuickNote:
             from screens import QuickNoteScreen
             assert isinstance(pilot.app.screen, QuickNoteScreen)
 
-    async def test_note_modal_escape_cancels(self, app_with_store):
+    async def test_note_modal_ctrl_h_cancels(self, app_with_store):
         async with app_with_store.run_test(size=(120, 40)) as pilot:
             await pilot.press("n")
-            await pilot.press("escape")
+            await pilot.press("ctrl+h")
             from screens import QuickNoteScreen
             assert not isinstance(pilot.app.screen, QuickNoteScreen)
 
@@ -553,10 +553,16 @@ class TestHelpScreen:
             await pilot.press("question_mark")
             assert pilot.app.screen.__class__.__name__ == "HelpScreen"
 
-    async def test_help_closes_with_q(self, app_with_store):
+    async def test_help_closes_with_ctrl_h(self, app_with_store):
         async with app_with_store.run_test(size=(120, 40)) as pilot:
             await pilot.press("question_mark")
-            await pilot.press("q")
+            await pilot.press("ctrl+h")
+            assert pilot.app.screen.__class__.__name__ != "HelpScreen"
+
+    async def test_help_closes_with_escape(self, app_with_store):
+        async with app_with_store.run_test(size=(120, 40)) as pilot:
+            await pilot.press("question_mark")
+            await pilot.press("escape")
             assert pilot.app.screen.__class__.__name__ != "HelpScreen"
 
     async def test_help_mentions_ctrl_d(self, app_with_store):
@@ -668,3 +674,63 @@ class TestParseTs:
 
         result = DetailScreen._parse_ts("not-a-date")
         assert result.tzinfo is not None  # must be aware so comparisons work
+
+
+@pytest.mark.asyncio
+class TestHierarchyNavigation:
+    async def test_ctrl_l_opens_detail_from_main(self, app_with_store):
+        """Ctrl+L on main screen should open DetailScreen (drill in)."""
+        async with app_with_store.run_test(size=(120, 40)) as pilot:
+            await pilot.press("ctrl+l")
+            from screens import DetailScreen
+            assert isinstance(pilot.app.screen, DetailScreen)
+
+    async def test_ctrl_h_dismisses_detail_screen(self, app_with_store):
+        """Ctrl+H should dismiss DetailScreen back to main."""
+        async with app_with_store.run_test(size=(120, 40)) as pilot:
+            await pilot.press("ctrl+l")
+            from screens import DetailScreen
+            assert isinstance(pilot.app.screen, DetailScreen)
+            await pilot.press("ctrl+h")
+            assert not isinstance(pilot.app.screen, DetailScreen)
+
+    async def test_ctrl_h_dismisses_help_screen(self, app_with_store):
+        """Ctrl+H should dismiss HelpScreen."""
+        async with app_with_store.run_test(size=(120, 40)) as pilot:
+            await pilot.press("question_mark")
+            assert pilot.app.screen.__class__.__name__ == "HelpScreen"
+            await pilot.press("ctrl+h")
+            assert pilot.app.screen.__class__.__name__ != "HelpScreen"
+
+    async def test_escape_does_not_dismiss_detail(self, app_with_store):
+        """Escape should not dismiss DetailScreen (no binding)."""
+        async with app_with_store.run_test(size=(120, 40)) as pilot:
+            await pilot.press("ctrl+l")
+            from screens import DetailScreen
+            assert isinstance(pilot.app.screen, DetailScreen)
+            await pilot.press("escape")
+            assert isinstance(pilot.app.screen, DetailScreen)
+
+    async def test_q_does_not_dismiss_detail(self, app_with_store):
+        """q should not dismiss DetailScreen (binding removed)."""
+        async with app_with_store.run_test(size=(120, 40)) as pilot:
+            await pilot.press("ctrl+l")
+            from screens import DetailScreen
+            assert isinstance(pilot.app.screen, DetailScreen)
+            await pilot.press("q")
+            assert isinstance(pilot.app.screen, DetailScreen)
+
+    async def test_escape_still_dismisses_picker(self, app_with_store):
+        """Escape retained on pickers — HelpScreen should dismiss with Escape."""
+        async with app_with_store.run_test(size=(120, 40)) as pilot:
+            await pilot.press("question_mark")
+            assert pilot.app.screen.__class__.__name__ == "HelpScreen"
+            await pilot.press("escape")
+            assert pilot.app.screen.__class__.__name__ != "HelpScreen"
+
+    async def test_ctrl_h_at_root_does_nothing(self, app_with_store):
+        """Ctrl+H at root screen should do nothing (no action_go_back)."""
+        async with app_with_store.run_test(size=(120, 40)) as pilot:
+            screen_before = pilot.app.screen.__class__.__name__
+            await pilot.press("ctrl+h")
+            assert pilot.app.screen.__class__.__name__ == screen_before

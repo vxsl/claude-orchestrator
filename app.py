@@ -211,14 +211,24 @@ class OrchestratorApp(App):
                     screen.action_prev_panel()
                 else:
                     self.action_prev_panel()
+        elif event.key == "ctrl+h":
+            event.prevent_default()
+            event.stop()
+            screen = self.screen
+            if hasattr(screen, 'action_go_back'):
+                screen.action_go_back()
+            # At root app screen, do nothing
+
         elif event.key == "ctrl+l":
             event.prevent_default()
             event.stop()
             screen = self.screen
-            if hasattr(screen, 'action_resume'):
-                screen.action_resume()
+            if hasattr(screen, 'action_go_forward'):
+                screen.action_go_forward()
+            elif hasattr(screen, 'action_select_item'):
+                screen.action_select_item()
             else:
-                self.action_resume()
+                self.action_select_item()
 
     # ── Convenience accessors for backward compat ──
 
