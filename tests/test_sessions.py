@@ -222,6 +222,22 @@ class TestRefreshSessionTail:
                           last_message_role="user", last_activity="")
         assert refresh_session_tail(s) is False
 
+    def test_stop_hook_summary_sets_turn_complete(self, tmp_path):
+        """system:stop_hook_summary is a definitive turn-complete signal."""
+        f = tmp_path / "s.jsonl"
+        self._write_jsonl(f, [
+            {"type": "assistant", "message": {"usage": {}, "stop_reason": "tool_use"},
+             "timestamp": "2026-03-20T10:00:00Z"},
+            {"type": "user", "timestamp": "2026-03-20T10:00:01Z"},
+            {"type": "system", "subtype": "stop_hook_summary",
+             "timestamp": "2026-03-20T10:00:02Z"},
+        ])
+        s = ClaudeSession(session_id="s", project_dir="d", project_path="/p",
+                          jsonl_path=str(f), last_message_role="",
+                          last_activity="")
+        refresh_session_tail(s)
+        assert s.turn_complete is True
+
     def test_reads_only_tail(self, tmp_path):
         """With a large file, still correctly reads the last entries."""
         f = tmp_path / "s.jsonl"

@@ -70,8 +70,9 @@ def session_activity(session: ClaudeSession, last_seen: dict[str, str] | None = 
         if session.turn_complete:
             return ThreadActivity.AWAITING_INPUT
 
-        # stop_reason=end_turn also means done
-        if session.last_stop_reason == "end_turn":
+        # Any stop_reason other than tool_use means the turn is done
+        # (end_turn, stop_sequence, max_tokens, etc.)
+        if session.last_stop_reason and session.last_stop_reason != "tool_use":
             return ThreadActivity.AWAITING_INPUT
 
         return ThreadActivity.THINKING

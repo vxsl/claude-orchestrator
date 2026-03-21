@@ -346,6 +346,18 @@ class TestSessionActivity:
                                last_stop_reason="")
         assert session_activity(s) == ThreadActivity.THINKING
 
+    def test_awaiting_input_when_live_and_stop_sequence(self):
+        """stop_sequence is a valid turn-complete signal (not just end_turn)."""
+        s = self._make_session(is_live=True, last_message_role="assistant",
+                               last_stop_reason="stop_sequence")
+        assert session_activity(s) == ThreadActivity.AWAITING_INPUT
+
+    def test_awaiting_input_when_live_and_max_tokens(self):
+        """max_tokens also means the turn is done."""
+        s = self._make_session(is_live=True, last_message_role="assistant",
+                               last_stop_reason="max_tokens")
+        assert session_activity(s) == ThreadActivity.AWAITING_INPUT
+
     def test_idle_when_not_live_and_last_is_user(self):
         s = self._make_session(is_live=False, last_message_role="user")
         assert session_activity(s) == ThreadActivity.IDLE

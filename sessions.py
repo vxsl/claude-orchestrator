@@ -219,7 +219,8 @@ def parse_session(jsonl_path: Path) -> Optional[ClaudeSession]:
                 # but idle-only entries (last-prompt, custom-title,
                 # file-history-snapshot) also prove the turn ended —
                 # covers interrupted turns where turn_duration is never written.
-                if (msg_type == "system" and data.get("subtype") == "turn_duration"
+                if (msg_type == "system" and data.get("subtype") in (
+                        "turn_duration", "stop_hook_summary")
                         or msg_type in ("last-prompt", "custom-title",
                                         "file-history-snapshot")):
                     session.turn_complete = True
@@ -291,7 +292,8 @@ def refresh_session_tail(session: ClaudeSession, tail_bytes: int = 8192) -> bool
                     session.last_user_message_at = ts
             if msg_type == "assistant" and "message" in data:
                 session.last_stop_reason = data["message"].get("stop_reason") or ""
-            if (msg_type == "system" and data.get("subtype") == "turn_duration"
+            if (msg_type == "system" and data.get("subtype") in (
+                    "turn_duration", "stop_hook_summary")
                     or msg_type in ("last-prompt", "custom-title",
                                     "file-history-snapshot")):
                 session.turn_complete = True
