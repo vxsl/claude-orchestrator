@@ -826,6 +826,20 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
     #detail-archived > .option-list--option-highlighted {{
         background: #252525;
     }}
+    #detail-search-input {{
+        display: none;
+        margin: 0 1;
+        height: auto;
+        background: {BG_BASE};
+        border: none;
+        padding: 0 2;
+    }}
+    #detail-search-input.visible {{
+        display: block;
+    }}
+    #detail-search-input:focus {{
+        border: none;
+    }}
     #detail-no-sessions, #detail-no-archived {{
         padding: 1 3;
         color: {C_DIM};
@@ -896,8 +910,6 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         self._active_pane: str = "sessions"
         self._animating_sessions: list[tuple[int, ThreadActivity]] = []
         self._animating_archived: list[tuple[int, ThreadActivity]] = []
-        self._search_text: str = ""
-        self._searching: bool = False
         self._content_cache: dict[str, list] = {}  # session_id -> list[SessionMessage]
         self._content_ready: bool = False
         self._content_results: list[SessionSearchResult] = []
@@ -917,6 +929,7 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
             with Horizontal(id="detail-lists"):
                 with Vertical(id="detail-sessions-pane", classes="detail-list-pane"):
                     yield Static(f"[bold {C_BLUE}]Sessions[/bold {C_BLUE}]", id="detail-sessions-label", classes="detail-list-label")
+                    yield Input(placeholder="search...", id="detail-search-input")
                     yield OptionList(id="detail-sessions")
                     yield Static(f"[{C_DIM}]No sessions[/{C_DIM}]", id="detail-no-sessions")
                 with Vertical(id="detail-archived-pane", classes="detail-list-pane"):
@@ -1445,48 +1458,83 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         ]
         return "  ".join(f"[{C_YELLOW}]{k}[/{C_YELLOW}] {v}" for k, v in pairs)
 
-    # ── Content search (vim-style / in help bar) ──
+    # ── Content search ──
 
-    def _render_search_bar(self) -> str:
-        """Render the help bar content when in search mode."""
-        cursor = f"[bold {C_BLUE}]▎[/bold {C_BLUE}]"
-        return f"[{C_YELLOW}]/[/{C_YELLOW}]{self._search_text}{cursor}"
+    def _search_is_active(self) -> bool:
+        """Return True if the search input is visible (search mode)."""
+        try:
+            return self.query_one("#detail-search-input", Input).has_class("visible")
+        except Exception:
+            return False
+
+    def action_dismiss(self) -> None:
+        """Override dismiss: if search is active, cancel search first."""
+        if self._search_is_active():
+            self._cancel_search()
+        else:
+            super().action_dismiss(None)
 
     def _update_help_bar(self):
         help_bar = self.query_one("#detail-help", Static)
-        if self._searching:
-            help_bar.update(self._render_search_bar())
+        search_input = self.query_one("#detail-search-input", Input)
+        if search_input.has_class("visible") and not search_input.has_focus:
+            # Viewing search results — show navigation hints
+            pairs = [
+                ("j/k", "navigate"), ("Enter", "resume"),
+                ("/", "refine"), ("Esc", "clear"),
+                ("q", "back"),
+            ]
+            help_bar.update("  ".join(f"[{C_YELLOW}]{k}[/{C_YELLOW}] {v}" for k, v in pairs))
         else:
             help_bar.update(self._render_help())
 
+    @property
+    def _search_text(self) -> str:
+        """Current search query from the Input widget."""
+        try:
+            return self.query_one("#detail-search-input", Input).value
+        except Exception:
+            return ""
+
     def action_search(self):
-        self._searching = True
-        self._search_text = ""
-        self._update_help_bar()
+        """Show the search input and focus it."""
+        search_input = self.query_one("#detail-search-input", Input)
+        search_input.add_class("visible")
+        search_input.focus()
         # Start warming the content cache in background
         if not self._content_ready:
             self._warm_content_cache()
 
     def _cancel_search(self):
-        self._searching = False
-        self._search_text = ""
+        """Hide search input and restore normal session lists."""
+        search_input = self.query_one("#detail-search-input", Input)
+        search_input.value = ""
+        search_input.remove_class("visible")
         self._content_search_active = False
         self._content_results = []
-        self._update_help_bar()
         # Restore normal session lists
         self._detail_sessions = list(self._all_sessions)
         self._archived_sessions = list(self._all_archived)
         self._rebuild_session_lists()
-
-    def _commit_search(self):
-        """Exit search mode but keep results visible."""
-        self._searching = False
         self._update_help_bar()
+        # Return focus to the sessions list
+        self.query_one("#detail-sessions", OptionList).focus()
 
-    def _on_search_text_changed(self):
-        """Called whenever search text changes."""
-        self._update_help_bar()
-        if not self._search_text:
+    def _focus_search_results(self):
+        """Shift focus from search input to results list."""
+        olist = self.query_one("#detail-sessions", OptionList)
+        if olist.option_count > 0:
+            olist.highlighted = 0
+            olist.focus()
+            self._active_pane = "sessions"
+            self._update_pane_labels()
+            self._update_help_bar()
+
+    @on(Input.Changed, "#detail-search-input")
+    def _on_search_input_changed(self, event: Input.Changed) -> None:
+        """Live filter as user types in the search input."""
+        query = event.value
+        if not query:
             self._content_search_active = False
             self._content_results = []
             self._detail_sessions = list(self._all_sessions)
@@ -1498,55 +1546,23 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         else:
             self._apply_title_filter()
 
-    def check_action(self, action: str, parameters) -> bool:
-        """Block all non-search actions while in search mode."""
-        if self._searching and action not in ("search", "dismiss"):
-            return False
-        return True
+    @on(Input.Submitted, "#detail-search-input")
+    def _on_search_input_submitted(self, event: Input.Submitted) -> None:
+        """Enter in search input shifts focus to results."""
+        self._focus_search_results()
 
     def on_key(self, event) -> None:
-        if not self._searching:
-            return
-        key = event.key
-        if key == "escape":
-            event.stop()
-            event.prevent_default()
-            self._cancel_search()
-        elif key == "enter":
-            event.stop()
-            event.prevent_default()
-            self._commit_search()
-        elif key == "ctrl+w":
-            event.stop()
-            event.prevent_default()
-            # Delete last word
-            txt = self._search_text.rstrip()
-            if txt:
-                last_space = txt.rfind(" ")
-                self._search_text = txt[:last_space + 1] if last_space >= 0 else ""
-            else:
-                self._search_text = ""
-            self._on_search_text_changed()
-        elif key == "ctrl+u":
-            event.stop()
-            event.prevent_default()
-            self._search_text = ""
-            self._on_search_text_changed()
-        elif key == "backspace":
-            event.stop()
-            event.prevent_default()
-            self._search_text = self._search_text[:-1]
-            self._on_search_text_changed()
-        elif event.character and event.character.isprintable():
-            event.stop()
-            event.prevent_default()
-            self._search_text += event.character
-            self._on_search_text_changed()
-        elif key == "space":
-            event.stop()
-            event.prevent_default()
-            self._search_text += " "
-            self._on_search_text_changed()
+        """Handle special keys in search input."""
+        search_input = self.query_one("#detail-search-input", Input)
+        if search_input.has_focus:
+            if event.key == "escape":
+                event.stop()
+                event.prevent_default()
+                self._cancel_search()
+            elif event.key == "down":
+                event.stop()
+                event.prevent_default()
+                self._focus_search_results()
 
     @work(thread=True, exclusive=True, group="content_cache")
     def _warm_content_cache(self):
