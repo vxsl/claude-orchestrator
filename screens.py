@@ -344,6 +344,22 @@ class TodoScreen(_VimOptionListMixin, ModalScreen[None]):
     def _olist(self) -> OptionList:
         return self._focused_olist()
 
+    def on_focus(self, event):
+        """Sync _active_pane with actual widget focus."""
+        widget = event.control
+        if not isinstance(widget, OptionList):
+            return
+        if widget.id == "todo-archived" and self._archived_items:
+            if self._active_pane != "archived":
+                self._active_pane = "archived"
+                self._update_pane_labels()
+                self._update_context_preview()
+        elif widget.id == "todo-active":
+            if self._active_pane != "active":
+                self._active_pane = "active"
+                self._update_pane_labels()
+                self._update_context_preview()
+
     def _rebuild(self):
         """Reload data and rebuild both panes."""
         from state import AppState
@@ -367,14 +383,14 @@ class TodoScreen(_VimOptionListMixin, ModalScreen[None]):
             olist.display = False
             no_active.display = True
 
-        # Archived pane
+        # Archived pane — only show if there are archived items or user is viewing them
         arch_olist = self.query_one("#todo-archived", OptionList)
         no_arch = self.query_one("#todo-no-archived", Static)
         arch_pane = self.query_one("#todo-archived-pane")
-        arch_pane.display = True
         old_arch_id = self._highlighted_item_id(arch_olist, self._archived_items)
         arch_olist.clear_options()
         if self._archived_items:
+            arch_pane.display = True
             arch_olist.display = True
             no_arch.display = False
             for item in self._archived_items:
@@ -382,8 +398,8 @@ class TodoScreen(_VimOptionListMixin, ModalScreen[None]):
                 arch_olist.add_option(Option(prompt, id=item.id))
             self._restore_highlight(arch_olist, self._archived_items, old_arch_id)
         else:
-            arch_olist.display = False
-            no_arch.display = True
+            # Hide entire archived pane when empty
+            arch_pane.display = False
             if self._active_pane == "archived":
                 self._active_pane = "active"
                 self.query_one("#todo-active", OptionList).focus()
@@ -446,6 +462,15 @@ class TodoScreen(_VimOptionListMixin, ModalScreen[None]):
         return None
 
     def on_option_list_option_highlighted(self, event: OptionList.OptionHighlighted):
+        # Sync pane state based on which list emitted the event
+        if event.option_list.id == "todo-archived":
+            if self._active_pane != "archived":
+                self._active_pane = "archived"
+                self._update_pane_labels()
+        elif event.option_list.id == "todo-active":
+            if self._active_pane != "active":
+                self._active_pane = "active"
+                self._update_pane_labels()
         self._update_context_preview()
 
     def _render_help(self) -> str:
@@ -462,7 +487,13 @@ class TodoScreen(_VimOptionListMixin, ModalScreen[None]):
         def on_text(text: str | None):
             if text and text.strip():
                 self._app_state.add_todo(self.ws.id, text.strip())
+                self._active_pane = "active"
                 self._rebuild()
+                # Focus active list and jump to bottom (new item)
+                olist = self.query_one("#todo-active", OptionList)
+                olist.focus()
+                if olist.option_count > 0:
+                    olist.highlighted = olist.option_count - 1
                 self.app.notify("Todo added", timeout=1)
         self.app.push_screen(QuickNoteScreen(self.ws), callback=on_text)
 
@@ -539,7 +570,9 @@ class TodoScreen(_VimOptionListMixin, ModalScreen[None]):
 
     def action_focus_active(self):
         self._active_pane = "active"
-        self.query_one("#todo-active", OptionList).focus()
+        olist = self.query_one("#todo-active", OptionList)
+        if olist.display:
+            olist.focus()
         self._update_pane_labels()
         self._update_context_preview()
 
@@ -620,8 +653,10 @@ class _TodoContextScreen(ModalScreen[None]):
     def action_save_and_close(self):
         if self._item:
             editor = self.query_one("#todo-ctx-editor", TextArea)
-            self._item.context = editor.text.strip()
-            self.store.update(self.ws)
+            new_ctx = editor.text.strip()
+            from state import AppState
+            state = self.app.state
+            state.edit_todo(self.ws.id, self.todo_id, context=new_ctx)
         self.dismiss()
 
 
