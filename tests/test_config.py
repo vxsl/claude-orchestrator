@@ -48,14 +48,9 @@ class TestOverrides:
 
 
 class TestPanelNavigation:
-    def test_next_panel_default_key(self):
-        assert get_key("next_panel") == "ctrl+j"
-
-    def test_prev_panel_default_key(self):
-        assert get_key("prev_panel") == "ctrl+k"
-
-    def test_panel_bindings_in_app_bindings(self):
+    def test_panel_nav_not_in_bindings(self):
+        """Panel nav is handled via on_key, not the binding system."""
         bindings = build_app_bindings()
         actions = [b.action for b in bindings]
-        assert "next_panel" in actions
-        assert "prev_panel" in actions
+        assert "next_panel" not in actions
+        assert "prev_panel" not in actions

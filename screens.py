@@ -781,8 +781,6 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         Binding("l", "focus_archived", show=False, priority=True),
         Binding("d", "dismiss_notification", "Dismiss", show=False),
         Binding("D", "dismiss_all_notifications", "Dismiss all", show=False),
-        Binding("ctrl+j", "next_panel", show=False, priority=True),
-        Binding("ctrl+k", "prev_panel", show=False, priority=True),
     ] + _VimOptionListMixin.VIM_BINDINGS
 
     DEFAULT_CSS = f"""
