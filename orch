@@ -3,4 +3,12 @@ export PYENV_ROOT="$HOME/.pyenv"
 export PATH="$PYENV_ROOT/bin:$PATH"
 eval "$(pyenv init -)"
 SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
+
+# Unbind C-j/C-k in the orch tmux session so they reach the TUI
+# (globally they're tmux pane navigation, but orch uses them for panel switching)
+if [ -n "$TMUX" ]; then
+    tmux unbind -n C-j 2>/dev/null
+    tmux unbind -n C-k 2>/dev/null
+fi
+
 exec -a orch python3 "$SCRIPT_DIR/orch.py" "$@"

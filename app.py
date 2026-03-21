@@ -200,8 +200,6 @@ class OrchestratorApp(App):
         if event.key in ("ctrl+j", "ctrl+k"):
             event.prevent_default()
             event.stop()
-            # Route to the active screen if it has panel navigation,
-            # otherwise handle at app level
             screen = self.screen
             if event.key == "ctrl+j":
                 if hasattr(screen, 'action_next_panel'):
