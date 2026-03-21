@@ -7,9 +7,9 @@ sessions without any LLM calls. Manual workstreams get 'pinned' status.
 from __future__ import annotations
 
 import json
-import os
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
+from enum import Enum
 from pathlib import Path
 from typing import Optional
 
@@ -18,6 +18,89 @@ from sessions import (
     discover_sessions,
     CLAUDE_PROJECTS_DIR,
 )
+
+
+# ─── Thread activity states ──────────────────────────────────────────
+
+class ThreadActivity(Enum):
+    """Observable activity state of a thread."""
+    THINKING = "thinking"              # Live, Claude is processing
+    AWAITING_INPUT = "awaiting_input"  # Live, Claude responded, waiting for user
+    RESPONSE_FRESH = "response_fresh"  # Not live, unread assistant response within 30 min
+    RESPONSE_READY = "response_ready"  # Not live, unread assistant response (older)
+    IDLE = "idle"                      # Not live, nothing unread
+
+
+# How long a finished response is considered "fresh"
+FRESH_THRESHOLD = timedelta(minutes=30)
+
+# Cache file for last-seen timestamps per thread
+LAST_SEEN_FILE = Path.home() / ".cache" / "claude-orchestrator" / "last-seen.json"
+
+
+def load_last_seen() -> dict[str, str]:
+    """Load {thread_id: iso_timestamp} from cache."""
+    try:
+        return json.loads(LAST_SEEN_FILE.read_text())
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def save_last_seen(data: dict[str, str]) -> None:
+    """Persist last-seen timestamps."""
+    LAST_SEEN_FILE.parent.mkdir(parents=True, exist_ok=True)
+    LAST_SEEN_FILE.write_text(json.dumps(data))
+
+
+def mark_thread_seen(thread_id: str) -> None:
+    """Record that the user has seen this thread right now."""
+    data = load_last_seen()
+    data[thread_id] = datetime.now().astimezone().isoformat()
+    save_last_seen(data)
+
+
+def session_activity(session: ClaudeSession, last_seen: dict[str, str] | None = None) -> ThreadActivity:
+    """Compute activity state for a single session."""
+    if session.is_live:
+        # system:turn_duration is the definitive "turn finished" signal
+        if session.turn_complete:
+            return ThreadActivity.AWAITING_INPUT
+
+        # stop_reason=end_turn also means done
+        if session.last_stop_reason == "end_turn":
+            return ThreadActivity.AWAITING_INPUT
+
+        return ThreadActivity.THINKING
+
+    if session.last_message_role != "assistant":
+        return ThreadActivity.IDLE
+
+    # Check last-seen (keyed by session_id)
+    if last_seen:
+        seen_ts = last_seen.get(session.session_id, "")
+        if seen_ts:
+            try:
+                seen_dt = datetime.fromisoformat(seen_ts.replace("Z", "+00:00"))
+                activity_dt = datetime.fromisoformat(
+                    (session.last_activity or "").replace("Z", "+00:00")
+                )
+                if seen_dt >= activity_dt:
+                    return ThreadActivity.IDLE
+            except (ValueError, TypeError):
+                pass
+
+    # Unread — is it fresh?
+    try:
+        activity_dt = datetime.fromisoformat(
+            (session.last_activity or "").replace("Z", "+00:00")
+        )
+        age = datetime.now().astimezone() - activity_dt
+        if age <= FRESH_THRESHOLD:
+            return ThreadActivity.RESPONSE_FRESH
+    except (ValueError, TypeError):
+        pass
+
+    return ThreadActivity.RESPONSE_READY
 
 # Clustering thresholds
 # Only used for default-branch sessions (master/main). Feature branches always merge.
@@ -37,9 +120,54 @@ class Thread:
     ai_title: str = ""                    # AI-generated title (from Sonnet)
     ai_category: str = ""                 # AI-generated category
 
+    _last_seen: dict[str, str] = field(default_factory=dict, repr=False)
+
     @property
     def is_live(self) -> bool:
         return any(s.is_live for s in self.sessions)
+
+    @property
+    def activity(self) -> ThreadActivity:
+        """Compute the current activity state of this thread."""
+        if self.is_live:
+            # Use session_activity for the latest live session (includes mtime check)
+            live_sessions = [s for s in self.sessions if s.is_live]
+            latest_live = max(live_sessions, key=lambda s: s.last_activity or "")
+            return session_activity(latest_live, self._last_seen)
+
+        # Not live — check if there's an unread assistant response
+        if not self.sessions:
+            return ThreadActivity.IDLE
+
+        latest = max(self.sessions, key=lambda s: s.last_activity or "")
+        if latest.last_message_role != "assistant":
+            return ThreadActivity.IDLE
+
+        # Last message was from assistant — check if user has seen it
+        seen_ts = self._last_seen.get(self.thread_id, "")
+        if seen_ts:
+            try:
+                seen_dt = datetime.fromisoformat(seen_ts.replace("Z", "+00:00"))
+                activity_dt = datetime.fromisoformat(
+                    (latest.last_activity or "").replace("Z", "+00:00")
+                )
+                if seen_dt >= activity_dt:
+                    return ThreadActivity.IDLE  # Already seen
+            except (ValueError, TypeError):
+                pass
+
+        # Unread — is it fresh?
+        try:
+            activity_dt = datetime.fromisoformat(
+                (latest.last_activity or "").replace("Z", "+00:00")
+            )
+            age = datetime.now().astimezone() - activity_dt
+            if age <= FRESH_THRESHOLD:
+                return ThreadActivity.RESPONSE_FRESH
+        except (ValueError, TypeError):
+            pass
+
+        return ThreadActivity.RESPONSE_READY
 
     @property
     def session_count(self) -> int:
@@ -50,6 +178,14 @@ class Thread:
         if not self.sessions:
             return ""
         return max(s.last_activity or s.started_at or "" for s in self.sessions)
+
+    @property
+    def last_user_activity(self) -> str:
+        """Timestamp of last user message across all sessions."""
+        if not self.sessions:
+            return ""
+        vals = [s.last_user_message_at for s in self.sessions if s.last_user_message_at]
+        return max(vals) if vals else self.last_activity
 
     @property
     def started_at(self) -> str:
@@ -282,6 +418,8 @@ def discover_threads(min_messages: int = 1) -> list[Thread]:
     if not sessions:
         return []
 
+    last_seen = load_last_seen()
+
     # Group sessions by project path
     by_project: dict[str, list[ClaudeSession]] = {}
     for s in sessions:
@@ -334,6 +472,7 @@ def discover_threads(min_messages: int = 1) -> list[Thread]:
                 name=name,
                 project_path=project_path,
                 sessions=cluster,
+                _last_seen=last_seen,
             ))
 
     # Sort by last activity, most recent first. Live threads always on top.

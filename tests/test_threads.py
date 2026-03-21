@@ -9,12 +9,15 @@ from unittest.mock import patch
 from sessions import ClaudeSession
 from threads import (
     Thread,
+    ThreadActivity,
     _should_merge,
     _derive_thread_name,
     _extract_git_branch,
     _extract_first_message,
     discover_threads,
+    session_activity,
     DEFAULT_BRANCH_GAP,
+    FRESH_THRESHOLD,
 )
 
 
@@ -75,6 +78,24 @@ class TestThread:
                    sessions=[self._make_session(model="claude-opus-4-6"),
                              self._make_session(session_id="s2", model="claude-sonnet-4-6")])
         assert len(t.models) == 2
+
+    def test_last_user_activity(self):
+        t = Thread(thread_id="t1", name="test", project_path="/p",
+                   sessions=[
+                       self._make_session(last_user_message_at="2026-03-20T10:00:00Z"),
+                       self._make_session(session_id="s2", last_user_message_at="2026-03-20T10:05:00Z"),
+                   ])
+        assert t.last_user_activity == "2026-03-20T10:05:00Z"
+
+    def test_last_user_activity_falls_back_to_last_activity(self):
+        """When no user messages tracked, falls back to last_activity."""
+        t = Thread(thread_id="t1", name="test", project_path="/p",
+                   sessions=[self._make_session(last_user_message_at="")])
+        assert t.last_user_activity == t.last_activity
+
+    def test_last_user_activity_empty_sessions(self):
+        t = Thread(thread_id="t1", name="test", project_path="/p", sessions=[])
+        assert t.last_user_activity == ""
 
 
 # ─── Merge Logic ─────────────────────────────────────────────────────
@@ -280,3 +301,142 @@ class TestDiscoverThreads:
              patch("threads.CLAUDE_PROJECTS_DIR", tmp_path / "projects"):
             threads = discover_threads()
             assert len(threads) == 2
+
+
+# ─── Thread & Session Activity ──────────────────────────────────────
+
+class TestSessionActivity:
+    def _make_session(self, **kwargs):
+        defaults = dict(session_id="s1", project_dir="d", project_path="/p",
+                        message_count=5, total_input_tokens=1000,
+                        total_output_tokens=500, model="claude-opus-4-6",
+                        started_at="2026-03-20T10:00:00Z",
+                        last_activity="2026-03-20T10:05:00Z")
+        defaults.update(kwargs)
+        return ClaudeSession(**defaults)
+
+    def test_thinking_when_live_and_last_is_user(self):
+        s = self._make_session(is_live=True, last_message_role="user")
+        assert session_activity(s) == ThreadActivity.THINKING
+
+    def test_thinking_when_live_and_no_role(self):
+        s = self._make_session(is_live=True, last_message_role="")
+        assert session_activity(s) == ThreadActivity.THINKING
+
+    def test_awaiting_input_when_turn_complete(self):
+        """turn_complete flag (from system:turn_duration) is the primary signal."""
+        s = self._make_session(is_live=True, last_message_role="user",
+                               last_stop_reason="tool_use", turn_complete=True)
+        assert session_activity(s) == ThreadActivity.AWAITING_INPUT
+
+    def test_awaiting_input_when_live_and_last_is_assistant_end_turn(self):
+        s = self._make_session(is_live=True, last_message_role="assistant",
+                               last_stop_reason="end_turn")
+        assert session_activity(s) == ThreadActivity.AWAITING_INPUT
+
+    def test_thinking_when_live_and_last_is_assistant_tool_use(self):
+        s = self._make_session(is_live=True, last_message_role="assistant",
+                               last_stop_reason="tool_use")
+        assert session_activity(s) == ThreadActivity.THINKING
+
+    def test_thinking_when_live_and_no_stop_reason(self):
+        """No definitive signal → conservative THINKING."""
+        s = self._make_session(is_live=True, last_message_role="assistant",
+                               last_stop_reason="")
+        assert session_activity(s) == ThreadActivity.THINKING
+
+    def test_idle_when_not_live_and_last_is_user(self):
+        s = self._make_session(is_live=False, last_message_role="user")
+        assert session_activity(s) == ThreadActivity.IDLE
+
+    def test_idle_when_not_live_and_no_role(self):
+        s = self._make_session(is_live=False, last_message_role="")
+        assert session_activity(s) == ThreadActivity.IDLE
+
+    def test_response_fresh_when_recent_assistant(self):
+        recent = datetime.now().astimezone().isoformat()
+        s = self._make_session(is_live=False, last_message_role="assistant",
+                               last_activity=recent)
+        assert session_activity(s) == ThreadActivity.RESPONSE_FRESH
+
+    def test_response_ready_when_old_assistant(self):
+        old = (datetime.now().astimezone() - timedelta(hours=2)).isoformat()
+        s = self._make_session(is_live=False, last_message_role="assistant",
+                               last_activity=old)
+        assert session_activity(s) == ThreadActivity.RESPONSE_READY
+
+    def test_idle_when_already_seen(self):
+        recent = datetime.now().astimezone().isoformat()
+        future = (datetime.now().astimezone() + timedelta(minutes=1)).isoformat()
+        s = self._make_session(is_live=False, last_message_role="assistant",
+                               last_activity=recent)
+        last_seen = {"s1": future}
+        assert session_activity(s, last_seen) == ThreadActivity.IDLE
+
+    def test_still_unread_if_seen_before_activity(self):
+        activity = datetime.now().astimezone().isoformat()
+        seen_before = (datetime.now().astimezone() - timedelta(minutes=5)).isoformat()
+        s = self._make_session(is_live=False, last_message_role="assistant",
+                               last_activity=activity)
+        last_seen = {"s1": seen_before}
+        assert session_activity(s, last_seen) == ThreadActivity.RESPONSE_FRESH
+
+
+class TestThreadActivity:
+    def _make_session(self, **kwargs):
+        defaults = dict(session_id="s1", project_dir="d", project_path="/p",
+                        message_count=5, total_input_tokens=1000,
+                        total_output_tokens=500, model="claude-opus-4-6",
+                        started_at="2026-03-20T10:00:00Z",
+                        last_activity="2026-03-20T10:05:00Z")
+        defaults.update(kwargs)
+        return ClaudeSession(**defaults)
+
+    def test_thinking_thread(self):
+        t = Thread(thread_id="t1", name="test", project_path="/p",
+                   sessions=[self._make_session(is_live=True, last_message_role="user")])
+        assert t.activity == ThreadActivity.THINKING
+
+    def test_awaiting_input_thread(self):
+        t = Thread(thread_id="t1", name="test", project_path="/p",
+                   sessions=[self._make_session(is_live=True, last_message_role="assistant",
+                                                last_stop_reason="end_turn")])
+        assert t.activity == ThreadActivity.AWAITING_INPUT
+
+    def test_thinking_thread_when_assistant_tool_use(self):
+        t = Thread(thread_id="t1", name="test", project_path="/p",
+                   sessions=[self._make_session(is_live=True, last_message_role="assistant",
+                                                last_stop_reason="tool_use")])
+        assert t.activity == ThreadActivity.THINKING
+
+    def test_idle_thread(self):
+        t = Thread(thread_id="t1", name="test", project_path="/p",
+                   sessions=[self._make_session(is_live=False, last_message_role="user")])
+        assert t.activity == ThreadActivity.IDLE
+
+    def test_unread_thread(self):
+        old = (datetime.now().astimezone() - timedelta(hours=2)).isoformat()
+        t = Thread(thread_id="t1", name="test", project_path="/p",
+                   sessions=[self._make_session(is_live=False, last_message_role="assistant",
+                                                last_activity=old)])
+        assert t.activity == ThreadActivity.RESPONSE_READY
+
+    def test_fresh_unread_thread(self):
+        recent = datetime.now().astimezone().isoformat()
+        t = Thread(thread_id="t1", name="test", project_path="/p",
+                   sessions=[self._make_session(is_live=False, last_message_role="assistant",
+                                                last_activity=recent)])
+        assert t.activity == ThreadActivity.RESPONSE_FRESH
+
+    def test_seen_thread_is_idle(self):
+        recent = datetime.now().astimezone().isoformat()
+        future = (datetime.now().astimezone() + timedelta(minutes=1)).isoformat()
+        t = Thread(thread_id="t1", name="test", project_path="/p",
+                   sessions=[self._make_session(is_live=False, last_message_role="assistant",
+                                                last_activity=recent)],
+                   _last_seen={"t1": future})
+        assert t.activity == ThreadActivity.IDLE
+
+    def test_empty_thread_is_idle(self):
+        t = Thread(thread_id="t1", name="test", project_path="/p", sessions=[])
+        assert t.activity == ThreadActivity.IDLE

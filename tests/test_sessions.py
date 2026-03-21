@@ -11,6 +11,7 @@ from sessions import (
     _decode_project_dir,
     get_live_session_ids,
     parse_session,
+    refresh_session_tail,
     discover_sessions,
     find_session,
     sessions_for_project,
@@ -149,6 +150,94 @@ class TestParseSession:
         session = parse_session(bad)
         assert session is not None  # Should handle gracefully
         assert session.message_count == 0
+
+    def test_parse_tracks_last_user_message_at(self, tmp_path):
+        f = tmp_path / "projects" / "test" / "session.jsonl"
+        f.parent.mkdir(parents=True)
+        lines = [
+            json.dumps({"type": "user", "timestamp": "2026-03-20T10:00:00Z"}),
+            json.dumps({"type": "assistant", "message": {"model": "claude-opus-4-6",
+                        "usage": {"input_tokens": 100, "output_tokens": 50}},
+                        "timestamp": "2026-03-20T10:01:00Z"}),
+            json.dumps({"type": "user", "timestamp": "2026-03-20T10:02:00Z"}),
+            json.dumps({"type": "assistant", "message": {"model": "claude-opus-4-6",
+                        "usage": {"input_tokens": 100, "output_tokens": 50}},
+                        "timestamp": "2026-03-20T10:03:00Z"}),
+        ]
+        f.write_text("\n".join(lines) + "\n")
+        session = parse_session(f)
+        assert session.last_user_message_at == "2026-03-20T10:02:00Z"
+        assert session.last_activity == "2026-03-20T10:03:00Z"
+
+
+# ─── Tail Refresh ──────────────────────────────────────────────────
+
+class TestRefreshSessionTail:
+    def _write_jsonl(self, path, lines):
+        path.write_text("\n".join(json.dumps(l) for l in lines) + "\n")
+
+    def test_detects_role_change(self, tmp_path):
+        f = tmp_path / "s.jsonl"
+        self._write_jsonl(f, [
+            {"type": "user", "timestamp": "2026-03-20T10:00:00Z"},
+            {"type": "assistant", "message": {"usage": {}}, "timestamp": "2026-03-20T10:01:00Z"},
+        ])
+        s = ClaudeSession(session_id="s", project_dir="d", project_path="/p",
+                          jsonl_path=str(f), last_message_role="user",
+                          last_activity="2026-03-20T10:00:00Z")
+        changed = refresh_session_tail(s)
+        assert changed is True
+        assert s.last_message_role == "assistant"
+        assert s.last_activity == "2026-03-20T10:01:00Z"
+
+    def test_tracks_last_user_message_at(self, tmp_path):
+        f = tmp_path / "s.jsonl"
+        self._write_jsonl(f, [
+            {"type": "user", "timestamp": "2026-03-20T10:00:00Z"},
+            {"type": "assistant", "message": {"usage": {}}, "timestamp": "2026-03-20T10:01:00Z"},
+            {"type": "user", "timestamp": "2026-03-20T10:02:00Z"},
+            {"type": "assistant", "message": {"usage": {}}, "timestamp": "2026-03-20T10:03:00Z"},
+        ])
+        s = ClaudeSession(session_id="s", project_dir="d", project_path="/p",
+                          jsonl_path=str(f), last_message_role="",
+                          last_activity="")
+        refresh_session_tail(s)
+        assert s.last_user_message_at == "2026-03-20T10:02:00Z"
+        assert s.last_activity == "2026-03-20T10:03:00Z"
+
+    def test_no_change_returns_false(self, tmp_path):
+        f = tmp_path / "s.jsonl"
+        self._write_jsonl(f, [
+            {"type": "user", "timestamp": "2026-03-20T10:00:00Z"},
+        ])
+        s = ClaudeSession(session_id="s", project_dir="d", project_path="/p",
+                          jsonl_path=str(f), last_message_role="user",
+                          last_activity="2026-03-20T10:00:00Z")
+        changed = refresh_session_tail(s)
+        assert changed is False
+
+    def test_missing_file_returns_false(self):
+        s = ClaudeSession(session_id="s", project_dir="d", project_path="/p",
+                          jsonl_path="/nonexistent/path.jsonl",
+                          last_message_role="user", last_activity="")
+        assert refresh_session_tail(s) is False
+
+    def test_reads_only_tail(self, tmp_path):
+        """With a large file, still correctly reads the last entries."""
+        f = tmp_path / "s.jsonl"
+        # Write a bunch of padding lines followed by the real data
+        lines = [{"type": "user", "timestamp": f"2026-03-20T09:{i:02d}:00Z"}
+                 for i in range(50)]
+        lines.append({"type": "assistant", "message": {"usage": {}},
+                       "timestamp": "2026-03-20T10:05:00Z"})
+        self._write_jsonl(f, lines)
+        s = ClaudeSession(session_id="s", project_dir="d", project_path="/p",
+                          jsonl_path=str(f), last_message_role="user",
+                          last_activity="2026-03-20T09:00:00Z")
+        changed = refresh_session_tail(s)
+        assert changed is True
+        assert s.last_message_role == "assistant"
+        assert s.last_activity == "2026-03-20T10:05:00Z"
 
 
 # ─── Session Discovery ──────────────────────────────────────────────

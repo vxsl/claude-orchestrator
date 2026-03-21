@@ -100,8 +100,10 @@ class Workstream:
     archived: bool = False
     origin: Origin = Origin.MANUAL
     thread_ids: list[str] = field(default_factory=list)
+    archived_thread_ids: list[str] = field(default_factory=list)
     created_at: str = field(default_factory=lambda: datetime.now().isoformat())
     updated_at: str = field(default_factory=lambda: datetime.now().isoformat())
+    last_user_activity: str = ""  # timestamp of last user message (for stable sorting)
     status_changed_at: str = field(default_factory=lambda: datetime.now().isoformat())
 
     def touch(self):
@@ -163,6 +165,8 @@ class Workstream:
         d.setdefault("origin", "manual")
         d["origin"] = Origin(d["origin"])
         d.setdefault("thread_ids", [])
+        d.setdefault("archived_thread_ids", [])
+        d.setdefault("last_user_activity", "")
         return cls(**d)
 
 
@@ -170,7 +174,10 @@ def _relative_time(iso_str: str) -> str:
     """Convert ISO timestamp to human-readable relative time."""
     try:
         dt = datetime.fromisoformat(iso_str)
-        delta = datetime.now() - dt
+        now = datetime.now().astimezone()
+        if dt.tzinfo is None:
+            dt = dt.astimezone()
+        delta = now - dt
         seconds = int(delta.total_seconds())
         if seconds < 0:
             return "just now"

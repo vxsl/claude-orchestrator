@@ -29,6 +29,42 @@ class ClaudeSession:
     model: str = ""
     jsonl_path: str = ""
     is_live: bool = False
+    last_message_role: str = ""  # "user" or "assistant" — last message type in JSONL
+    last_user_message_at: str = ""  # timestamp of last user message
+    last_stop_reason: str = ""   # "end_turn", "tool_use", etc. — from last assistant message
+    turn_complete: bool = False  # True when system:turn_duration logged after last user/assistant
+    all_session_ids: list[str] = field(default_factory=list)  # All sessionIds found in JSONL (for resume matching)
+
+    @property
+    def cost_display(self) -> str:
+        """Rough cost estimate based on model and token counts."""
+        # Per-1M-token pricing: (input, output)
+        pricing = {
+            "opus": (15.0, 75.0),
+            "sonnet": (3.0, 15.0),
+            "haiku": (0.80, 4.0),
+        }
+        model_key = ""
+        for k in pricing:
+            if k in self.model.lower():
+                model_key = k
+                break
+        if not model_key:
+            return "—"
+        inp_rate, out_rate = pricing[model_key]
+        cost = (self.total_input_tokens * inp_rate + self.total_output_tokens * out_rate) / 1_000_000
+        if cost < 0.01:
+            return "<$0.01"
+        if cost < 1.0:
+            return f"${cost:.2f}"
+        return f"${cost:.1f}"
+
+    @property
+    def model_short(self) -> str:
+        for k in ("opus", "sonnet", "haiku"):
+            if k in self.model.lower():
+                return k
+        return self.model[:12] if self.model else "—"
 
     @property
     def tokens_display(self) -> str:
@@ -158,9 +194,12 @@ def parse_session(jsonl_path: Path) -> Optional[ClaudeSession]:
                     if not session.session_id and data.get("sessionId"):
                         session.session_id = data["sessionId"]
 
-                # Extract session ID
-                if data.get("sessionId") and not session.session_id:
-                    session.session_id = data["sessionId"]
+                # Extract session ID (first one wins as primary, but track all for resume detection)
+                sid = data.get("sessionId", "")
+                if sid and not session.session_id:
+                    session.session_id = sid
+                if sid and sid not in session.all_session_ids:
+                    session.all_session_ids.append(sid)
 
                 # Track timestamps
                 ts = data.get("timestamp")
@@ -169,7 +208,18 @@ def parse_session(jsonl_path: Path) -> Optional[ClaudeSession]:
                         first_ts = ts
                     last_ts = ts
 
-                # Extract usage from assistant messages
+                # Track last message role (user or assistant)
+                if msg_type in ("user", "assistant"):
+                    session.last_message_role = msg_type
+                    session.turn_complete = False  # new message resets turn completion
+                    if msg_type == "user" and ts:
+                        session.last_user_message_at = ts
+
+                # system:turn_duration marks Claude finished its turn
+                if msg_type == "system" and data.get("subtype") == "turn_duration":
+                    session.turn_complete = True
+
+                # Extract usage and stop_reason from assistant messages
                 if msg_type == "assistant" and "message" in data:
                     session.message_count += 1
                     msg = data["message"]
@@ -178,6 +228,7 @@ def parse_session(jsonl_path: Path) -> Optional[ClaudeSession]:
                     session.total_input_tokens += usage.get("cache_creation_input_tokens", 0)
                     session.total_input_tokens += usage.get("cache_read_input_tokens", 0)
                     session.total_output_tokens += usage.get("output_tokens", 0)
+                    session.last_stop_reason = msg.get("stop_reason") or ""
                     if not session.model and msg.get("model"):
                         session.model = msg["model"]
 
@@ -190,11 +241,88 @@ def parse_session(jsonl_path: Path) -> Optional[ClaudeSession]:
     return session
 
 
+def refresh_session_tail(session: ClaudeSession, tail_bytes: int = 8192) -> bool:
+    """Re-read the tail of a session JSONL to update last_message_role and last_activity.
+
+    Only updates 'last wins' fields — cheap enough to call every few seconds
+    for live sessions. Returns True if any tracked field changed.
+    """
+    path = Path(session.jsonl_path)
+    if not path.exists():
+        return False
+
+    old_role = session.last_message_role
+    old_activity = session.last_activity
+    old_stop = session.last_stop_reason
+
+    try:
+        size = path.stat().st_size
+        offset = max(0, size - tail_bytes)
+
+        with open(path, "rb") as f:
+            if offset > 0:
+                f.seek(offset)
+                f.readline()  # skip partial first line
+            content = f.read().decode("utf-8", errors="replace")
+
+        for line in content.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                data = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+
+            ts = data.get("timestamp")
+            if ts:
+                session.last_activity = ts
+
+            msg_type = data.get("type", "")
+            if msg_type in ("user", "assistant"):
+                session.last_message_role = msg_type
+                session.turn_complete = False
+                if msg_type == "user" and ts:
+                    session.last_user_message_at = ts
+            if msg_type == "assistant" and "message" in data:
+                session.last_stop_reason = data["message"].get("stop_reason") or ""
+            if msg_type == "system" and data.get("subtype") == "turn_duration":
+                session.turn_complete = True
+
+            # Track new session IDs from resumed sessions
+            sid = data.get("sessionId", "")
+            if sid and sid not in session.all_session_ids:
+                session.all_session_ids.append(sid)
+
+    except OSError:
+        return False
+
+    return (session.last_message_role != old_role
+            or session.last_activity != old_activity
+            or session.last_stop_reason != old_stop)
+
+
+def _get_resumed_session_id(pid: int) -> str:
+    """Extract the original session ID from a --resume argument in /proc/PID/cmdline."""
+    try:
+        cmdline = Path(f"/proc/{pid}/cmdline").read_bytes().decode("utf-8", errors="replace")
+        args = cmdline.split("\x00")
+        for i, arg in enumerate(args):
+            if arg == "--resume" and i + 1 < len(args):
+                return args[i + 1]
+            if arg == "--session-id" and i + 1 < len(args):
+                return args[i + 1]
+    except OSError:
+        pass
+    return ""
+
+
 def get_live_session_ids() -> set[str]:
     """Read ~/.claude/sessions/*.json to find currently-running session IDs.
 
     Each file contains a JSON object with pid, sessionId, cwd, startedAt.
     We verify the PID is still alive before considering it live.
+    Also resolves --resume arguments so the original session ID is included.
     """
     live: set[str] = set()
     if not CLAUDE_SESSIONS_DIR.exists():
@@ -213,6 +341,10 @@ def get_live_session_ids() -> set[str]:
             try:
                 os.kill(pid, 0)
                 live.add(session_id)
+                # Also add the original session ID if this is a resumed session
+                original = _get_resumed_session_id(pid)
+                if original:
+                    live.add(original)
             except (OSError, ProcessLookupError):
                 pass
         except (OSError, json.JSONDecodeError):
@@ -252,7 +384,11 @@ def discover_sessions(
                 continue
             session = parse_session(jsonl_file)
             if session and session.message_count >= min_messages:
-                session.is_live = session.session_id in live_ids
+                # Match against all session IDs (handles resumed sessions
+                # where session file has a new ID but JSONL has the original)
+                session.is_live = bool(
+                    live_ids & (set(session.all_session_ids) | {session.session_id})
+                )
                 sessions.append(session)
 
     # Sort: live sessions first, then by last activity (most recent first)

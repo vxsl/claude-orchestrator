@@ -291,11 +291,14 @@ def get_discovered_workstreams(threads: list[Thread]) -> list[Workstream]:
 
             # Build the most recent activity timestamp
             last_activity = ""
+            last_user_act = ""
             for tid in thread_ids:
                 if tid in thread_map:
                     t = thread_map[tid]
                     if t.last_activity > last_activity:
                         last_activity = t.last_activity
+                    if t.last_user_activity > last_user_act:
+                        last_user_act = t.last_user_activity
 
             ws = Workstream(
                 id=ws_dict["id"],
@@ -307,6 +310,7 @@ def get_discovered_workstreams(threads: list[Thread]) -> list[Workstream]:
                 thread_ids=list(thread_ids),
                 created_at=ws_dict.get("created_at", ""),
                 updated_at=last_activity or ws_dict.get("updated_at", ""),
+                last_user_activity=last_user_act or last_activity or ws_dict.get("updated_at", ""),
             )
             # Inject live status as a dynamic attribute
             ws._is_live = is_live
