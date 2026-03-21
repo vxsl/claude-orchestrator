@@ -45,3 +45,17 @@ class TestOverrides:
         with patch("config.load_config", return_value={}):
             bindings = build_app_bindings()
             assert len(bindings) == len(DEFAULT_KEYS)
+
+
+class TestPanelNavigation:
+    def test_next_panel_default_key(self):
+        assert get_key("next_panel") == "ctrl+j"
+
+    def test_prev_panel_default_key(self):
+        assert get_key("prev_panel") == "ctrl+k"
+
+    def test_panel_bindings_in_app_bindings(self):
+        bindings = build_app_bindings()
+        actions = [b.action for b in bindings]
+        assert "next_panel" in actions
+        assert "prev_panel" in actions

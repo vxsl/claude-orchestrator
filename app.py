@@ -386,6 +386,49 @@ class OrchestratorApp(App):
 
     # ── Preview pane ──
 
+    # ── Panel navigation (Ctrl+j/k) ──
+
+    def _panel_cycle(self) -> list[str]:
+        """Widget IDs for the current view's focusable panels."""
+        table_id = {
+            ViewMode.WORKSTREAMS: "ws-table",
+            ViewMode.SESSIONS: "sessions-table",
+            ViewMode.ARCHIVED: "archived-table",
+        }.get(self.state.view_mode, "ws-table")
+        panels = [table_id]
+        if self.state.preview_visible:
+            panels.append("preview-sessions")
+        return panels
+
+    def _current_panel_index(self) -> int:
+        focused = self.focused
+        focused_id = focused.id if focused else ""
+        panels = self._panel_cycle()
+        for i, pid in enumerate(panels):
+            if focused_id == pid:
+                return i
+        return 0
+
+    def action_next_panel(self):
+        panels = self._panel_cycle()
+        if not panels:
+            return
+        idx = (self._current_panel_index() + 1) % len(panels)
+        try:
+            self.query_one(f"#{panels[idx]}").focus()
+        except Exception:
+            pass
+
+    def action_prev_panel(self):
+        panels = self._panel_cycle()
+        if not panels:
+            return
+        idx = (self._current_panel_index() - 1) % len(panels)
+        try:
+            self.query_one(f"#{panels[idx]}").focus()
+        except Exception:
+            pass
+
     def action_toggle_preview(self):
         pane = self.query_one("#preview-pane")
         self.state.preview_visible = not self.state.preview_visible

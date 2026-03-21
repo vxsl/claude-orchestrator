@@ -358,6 +358,38 @@ def _render_session_option(
     return f"{line1}\n{line2}"
 
 
+# ─── Notification Feed rendering ─────────────────────────────────
+
+def _render_notification_option(notif, max_width: int = 40) -> str:
+    """Render a notification as a formatted OptionList entry.
+
+    notif is a notifications.Notification (imported lazily to avoid circular deps).
+    Color-coded by freshness: fresh=green, recent=orange, old/dismissed=dim.
+    """
+    freshness = notif.freshness
+    if notif.dismissed:
+        color = C_DIM
+        icon = "·"
+    elif freshness == "fresh":
+        color = C_GREEN
+        icon = "●"
+    elif freshness == "recent":
+        color = C_ORANGE
+        icon = "●"
+    else:
+        color = C_DIM
+        icon = "○"
+
+    msg = notif.message[:max_width]
+    if len(notif.message) > max_width:
+        msg += "…"
+
+    age = _relative_time(notif.timestamp)
+    line1 = f" [{color}]{icon}[/{color}]  [{color}]{msg}[/{color}]"
+    line2 = f"      [{C_DIM}]{age} · {notif.title}[/{C_DIM}]"
+    return f"{line1}\n{line2}"
+
+
 # ─── Todo rendering ────────────────────────────────────────────────
 
 TODO_UNDONE_ICON = "\u25cb"   # ○

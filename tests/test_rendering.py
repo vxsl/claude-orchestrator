@@ -1,17 +1,20 @@
 """Tests for rendering.py — markup helpers, color functions, display formatting."""
 
 import pytest
+from datetime import datetime, timedelta, timezone
 from models import Category, Status, Workstream
 from sessions import ClaudeSession
 from threads import ThreadActivity
+from notifications import Notification
 from rendering import (
     ViewMode,
     _token_color, _colored_tokens, _token_color_markup,
     _status_markup, _category_markup,
     _ws_indicators, _short_project, _short_model,
     _activity_icon, _activity_badge, _best_activity,
+    _render_notification_option,
     _parse_worktree_display, _worktree_color, _WORKTREE_COLORS,
-    C_DIM, C_RED, C_ORANGE, C_LIGHT,
+    C_DIM, C_GREEN, C_ORANGE, C_RED, C_LIGHT,
 )
 
 
@@ -92,6 +95,35 @@ class TestWorktreeDisplay:
     def test_color_varies(self):
         colors = {_worktree_color(f"repo-{i}") for i in range(20)}
         assert len(colors) > 1
+
+
+class TestRenderNotificationOption:
+    def _notif(self, minutes_ago=5, dismissed=False, message="Fixed the parser"):
+        ts = (datetime.now(timezone.utc) - timedelta(minutes=minutes_ago)).isoformat()
+        return Notification(id="x", timestamp=ts, cwd="/foo", title="project",
+                            message=message, dismissed=dismissed)
+
+    def test_fresh_uses_green(self):
+        result = _render_notification_option(self._notif(minutes_ago=5))
+        assert C_GREEN in result
+        assert "●" in result
+
+    def test_recent_uses_orange(self):
+        result = _render_notification_option(self._notif(minutes_ago=120))
+        assert C_ORANGE in result
+
+    def test_dismissed_uses_dim(self):
+        result = _render_notification_option(self._notif(dismissed=True))
+        assert "·" in result
+
+    def test_truncates_long_message(self):
+        result = _render_notification_option(self._notif(message="x" * 100), max_width=20)
+        assert "…" in result
+
+    def test_two_lines(self):
+        result = _render_notification_option(self._notif())
+        assert "\n" in result
+        assert "project" in result  # title in second line
 
 
 class TestViewMode:

@@ -53,6 +53,9 @@ DEFAULT_KEYS: dict[str, tuple[str, str, bool, bool]] = {
     "sort('name')": ("f5", "", False, False),
     # Command palette
     "command_palette": ("colon", ":", True, False),
+    # Panel navigation
+    "next_panel": ("ctrl+j", "", False, True),
+    "prev_panel": ("ctrl+k", "", False, True),
     # Other
     "toggle_preview": ("p", "", False, False),
     "refresh": ("R", "", False, False),

@@ -463,6 +463,16 @@ class AppState:
         self.store.update(ws)
         return True
 
+    # ── Notifications ──
+
+    def notifications_for_ws(self, ws: Workstream) -> list:
+        """Get notifications matching this workstream's directories."""
+        from notifications import load_notifications, notifications_for_dirs
+        dirs = self._ws_dirs(ws)
+        if not dirs:
+            return []
+        return notifications_for_dirs(load_notifications(), dirs)
+
     # ── Session management ──
 
     def update_sessions(self, sessions: list[ClaudeSession],

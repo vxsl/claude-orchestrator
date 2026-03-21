@@ -48,11 +48,13 @@ from rendering import (
     _colored_tokens, _token_color_markup,
     _short_model, _short_project,
     _render_session_option, _session_title,
-    _render_todo_option, TODO_UNDONE_ICON, TODO_DONE_ICON,
+    _render_todo_option, _render_notification_option,
+    TODO_UNDONE_ICON, TODO_DONE_ICON,
 )
 from actions import (
     launch_orch_claude, ws_directories, resume_session_now, open_link,
 )
+from notifications import Notification, dismiss_notification, dismiss_all_for_dirs
 
 
 # ─── Messages ────────────────────────────────────────────────────────
@@ -742,6 +744,10 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         Binding("a", "archive_session", "Archive/restore", priority=True),
         Binding("h", "focus_sessions", show=False, priority=True),
         Binding("l", "focus_archived", show=False, priority=True),
+        Binding("d", "dismiss_notification", "Dismiss", show=False),
+        Binding("D", "dismiss_all_notifications", "Dismiss all", show=False),
+        Binding("ctrl+j", "next_panel", show=False, priority=True),
+        Binding("ctrl+k", "prev_panel", show=False, priority=True),
     ] + _VimOptionListMixin.VIM_BINDINGS
 
     DEFAULT_CSS = f"""
@@ -786,12 +792,37 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
     #detail-archived-pane {{
         display: none;
     }}
-    #detail-scroll {{
+    #detail-lower {{
         height: 1fr;
+    }}
+    #detail-scroll {{
+        width: 3fr;
         border-top: blank;
     }}
     #detail-body {{
         padding: 1 3;
+    }}
+    #detail-feed-pane {{
+        width: 2fr; min-width: 28;
+        border-left: blank;
+    }}
+    .detail-feed-label {{
+        padding: 0 3;
+        color: {C_BLUE};
+        text-style: bold;
+    }}
+    #detail-feed {{
+        height: auto;
+        margin: 0 1; padding: 0;
+        border: none;
+        background: {BG_BASE};
+    }}
+    #detail-feed > .option-list--option-highlighted {{
+        background: #252525;
+    }}
+    #detail-no-feed {{
+        padding: 1 3;
+        color: {C_DIM};
     }}
     #detail-help {{
         height: 1;
@@ -810,6 +841,7 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         self.store = store
         self._detail_sessions: list[ClaudeSession] = []
         self._archived_sessions: list[ClaudeSession] = []
+        self._feed_notifications: list[Notification] = []
         self._throbber_frame: int = 0
         self._last_seen_cache: dict[str, str] = {}
         self._active_pane: str = "sessions"
@@ -834,21 +866,30 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
                     yield OptionList(id="detail-archived")
                     yield Static(f"[{C_DIM}]Empty[/{C_DIM}]", id="detail-no-archived")
 
-            with VerticalScroll(id="detail-scroll"):
-                yield Static(self._render_body(), id="detail-body")
+            with Horizontal(id="detail-lower"):
+                with VerticalScroll(id="detail-scroll"):
+                    yield Static(self._render_body(), id="detail-body")
+                with Vertical(id="detail-feed-pane"):
+                    yield Static(self._render_feed_label(), id="detail-feed-label", classes="detail-feed-label")
+                    yield OptionList(id="detail-feed")
+                    yield Static(f"[{C_DIM}]No notifications[/{C_DIM}]", id="detail-no-feed")
 
             yield Static(self._render_help(), id="detail-help")
 
     def on_mount(self):
         self._last_seen_cache = load_last_seen()
         self._load_detail_sessions()
+        self._load_feed()
         self.query_one("#detail-sessions", OptionList).focus()
         self._throbber_timer = self.set_interval(0.3, self._tick_throbber)
         self.set_interval(3, self._refresh_session_liveness)
+        self.set_interval(10, self._poll_feed)
 
     def _focused_olist(self) -> OptionList:
         if self._active_pane == "archived":
             return self.query_one("#detail-archived", OptionList)
+        if self._active_pane == "feed":
+            return self.query_one("#detail-feed", OptionList)
         return self.query_one("#detail-sessions", OptionList)
 
     def _olist(self) -> OptionList:
@@ -871,14 +912,27 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
     def _update_pane_labels(self):
         sess_label = self.query_one("#detail-sessions-label", Static)
         arch_label = self.query_one("#detail-archived-label", Static)
+        feed_label = self.query_one("#detail-feed-label", Static)
         n_active = len(self._detail_sessions)
         n_archived = len(self._archived_sessions)
+        n_feed = len([n for n in self._feed_notifications if not n.dismissed])
+
         if self._active_pane == "sessions":
             sess_label.update(f"[bold {C_BLUE}]Sessions[/bold {C_BLUE}] [{C_DIM}]({n_active})[/{C_DIM}]")
-            arch_label.update(f"[{C_DIM}]Archived ({n_archived})[/{C_DIM}]")
         else:
             sess_label.update(f"[{C_DIM}]Sessions ({n_active})[/{C_DIM}]")
+
+        if self._active_pane == "archived":
             arch_label.update(f"[bold {C_BLUE}]Archived[/bold {C_BLUE}] [{C_DIM}]({n_archived})[/{C_DIM}]")
+        else:
+            arch_label.update(f"[{C_DIM}]Archived ({n_archived})[/{C_DIM}]")
+
+        if self._active_pane == "feed":
+            feed_label.update(f"[bold {C_BLUE}]Feed[/bold {C_BLUE}] [{C_DIM}]({n_feed})[/{C_DIM}]")
+        elif n_feed:
+            feed_label.update(f"[{C_DIM}]Feed[/{C_DIM}] [{C_GREEN}]({n_feed})[/{C_GREEN}]")
+        else:
+            feed_label.update(f"[{C_DIM}]Feed[/{C_DIM}]")
 
     def _refresh_session_liveness(self):
         from actions import refresh_liveness
@@ -1067,6 +1121,122 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
             olist.add_option(Option(prompt, id=f"a:{s.session_id}"))
         self._animating_archived = animating
 
+    # ── Feed (notification) panel ──
+
+    def _render_feed_label(self) -> str:
+        n = len([n for n in self._feed_notifications if not n.dismissed])
+        if n:
+            return f"[bold {C_BLUE}]Feed[/bold {C_BLUE}] [{C_DIM}]({n})[/{C_DIM}]"
+        return f"[bold {C_BLUE}]Feed[/bold {C_BLUE}]"
+
+    def _load_feed(self):
+        app = self.app
+        if hasattr(app, 'state'):
+            self._feed_notifications = app.state.notifications_for_ws(self.ws)
+        else:
+            self._feed_notifications = []
+
+        olist = self.query_one("#detail-feed", OptionList)
+        no_feed = self.query_one("#detail-no-feed", Static)
+
+        if self._feed_notifications:
+            olist.display = True
+            no_feed.display = False
+            old_idx = olist.highlighted
+            self._build_feed_list()
+            if old_idx is not None and old_idx < olist.option_count:
+                olist.highlighted = old_idx
+            elif olist.option_count > 0:
+                olist.highlighted = 0
+        else:
+            olist.display = False
+            no_feed.display = True
+            if self._active_pane == "feed":
+                self._active_pane = "sessions"
+                self.query_one("#detail-sessions", OptionList).focus()
+
+        self.query_one("#detail-feed-label", Static).update(self._render_feed_label())
+
+    def _build_feed_list(self):
+        olist = self.query_one("#detail-feed", OptionList)
+        olist.clear_options()
+        for notif in self._feed_notifications:
+            prompt = _render_notification_option(notif)
+            olist.add_option(Option(prompt, id=f"notif:{notif.id}"))
+
+    def _poll_feed(self):
+        self._load_feed()
+
+    def action_dismiss_notification(self):
+        if self._active_pane != "feed":
+            return
+        olist = self.query_one("#detail-feed", OptionList)
+        idx = olist.highlighted
+        if idx is None or idx >= len(self._feed_notifications):
+            return
+        notif = self._feed_notifications[idx]
+        if notif.dismissed:
+            return
+        dismiss_notification(notif.id)
+        notif.dismissed = True
+        self._load_feed()
+
+    def action_dismiss_all_notifications(self):
+        if self._active_pane != "feed":
+            return
+        dirs = set()
+        if hasattr(self.app, 'state'):
+            dirs = self.app.state._ws_dirs(self.ws)
+        if dirs:
+            dismiss_all_for_dirs(self._feed_notifications, dirs)
+        for n in self._feed_notifications:
+            n.dismissed = True
+        self._load_feed()
+
+    # ── Panel navigation (Ctrl+j/k) ──
+
+    def _panel_ids(self) -> list[str]:
+        """Focusable panel widget IDs, skipping empty ones."""
+        panels = ["detail-sessions"]
+        if self._archived_sessions:
+            panels.append("detail-archived")
+        panels.append("detail-scroll")
+        if self._feed_notifications:
+            panels.append("detail-feed")
+        return panels
+
+    _PANEL_ID_TO_NAME = {
+        "detail-sessions": "sessions",
+        "detail-archived": "archived",
+        "detail-scroll": "body",
+        "detail-feed": "feed",
+    }
+    _PANEL_NAME_TO_ID = {v: k for k, v in _PANEL_ID_TO_NAME.items()}
+
+    def action_next_panel(self):
+        panels = self._panel_ids()
+        current_id = self._PANEL_NAME_TO_ID.get(self._active_pane, "detail-sessions")
+        idx = panels.index(current_id) if current_id in panels else 0
+        next_id = panels[(idx + 1) % len(panels)]
+        self._active_pane = self._PANEL_ID_TO_NAME.get(next_id, "sessions")
+        try:
+            self.query_one(f"#{next_id}").focus()
+        except Exception:
+            pass
+        self._update_pane_labels()
+
+    def action_prev_panel(self):
+        panels = self._panel_ids()
+        current_id = self._PANEL_NAME_TO_ID.get(self._active_pane, "detail-sessions")
+        idx = panels.index(current_id) if current_id in panels else 0
+        prev_id = panels[(idx - 1) % len(panels)]
+        self._active_pane = self._PANEL_ID_TO_NAME.get(prev_id, "sessions")
+        try:
+            self.query_one(f"#{prev_id}").focus()
+        except Exception:
+            pass
+        self._update_pane_labels()
+
     def _find_session_by_id(self, sid: str) -> ClaudeSession | None:
         for s in self._detail_sessions:
             if s.session_id == sid:
@@ -1080,6 +1250,25 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         oid = event.option_id
         log.debug("option_selected: option_id=%r option_index=%r widget_id=%s",
                   oid, event.option_index, event.option_list.id if hasattr(event, 'option_list') else "?")
+
+        # Feed notification selected — jump to the matching session
+        if oid and oid.startswith("notif:"):
+            notif_id = oid.removeprefix("notif:")
+            notif = next((n for n in self._feed_notifications if n.id == notif_id), None)
+            if notif and notif.session_id:
+                session = self._find_session_by_id(notif.session_id)
+                if session:
+                    mark_thread_seen(session.session_id)
+                    dirs = ws_directories(self.ws)
+                    resume_session_now(self.ws, session, dirs, self.app)
+                    return
+            # No session to jump to — dismiss instead
+            if notif and not notif.dismissed:
+                dismiss_notification(notif.id)
+                notif.dismissed = True
+                self._load_feed()
+            return
+
         if oid is None:
             log.warning("option_selected: option_id is None! Falling back to index lookup")
             # Fallback: use index from the focused list
@@ -1164,7 +1353,8 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
             ("Enter", "resume"), ("s/S", "status"), ("c", "spawn"),
             ("n", "+todo"), ("e", "todos"),
             ("o", "open"), ("x", "archive ws"),
-            ("a", "archive/restore"), ("h/l", "panes"),
+            ("a", "archive/restore"),
+            ("^j/^k", "panels"), ("d/D", "dismiss"),
             ("q", "back"),
         ]
         return "  ".join(f"[{C_YELLOW}]{k}[/{C_YELLOW}] {v}" for k, v in pairs)
@@ -1174,6 +1364,7 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         self.query_one("#detail-meta", Static).update(self._render_meta())
         self.query_one("#detail-body", Static).update(self._render_body())
         self._load_detail_sessions()
+        self._load_feed()
 
     def action_cycle_status(self):
         statuses = list(Status)
