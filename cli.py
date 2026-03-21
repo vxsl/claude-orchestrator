@@ -208,7 +208,7 @@ def cmd_tui(args):
     log_file.parent.mkdir(parents=True, exist_ok=True)
     logging.basicConfig(
         filename=str(log_file),
-        level=logging.DEBUG,
+        level=logging.WARNING,
         format="%(asctime)s %(name)s %(levelname)s %(message)s",
         datefmt="%H:%M:%S",
     )
