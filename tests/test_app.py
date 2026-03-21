@@ -736,6 +736,22 @@ class TestHierarchyNavigation:
             await pilot.press("backspace")
             assert pilot.app.screen.__class__.__name__ == screen_before
 
+    async def test_backspace_after_search_dismisses_detail(self, app_with_store):
+        """Regression: backspace must exit detail after search cancel, not get stuck."""
+        async with app_with_store.run_test(size=(120, 40)) as pilot:
+            from screens import DetailScreen
+            # Enter detail
+            await pilot.press("ctrl+l")
+            assert isinstance(pilot.app.screen, DetailScreen)
+            # Open search, type, then backspace to empty and cancel
+            await pilot.press("/")
+            await pilot.press("a")
+            await pilot.press("backspace")  # delete 'a'
+            await pilot.press("backspace")  # empty → cancel search
+            # Now backspace should dismiss detail
+            await pilot.press("backspace")
+            assert not isinstance(pilot.app.screen, DetailScreen)
+
 
 class TestBackspaceBindingOnScreens:
     """Regression: backspace must be a screen-level BINDING, not just app.on_key().

@@ -66,6 +66,26 @@ class SessionsChanged(Message):
     pass
 
 
+class _SearchInput(Input):
+    """Search input that cancels on backspace-when-empty or Escape."""
+
+    BINDINGS = [
+        Binding("escape", "cancel_search", "Cancel", priority=True),
+        Binding("backspace", "backspace_or_cancel", "Back", priority=True),
+    ]
+
+    def action_cancel_search(self):
+        screen = self.screen
+        if hasattr(screen, '_cancel_search'):
+            screen._cancel_search()
+
+    def action_backspace_or_cancel(self):
+        if not self.value:
+            self.action_cancel_search()
+        else:
+            self.action_delete_left()
+
+
 # ─── Help Screen ────────────────────────────────────────────────────
 
 class HelpScreen(ModalScreen[None]):
@@ -967,7 +987,7 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
             with Horizontal(id="detail-lists"):
                 with Vertical(id="detail-sessions-pane", classes="detail-list-pane"):
                     yield Static(f"[bold {C_BLUE}]Sessions[/bold {C_BLUE}]", id="detail-sessions-label", classes="detail-list-label")
-                    yield Input(placeholder="search...", id="detail-search-input")
+                    yield _SearchInput(placeholder="search...", id="detail-search-input")
                     yield OptionList(id="detail-sessions")
                     yield Static(f"[{C_DIM}]No sessions[/{C_DIM}]", id="detail-no-sessions")
                 with Vertical(id="detail-archived-pane", classes="detail-list-pane"):
@@ -1504,7 +1524,7 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
     def _search_is_active(self) -> bool:
         """Return True if the search input is visible (search mode)."""
         try:
-            return self.query_one("#detail-search-input", Input).has_class("visible")
+            return self.query_one("#detail-search-input", _SearchInput).has_class("visible")
         except Exception:
             return False
 
@@ -1528,7 +1548,7 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
 
     def _update_help_bar(self):
         help_bar = self.query_one("#detail-help", Static)
-        search_input = self.query_one("#detail-search-input", Input)
+        search_input = self.query_one("#detail-search-input", _SearchInput)
         if search_input.has_class("visible") and not search_input.has_focus:
             # Viewing search results — show navigation hints
             pairs = [
@@ -1543,13 +1563,13 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
     def _search_text(self) -> str:
         """Current search query from the Input widget."""
         try:
-            return self.query_one("#detail-search-input", Input).value
+            return self.query_one("#detail-search-input", _SearchInput).value
         except Exception:
             return ""
 
     def action_search(self):
         """Show the search input and focus it."""
-        search_input = self.query_one("#detail-search-input", Input)
+        search_input = self.query_one("#detail-search-input", _SearchInput)
         search_input.add_class("visible")
         search_input.focus()
         # Start warming the content cache in background
@@ -1558,7 +1578,7 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
 
     def _cancel_search(self):
         """Hide search input and restore normal session lists."""
-        search_input = self.query_one("#detail-search-input", Input)
+        search_input = self.query_one("#detail-search-input", _SearchInput)
         search_input.value = ""
         search_input.remove_class("visible")
         self._content_search_active = False
@@ -1604,13 +1624,9 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
 
     def on_key(self, event) -> None:
         """Handle special keys in search input."""
-        search_input = self.query_one("#detail-search-input", Input)
+        search_input = self.query_one("#detail-search-input", _SearchInput)
         if search_input.has_focus:
-            if event.key == "escape":
-                event.stop()
-                event.prevent_default()
-                self._cancel_search()
-            elif event.key == "down":
+            if event.key == "down":
                 event.stop()
                 event.prevent_default()
                 self._focus_search_results()
