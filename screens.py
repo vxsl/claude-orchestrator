@@ -242,7 +242,7 @@ class TodoScreen(_VimOptionListMixin, ModalScreen[None]):
         Binding("x", "archive_todo", "Archive/Restore"),
         Binding("c", "spawn_todo", "Spawn"),
         Binding("d", "delete_todo", "Delete"),
-        Binding("ctrl+e", "edit_context", "Edit context"),
+        Binding("E", "edit_context", "Edit context"),
         Binding("K", "move_up", "Move \u2191", show=False),
         Binding("J", "move_down", "Move \u2193", show=False),
         Binding("h", "focus_active", show=False, priority=True),
@@ -450,7 +450,7 @@ class TodoScreen(_VimOptionListMixin, ModalScreen[None]):
                 preview += f"\n[{C_DIM}]...[/{C_DIM}]"
             ctx_widget.update(f"[{C_BLUE}]Context:[/{C_BLUE}] {preview}")
         elif item:
-            ctx_widget.update(f"[{C_DIM}]No context \u2014 Ctrl+E to add[/{C_DIM}]")
+            ctx_widget.update(f"[{C_DIM}]No context \u2014 E to add[/{C_DIM}]")
         else:
             ctx_widget.update("")
 
@@ -476,7 +476,7 @@ class TodoScreen(_VimOptionListMixin, ModalScreen[None]):
     def _render_help(self) -> str:
         pairs = [
             ("a", "add"), ("Enter", "done"), ("e", "edit"), ("c", "spawn"),
-            ("x", "archive"), ("d", "delete"), ("Ctrl+E", "context"),
+            ("x", "archive"), ("d", "delete"), ("E", "context"),
             ("J/K", "reorder"), ("h/l", "panes"), ("q", "back"),
         ]
         return "  ".join(f"[{C_YELLOW}]{k}[/{C_YELLOW}] {v}" for k, v in pairs)
