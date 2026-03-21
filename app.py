@@ -588,9 +588,9 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         Binding("e", "edit_notes", "Edit notes"),
         Binding("o", "open_links", "Open links"),
         Binding("x", "archive", "Archive"),
-        Binding("a", "archive_thread", "Archive/restore"),
-        Binding("h", "focus_sessions", show=False),
-        Binding("l", "focus_archived", show=False),
+        Binding("a", "archive_thread", "Archive/restore", priority=True),
+        Binding("h", "focus_sessions", show=False, priority=True),
+        Binding("l", "focus_archived", show=False, priority=True),
     ] + _VimOptionListMixin.VIM_BINDINGS
 
     DEFAULT_CSS = f"""
