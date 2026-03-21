@@ -100,7 +100,8 @@ class Workstream:
     archived: bool = False
     origin: Origin = Origin.MANUAL
     thread_ids: list[str] = field(default_factory=list)
-    archived_thread_ids: list[str] = field(default_factory=list)
+    archived_thread_ids: list[str] = field(default_factory=list)  # deprecated, kept for compat
+    archived_session_ids: list[str] = field(default_factory=list)
     created_at: str = field(default_factory=lambda: datetime.now().isoformat())
     updated_at: str = field(default_factory=lambda: datetime.now().isoformat())
     last_user_activity: str = ""  # timestamp of last user message (for stable sorting)
@@ -166,6 +167,7 @@ class Workstream:
         d["origin"] = Origin(d["origin"])
         d.setdefault("thread_ids", [])
         d.setdefault("archived_thread_ids", [])
+        d.setdefault("archived_session_ids", [])
         d.setdefault("last_user_activity", "")
         return cls(**d)
 

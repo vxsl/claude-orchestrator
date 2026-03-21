@@ -712,14 +712,13 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
     def _load_detail_sessions(self):
         app = self.app
         if hasattr(app, '_sessions_for_ws'):
-            # Always fetch ALL sessions, then partition locally so
-            # archived / non-archived are true complements.
+            # Fetch ALL sessions, then partition by archived_session_ids.
             all_sessions = app._sessions_for_ws(self.ws, include_archived_threads=True)
-            archived_sids = self._archived_session_ids()
+            hidden = set(self.ws.archived_session_ids)
             if self._show_archived_threads:
-                self._detail_sessions = [s for s in all_sessions if s.session_id in archived_sids]
+                self._detail_sessions = [s for s in all_sessions if s.session_id in hidden]
             else:
-                self._detail_sessions = [s for s in all_sessions if s.session_id not in archived_sids]
+                self._detail_sessions = [s for s in all_sessions if s.session_id not in hidden]
         else:
             self._detail_sessions = _find_sessions_for_ws(self.ws, getattr(app, 'sessions', []))
         olist = self.query_one("#detail-sessions", OptionList)
@@ -727,7 +726,7 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
 
         # Update label to show archived count
         label = self.query_one("#detail-sessions-label", Static)
-        archived_count = len(self.ws.archived_thread_ids)
+        archived_count = len(self.ws.archived_session_ids)
         if self._show_archived_threads and archived_count:
             label.update(f"[bold {C_BLUE}]Archived Sessions[/bold {C_BLUE}]")
         elif archived_count:
@@ -745,20 +744,6 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
             olist.display = False
             no_sess.display = True
 
-    def _archived_session_ids(self) -> set[str]:
-        """Get session IDs belonging to archived threads (cached per rebuild)."""
-        if not self.ws.archived_thread_ids:
-            return set()
-        app = self.app
-        if not hasattr(app, 'threads'):
-            return set()
-        archived_tids = set(self.ws.archived_thread_ids)
-        sids = set()
-        for t in app.threads:
-            if t.thread_id in archived_tids:
-                for s in t.sessions:
-                    sids.add(s.session_id)
-        return sids
 
     def _build_session_list(self):
         """Full rebuild of the session OptionList."""
@@ -901,36 +886,31 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         return None
 
     def action_archive_thread(self):
-        """Archive the thread containing the currently selected session."""
+        """Archive/unarchive the currently selected session."""
         olist = self.query_one("#detail-sessions", OptionList)
         idx = olist.highlighted
         if idx is None or idx >= len(self._detail_sessions):
             return
         session = self._detail_sessions[idx]
-        tid = self._thread_for_session(session)
-        if not tid:
-            self.app.notify("Could not find thread", severity="warning", timeout=2)
-            return
+        sid = session.session_id
         old_idx = olist.highlighted
-        if self._show_archived_threads and tid in self.ws.archived_thread_ids:
-            # Unarchive
-            self.ws.archived_thread_ids.remove(tid)
+        if self._show_archived_threads and sid in self.ws.archived_session_ids:
+            self.ws.archived_session_ids.remove(sid)
             self.store.update(self.ws)
-            self.app.notify("Thread unarchived", timeout=2)
-        elif tid not in self.ws.archived_thread_ids:
-            self.ws.archived_thread_ids.append(tid)
+            self.app.notify("Session restored", timeout=2)
+        elif sid not in self.ws.archived_session_ids:
+            self.ws.archived_session_ids.append(sid)
             self.store.update(self.ws)
-            self.app.notify("Thread archived", timeout=2)
+            self.app.notify("Session archived", timeout=2)
         self._refresh()
-        # Restore cursor to nearest valid position
         olist = self.query_one("#detail-sessions", OptionList)
         if self._detail_sessions and old_idx is not None:
             olist.highlighted = min(old_idx, len(self._detail_sessions) - 1)
 
     def action_toggle_archived_threads(self):
-        """Toggle showing archived threads in the session list."""
-        if not self.ws.archived_thread_ids:
-            self.app.notify("No archived threads", timeout=2)
+        """Toggle showing archived sessions in the session list."""
+        if not self.ws.archived_session_ids:
+            self.app.notify("No archived sessions", timeout=2)
             return
         self._show_archived_threads = not self._show_archived_threads
         self._refresh()
@@ -2056,7 +2036,7 @@ class OrchestratorApp(App):
             lines.append(f"  [{C_DIM}]Last active[/{C_DIM}] {last_active}")
             lines.append("")
 
-            archived_count = len(ws.archived_thread_ids)
+            archived_count = len(ws.archived_session_ids)
             if archived_count:
                 lines.append(f"[bold {C_BLUE}]Sessions[/bold {C_BLUE}]  [{C_DIM}]({archived_count} archived)[/{C_DIM}]")
             else:
@@ -2467,10 +2447,10 @@ class OrchestratorApp(App):
     def _sessions_for_ws(self, ws: Workstream, include_archived_threads: bool = False) -> list[ClaudeSession]:
         """Find sessions for a workstream via thread_ids or directory matching.
 
-        By default, sessions belonging to archived threads are excluded.
+        By default, individually archived sessions (archived_session_ids) are excluded.
         Pass include_archived_threads=True to get everything.
         """
-        archived_tids = set(ws.archived_thread_ids) if not include_archived_threads else set()
+        hidden_sids = set(ws.archived_session_ids) if not include_archived_threads else set()
 
         # Build effective thread list — use explicit thread_ids if available,
         # otherwise derive from directory-matched threads (manual workstreams).
@@ -2494,8 +2474,6 @@ class OrchestratorApp(App):
                         ):
                             matched.add(t.thread_id)
                             break
-            # Include archived thread IDs so Path A can skip them properly
-            matched.update(ws.archived_thread_ids)
             effective_tids = list(matched)
 
         if effective_tids:
@@ -2503,12 +2481,10 @@ class OrchestratorApp(App):
             sessions = []
             seen = set()
             for tid in effective_tids:
-                if tid in archived_tids:
-                    continue
                 t = thread_map.get(tid)
                 if t:
                     for s in t.sessions:
-                        if s.session_id not in seen:
+                        if s.session_id not in seen and s.session_id not in hidden_sids:
                             sessions.append(s)
                             seen.add(s.session_id)
             sessions.sort(key=lambda s: s.last_activity or "", reverse=True)
@@ -2516,23 +2492,6 @@ class OrchestratorApp(App):
 
         # Fallback when no threads loaded yet
         return _find_sessions_for_ws(ws, self.sessions)
-
-    def _archived_sessions_for_ws(self, ws: Workstream) -> list[ClaudeSession]:
-        """Find sessions from archived threads only."""
-        if not ws.archived_thread_ids:
-            return []
-        thread_map = {t.thread_id: t for t in self.threads}
-        sessions = []
-        seen = set()
-        for tid in ws.archived_thread_ids:
-            t = thread_map.get(tid)
-            if t:
-                for s in t.sessions:
-                    if s.session_id not in seen:
-                        sessions.append(s)
-                        seen.add(s.session_id)
-        sessions.sort(key=lambda s: s.last_activity or "", reverse=True)
-        return sessions
 
     # ── Sessions & threads loading ──
 
