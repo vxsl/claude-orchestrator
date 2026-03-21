@@ -145,6 +145,27 @@ def _repo_label(repo_path: str) -> str:
     return f"[{C_DIM}]{name}[/{C_DIM}]"
 
 
+def _worktree_label(ws: Workstream) -> str:
+    """Best directory label for a workstream: worktree link > repo_path > empty.
+
+    Prefers worktree links because they're more specific (e.g. 'ul.UB-6668-...'
+    vs just 'ul' from repo_path).
+    """
+    import os
+    for link in ws.links:
+        if link.kind == "worktree":
+            expanded = os.path.expanduser(link.value).rstrip("/")
+            return Path(expanded).name
+    if ws.repo_path:
+        return Path(ws.repo_path).name
+    for link in ws.links:
+        if link.kind == "file":
+            expanded = os.path.expanduser(link.value).rstrip("/")
+            if os.path.isdir(expanded):
+                return Path(expanded).name
+    return ""
+
+
 def _short_model(model: str) -> str:
     lower = model.lower()
     if "opus" in lower:
@@ -258,7 +279,7 @@ def _render_session_option(
     line1 = f" {icon}  {title_fmt}{badge_part}"
     line2 = (
         f"      [{C_DIM}]{model} · {s.message_count} msgs · "
-        f"[/{C_DIM}]{tokens}[{C_DIM}] tok · {s.age}[/{C_DIM}]"
+        f"[/{C_DIM}]{tokens}[{C_DIM}] · {s.age}[/{C_DIM}]"
     )
     # Third line: last message snippet — styled by activity state
     if s.last_message_text:
