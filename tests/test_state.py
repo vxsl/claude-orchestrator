@@ -4,9 +4,11 @@ These tests are fast, synchronous, and don't touch Textual at all.
 This is where the high-value regression protection lives.
 """
 
+import json
 import pytest
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from unittest.mock import patch
 
 from models import Category, Link, Status, Store, TodoItem, Workstream, Origin
 from sessions import ClaudeSession
@@ -862,3 +864,56 @@ class TestRepoLinking:
         count = state.infer_repo_paths()
         assert count == 0
         assert state.store.get(ws.id).repo_path == ""
+
+
+# ─── Notification integration ────────────────────────────────────────
+
+class TestNotificationsForWs:
+    def _make_jsonl(self, tmp_path, entries):
+        f = tmp_path / "notifications.jsonl"
+        lines = []
+        for e in entries:
+            ts = (datetime.now(timezone.utc) - timedelta(minutes=e.get("minutes_ago", 5))).isoformat()
+            lines.append(json.dumps({
+                "timestamp": ts,
+                "cwd": e["cwd"],
+                "title": e.get("title", "test"),
+                "message": e.get("message", "done"),
+                "session_id": e.get("session_id", ""),
+            }))
+        f.write_text("\n".join(lines) + "\n")
+        return f
+
+    def test_returns_matching_notifications(self, state, tmp_path):
+        d = tmp_path / "myproject"
+        d.mkdir()
+        ws = Workstream(name="test", repo_path=str(d))
+        state.store.add(ws)
+        jsonl = self._make_jsonl(tmp_path, [
+            {"cwd": str(d), "message": "matched"},
+            {"cwd": "/other/project", "message": "not matched"},
+        ])
+        with patch("notifications.NOTIFICATIONS_FILE", jsonl), \
+             patch("notifications.DISMISSED_FILE", tmp_path / "dismissed.json"):
+            result = state.notifications_for_ws(ws)
+        assert len(result) == 1
+        assert result[0].message == "matched"
+
+    def test_returns_empty_for_no_dirs(self, state, tmp_path):
+        ws = Workstream(name="no-dirs")
+        state.store.add(ws)
+        assert state.notifications_for_ws(ws) == []
+
+    def test_matches_worktree_link_dirs(self, state, tmp_path):
+        d = tmp_path / "worktree"
+        d.mkdir()
+        ws = Workstream(name="linked")
+        ws.add_link(kind="worktree", value=str(d), label="wt")
+        state.store.add(ws)
+        jsonl = self._make_jsonl(tmp_path, [
+            {"cwd": str(d), "message": "from worktree"},
+        ])
+        with patch("notifications.NOTIFICATIONS_FILE", jsonl), \
+             patch("notifications.DISMISSED_FILE", tmp_path / "dismissed.json"):
+            result = state.notifications_for_ws(ws)
+        assert len(result) == 1

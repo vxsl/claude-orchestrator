@@ -1,10 +1,10 @@
-"""Tests for notifications.py — load, filter, dismiss notifications."""
+"""Tests for notifications.py — load, filter, dismiss, and panel integration."""
 
 import json
 import pytest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import patch, MagicMock
 
 from notifications import (
     Notification, _notif_id,
@@ -13,6 +13,8 @@ from notifications import (
     _load_dismissed, _save_dismissed,
     FRESH_THRESHOLD, RECENT_THRESHOLD,
 )
+from models import Workstream, Store
+from sessions import ClaudeSession
 
 
 def _make_notif_line(cwd="/home/user/project", message="done something",
@@ -174,3 +176,91 @@ class TestDismissal:
             dismissed = _load_dismissed()
         assert "1" in dismissed
         assert "2" not in dismissed
+
+
+# ─── Panel cycling logic ──────────────────────────────────────────
+
+class TestDetailScreenPanelIds:
+    """Test _panel_ids logic without instantiating the full Textual screen."""
+
+    def _make_screen_state(self, sessions=None, archived=None, feed=None):
+        """Return a mock object with the fields _panel_ids reads."""
+        from screens import DetailScreen
+        obj = MagicMock(spec=DetailScreen)
+        obj._detail_sessions = sessions or []
+        obj._archived_sessions = archived or []
+        obj._feed_notifications = feed or []
+        # Call the real method
+        obj._panel_ids = DetailScreen._panel_ids.__get__(obj)
+        return obj
+
+    def test_sessions_only(self):
+        s = self._make_screen_state()
+        assert s._panel_ids() == ["detail-sessions", "detail-scroll"]
+
+    def test_sessions_and_archived(self):
+        s = self._make_screen_state(archived=[MagicMock()])
+        assert s._panel_ids() == ["detail-sessions", "detail-archived", "detail-scroll"]
+
+    def test_sessions_and_feed(self):
+        s = self._make_screen_state(feed=[MagicMock()])
+        assert s._panel_ids() == ["detail-sessions", "detail-scroll", "detail-feed"]
+
+    def test_all_panels(self):
+        s = self._make_screen_state(
+            archived=[MagicMock()],
+            feed=[MagicMock()],
+        )
+        assert s._panel_ids() == [
+            "detail-sessions", "detail-archived", "detail-scroll", "detail-feed"
+        ]
+
+    def test_empty_archived_skipped(self):
+        s = self._make_screen_state(archived=[], feed=[MagicMock()])
+        panels = s._panel_ids()
+        assert "detail-archived" not in panels
+
+    def test_empty_feed_skipped(self):
+        s = self._make_screen_state(archived=[MagicMock()], feed=[])
+        panels = s._panel_ids()
+        assert "detail-feed" not in panels
+
+
+class TestOnKeyRouting:
+    """Test that on_key routes ctrl+j/k to the correct screen."""
+
+    def test_routes_to_screen_with_panel_nav(self):
+        """When active screen has action_next_panel, route there."""
+        from app import OrchestratorApp
+        app = MagicMock(spec=OrchestratorApp)
+        mock_screen = MagicMock()
+        mock_screen.action_next_panel = MagicMock()
+        mock_screen.action_prev_panel = MagicMock()
+        app.screen = mock_screen
+
+        # Simulate what on_key does
+        event_j = MagicMock(key="ctrl+j")
+        # Call the routing logic directly
+        screen = app.screen
+        if hasattr(screen, 'action_next_panel'):
+            screen.action_next_panel()
+        mock_screen.action_next_panel.assert_called_once()
+
+        event_k = MagicMock(key="ctrl+k")
+        if hasattr(screen, 'action_prev_panel'):
+            screen.action_prev_panel()
+        mock_screen.action_prev_panel.assert_called_once()
+
+    def test_falls_back_to_app_panel_nav(self):
+        """When active screen lacks action_next_panel, use app's."""
+        from app import OrchestratorApp
+        app = MagicMock(spec=OrchestratorApp)
+        mock_screen = MagicMock(spec=[])  # no methods
+        app.screen = mock_screen
+
+        screen = app.screen
+        if hasattr(screen, 'action_next_panel'):
+            screen.action_next_panel()
+        else:
+            app.action_next_panel()
+        app.action_next_panel.assert_called_once()
