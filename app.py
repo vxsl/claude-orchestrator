@@ -26,6 +26,7 @@ from textual.widgets import (
 )
 from textual.widgets.option_list import Option
 
+from config import build_app_bindings
 from models import (
     Category, Link, Origin, Status, Store, Workstream,
     STATUS_ICONS, _relative_time,
@@ -151,62 +152,7 @@ class OrchestratorApp(App):
     CSS_PATH = "orchestrator.tcss"
     theme = "mellow"
 
-    BINDINGS = [
-        # Navigation
-        Binding("j,down", "cursor_down", "Down", show=False),
-        Binding("k,up", "cursor_up", "Up", show=False),
-        Binding("ctrl+n", "cursor_down", "Down", show=False),
-        Binding("ctrl+p", "cursor_up", "Up", show=False),
-        Binding("g", "cursor_top", "Top", show=False),
-        Binding("G", "cursor_bottom", "Bottom", show=False),
-        Binding("ctrl+d", "half_page_down", "\u00bdPgDn", show=False),
-        Binding("ctrl+u", "half_page_up", "\u00bdPgUp", show=False),
-        Binding("enter", "select_item", "Open", show=True),
-
-        # View switching
-        Binding("tab", "next_view", "Tab", show=True, priority=True),
-        Binding("shift+tab", "prev_view", show=False, priority=True),
-
-        # Actions
-        Binding("a", "add", "Add", show=True),
-        Binding("b", "brain_dump", "Brain", show=False),
-        Binding("s", "cycle_status", "Status", show=True),
-        Binding("S", "cycle_status_back", "Status\u2190", show=False),
-        Binding("c", "spawn", "Spawn", show=True),
-        Binding("r", "resume", "Resume", show=True),
-        Binding("l", "link_action", "Link", show=True),
-        Binding("n", "quick_note", show=False),
-        Binding("e", "edit_notes", show=False),
-        Binding("E", "rename", show=False),
-        Binding("o", "open_links", show=False),
-        Binding("x", "archive", show=False),
-        Binding("d", "delete_item", show=False),
-        Binding("u", "unarchive", show=False),
-
-        # Filters
-        Binding("1", "filter('all')", show=False),
-        Binding("2", "filter('work')", show=False),
-        Binding("3", "filter('personal')", show=False),
-        Binding("4", "filter('active')", show=False),
-        Binding("5", "filter('stale')", show=False),
-        Binding("slash", "search", "/", show=True),
-
-        # Sort
-        Binding("f1", "sort('status')", show=False),
-        Binding("f2", "sort('updated')", show=False),
-        Binding("f3", "sort('created')", show=False),
-        Binding("f4", "sort('category')", show=False),
-        Binding("f5", "sort('name')", show=False),
-
-        # Command palette
-        Binding("colon", "command_palette", ":", show=True),
-
-        # Other
-        Binding("p", "toggle_preview", show=False),
-        Binding("R", "refresh", show=False),
-        Binding("question_mark", "help", "?", show=True),
-        Binding("q", "quit", "Quit", show=True),
-    ]
+    BINDINGS = build_app_bindings()
 
     def __init__(self):
         super().__init__()
@@ -1132,16 +1078,30 @@ class OrchestratorApp(App):
         else:
             self.notify("No links", timeout=1)
 
+    def action_toggle_archive(self):
+        if self.state.view_mode == ViewMode.WORKSTREAMS:
+            ws = self._selected_ws()
+            if ws:
+                name = self.state.archive(ws.id)
+                if name:
+                    self.notify(f"Archived: {name}", timeout=2)
+                    self._refresh_ws_table()
+                    self._refresh_archived_table()
+        elif self.state.view_mode == ViewMode.ARCHIVED:
+            ws = self._selected_archived()
+            if ws:
+                name = self.state.unarchive(ws.id)
+                if name:
+                    self.notify(f"Restored: {name}", timeout=2)
+                    self._refresh_ws_table()
+                    self._refresh_archived_table()
+
+    # Keep legacy action names so DetailScreen and other callers still work
     def action_archive(self):
-        if self.state.view_mode != ViewMode.WORKSTREAMS:
-            return
-        ws = self._selected_ws()
-        if ws:
-            name = self.state.archive(ws.id)
-            if name:
-                self.notify(f"Archived: {name}", timeout=2)
-                self._refresh_ws_table()
-                self._refresh_archived_table()
+        self.action_toggle_archive()
+
+    def action_unarchive(self):
+        self.action_toggle_archive()
 
     def action_delete_item(self):
         if self.state.view_mode == ViewMode.SESSIONS:
@@ -1165,17 +1125,6 @@ class OrchestratorApp(App):
                 ConfirmScreen(f"[bold {C_RED}]Delete[/bold {C_RED}] [bold]{ws.name}[/bold]?"),
                 callback=on_confirm,
             )
-
-    def action_unarchive(self):
-        if self.state.view_mode != ViewMode.ARCHIVED:
-            return
-        ws = self._selected_archived()
-        if ws:
-            name = self.state.unarchive(ws.id)
-            if name:
-                self.notify(f"Restored: {name}", timeout=2)
-                self._refresh_ws_table()
-                self._refresh_archived_table()
 
     # ── Brain dump ──
 
