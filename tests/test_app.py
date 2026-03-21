@@ -5,19 +5,21 @@ from unittest.mock import patch, MagicMock
 from pathlib import Path
 
 from models import Category, Link, Status, Store, Workstream
-from app import (
-    OrchestratorApp,
-    ThreadPickerScreen,
+from app import OrchestratorApp
+from screens import ThreadPickerScreen
+from rendering import (
     ViewMode,
     _ws_indicators,
-    _ws_directories,
-    _do_resume,
-    _find_sessions_for_ws,
-    _launch_orch_claude,
     _short_project,
     _short_model,
     _status_markup,
     _category_markup,
+)
+from actions import (
+    ws_directories as _ws_directories,
+    do_resume as _do_resume,
+    find_sessions_for_ws as _find_sessions_for_ws,
+    launch_orch_claude as _launch_orch_claude,
 )
 from sessions import ClaudeSession
 
@@ -199,7 +201,7 @@ class TestLaunchOrchClaude:
         ws.add_link("worktree", str(tmp_path), "project")
 
         import unittest.mock as mock
-        with mock.patch("app.subprocess.Popen") as mock_popen:
+        with mock.patch("actions.subprocess.Popen") as mock_popen:
             _launch_orch_claude(ws, session_id="abc-123", cwd=str(tmp_path))
             assert mock_popen.called
             cmd = mock_popen.call_args[0][0]
@@ -213,7 +215,7 @@ class TestLaunchOrchClaude:
         ws = Workstream(name="Test", description="", category=Category.PERSONAL, status=Status.QUEUED)
 
         import unittest.mock as mock
-        with mock.patch("app.subprocess.Popen") as mock_popen:
+        with mock.patch("actions.subprocess.Popen") as mock_popen:
             _launch_orch_claude(ws, prompt="Help me with this")
             assert mock_popen.called
             cmd = mock_popen.call_args[0][0]
@@ -226,7 +228,7 @@ class TestLaunchOrchClaude:
         ws.notes = "x" * 1000
 
         import unittest.mock as mock
-        with mock.patch("app.subprocess.Popen") as mock_popen:
+        with mock.patch("actions.subprocess.Popen") as mock_popen:
             _launch_orch_claude(ws)
             cmd = mock_popen.call_args[0][0]
             idx = cmd.index("--ws-notes")
@@ -237,7 +239,7 @@ class TestLaunchOrchClaude:
         ws = Workstream(name="Test", status=Status.IN_PROGRESS)
 
         import unittest.mock as mock
-        with mock.patch("app.subprocess.Popen") as mock_popen:
+        with mock.patch("actions.subprocess.Popen") as mock_popen:
             _launch_orch_claude(ws)
             cmd = mock_popen.call_args[0][0]
             assert "--ws-notes" not in cmd
@@ -266,7 +268,7 @@ def app_with_store(tmp_path):
          patch("app.name_uncached_threads", return_value=0), \
          patch("app.synthesize_workstreams", return_value=0):
         app = OrchestratorApp()
-        app.store = Store(path=store_path)
+        app.state.store = Store(path=store_path)
         yield app
 
 
@@ -427,14 +429,14 @@ class TestQuickNote:
     async def test_n_opens_note_modal(self, app_with_store):
         async with app_with_store.run_test(size=(120, 40)) as pilot:
             await pilot.press("n")
-            from app import QuickNoteScreen
+            from screens import QuickNoteScreen
             assert isinstance(pilot.app.screen, QuickNoteScreen)
 
     async def test_note_modal_escape_cancels(self, app_with_store):
         async with app_with_store.run_test(size=(120, 40)) as pilot:
             await pilot.press("n")
             await pilot.press("escape")
-            from app import QuickNoteScreen
+            from screens import QuickNoteScreen
             assert not isinstance(pilot.app.screen, QuickNoteScreen)
 
     async def test_note_adds_to_workstream(self, app_with_store):
@@ -512,14 +514,14 @@ class TestHelpScreen:
     async def test_help_mentions_ctrl_d(self, app_with_store):
         """Help screen should mention Ctrl+D for exiting Claude sessions."""
         # Verify the help text constant contains Ctrl+D
-        from app import HelpScreen
+        from screens import HelpScreen
         screen = HelpScreen()
         # The compose method creates a Static with help text that includes Ctrl+D
         # We test this by checking the HelpScreen renders without error
         # and verify the source text in app.py contains "Ctrl+D"
-        import app as app_module
+        import screens as screens_module
         import inspect
-        source = inspect.getsource(app_module.HelpScreen)
+        source = inspect.getsource(screens_module.HelpScreen)
         assert "Ctrl+D" in source
 
 
@@ -546,9 +548,9 @@ class TestDoResume:
             project_path=project_path, message_count=msgs,
         )
 
-    @patch("app._has_tmux", return_value=True)
-    @patch("app._launch_orch_claude", return_value=(True, ""))
-    @patch("app._find_sessions_for_ws")
+    @patch("actions.has_tmux", return_value=True)
+    @patch("actions.launch_orch_claude", return_value=(True, ""))
+    @patch("actions.find_sessions_for_ws")
     def test_single_session_resumes_immediately(self, mock_find, mock_launch, mock_tmux):
         """With exactly 1 matching session, resume without showing picker."""
         session = self._make_session("s1", project_path="/tmp/test")
@@ -561,8 +563,8 @@ class TestDoResume:
         mock_launch.assert_called_once()
         app.push_screen.assert_not_called()
 
-    @patch("app._has_tmux", return_value=True)
-    @patch("app._find_sessions_for_ws")
+    @patch("actions.has_tmux", return_value=True)
+    @patch("actions.find_sessions_for_ws")
     def test_multiple_sessions_shows_picker(self, mock_find, mock_tmux):
         """With 2+ matching sessions, show ThreadPickerScreen."""
         sessions = [self._make_session(f"s{i}") for i in range(3)]
@@ -577,7 +579,7 @@ class TestDoResume:
         assert isinstance(screen_arg, ThreadPickerScreen)
         assert len(screen_arg.thread_sessions) == 3
 
-    @patch("app._has_tmux", return_value=False)
+    @patch("actions.has_tmux", return_value=False)
     def test_no_tmux_notifies_error(self, mock_tmux):
         """Without tmux, show error notification."""
         ws = Workstream(name="test", category=Category.META)
