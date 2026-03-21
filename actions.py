@@ -198,8 +198,11 @@ def launch_orch_claude(
         log.debug("launch_orch_claude: created window %s", window_id)
 
         # Link the window into the orch session so the user sees it
+        link_cmd = ["tmux", "link-window", "-s", window_id, "-t", f"{orch_session}:"]
+        if not switch_to:
+            link_cmd.insert(2, "-d")
         link_result = subprocess.run(
-            ["tmux", "link-window", "-s", window_id, "-t", f"{orch_session}:"],
+            link_cmd,
             capture_output=True, text=True, timeout=5,
         )
         log.debug("launch_orch_claude: link-window rc=%d stderr=%s",
