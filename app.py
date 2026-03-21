@@ -683,6 +683,7 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
     def on_mount(self):
         self._last_seen_cache = load_last_seen()
         self._load_detail_sessions()
+        self.query_one("#detail-sessions", OptionList).focus()
         self._throbber_timer = self.set_interval(0.08, self._tick_throbber)
         self.set_interval(3, self._refresh_session_liveness)
 
@@ -712,7 +713,7 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         app = self.app
         if hasattr(app, '_sessions_for_ws'):
             if self._show_archived_threads:
-                self._detail_sessions = app._sessions_for_ws(self.ws, include_archived_threads=True)
+                self._detail_sessions = app._archived_sessions_for_ws(self.ws)
             else:
                 self._detail_sessions = app._sessions_for_ws(self.ws)
         else:
@@ -724,7 +725,7 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         label = self.query_one("#detail-sessions-label", Static)
         archived_count = len(self.ws.archived_thread_ids)
         if self._show_archived_threads and archived_count:
-            label.update(f"[bold {C_BLUE}]Sessions[/bold {C_BLUE}]  [{C_DIM}](showing archived)[/{C_DIM}]")
+            label.update(f"[bold {C_BLUE}]Archived Sessions[/bold {C_BLUE}]")
         elif archived_count:
             label.update(f"[bold {C_BLUE}]Sessions[/bold {C_BLUE}]  [{C_DIM}]({archived_count} archived)[/{C_DIM}]")
         else:
@@ -734,6 +735,8 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
             olist.display = True
             no_sess.display = False
             self._build_session_list()
+            if olist.option_count > 0:
+                olist.highlighted = 0
         else:
             olist.display = False
             no_sess.display = True
