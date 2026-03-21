@@ -13,7 +13,12 @@ from unittest.mock import patch
 from models import Category, Link, Status, Store, TodoItem, Workstream, Origin
 from sessions import ClaudeSession
 from threads import Thread, ThreadActivity
-from state import AppState, fuzzy_match, fuzzy_filter
+from state import (
+    AppState, fuzzy_match, fuzzy_filter,
+    extract_snippet, search_session_content, content_search,
+    SearchHit, SessionSearchResult,
+)
+from sessions import SessionMessage
 from rendering import ViewMode
 
 
@@ -987,3 +992,162 @@ class TestFuzzyFilter:
         items = ["a", "b", "c"]
         results = fuzzy_filter("", items)
         assert len(results) == 3
+
+
+# ─── Content Search ─────────────────────────────────────────────────
+
+
+def _make_messages(*texts, role="user"):
+    """Helper: create SessionMessage list from text strings."""
+    return [SessionMessage(role=role, text=t, timestamp=f"2026-03-{i+1:02d}T00:00:00Z")
+            for i, t in enumerate(texts)]
+
+
+def _make_search_session(sid="test-session"):
+    return ClaudeSession(
+        session_id=sid, project_dir="test", project_path="/test",
+        message_count=5, model="opus",
+    )
+
+
+class TestExtractSnippet:
+    def test_basic_snippet(self):
+        text = "The deployment pipeline should handle rolling updates gracefully"
+        snip, ranges = extract_snippet(text, ["deployment", "pipeline"])
+        assert "deployment" in snip.lower()
+        assert "pipeline" in snip.lower()
+        assert len(ranges) >= 1
+
+    def test_snippet_with_ellipsis(self):
+        text = "x" * 50 + " the target keyword is here " + "y" * 200
+        snip, ranges = extract_snippet(text, ["target"], max_length=60)
+        assert "target" in snip.lower()
+        assert snip.startswith("…") or snip.endswith("…")
+
+    def test_no_match_returns_start_of_text(self):
+        text = "Hello world this is some text"
+        snip, ranges = extract_snippet(text, ["nonexistent"])
+        assert snip.startswith("Hello")
+        assert ranges == []
+
+    def test_match_ranges_are_valid(self):
+        text = "Find the foo and the bar here"
+        snip, ranges = extract_snippet(text, ["foo", "bar"])
+        for start, end in ranges:
+            assert 0 <= start < end <= len(snip)
+            assert snip[start:end].lower() in ("foo", "bar")
+
+    def test_overlapping_ranges_merged(self):
+        text = "abcabc"
+        snip, ranges = extract_snippet(text, ["abc"])
+        # Should have non-overlapping ranges
+        for i in range(len(ranges) - 1):
+            assert ranges[i][1] <= ranges[i + 1][0]
+
+
+class TestSearchSessionContent:
+    def test_single_word_match(self):
+        msgs = _make_messages("Deploy the new feature", "Fix the bug")
+        session = _make_search_session()
+        result = search_session_content("deploy", msgs, session)
+        assert result is not None
+        assert result.hit_count == 1
+        assert "deploy" in result.best_hit.snippet.lower()
+
+    def test_and_semantics(self):
+        msgs = _make_messages(
+            "The deploy pipeline is broken",
+            "Fix the bug in production",
+            "Deploy to production today",
+        )
+        session = _make_search_session()
+        result = search_session_content("deploy production", msgs, session)
+        assert result is not None
+        # Only the third message has both words
+        assert result.hit_count == 1
+
+    def test_no_match_returns_none(self):
+        msgs = _make_messages("Hello world")
+        session = _make_search_session()
+        result = search_session_content("nonexistent", msgs, session)
+        assert result is None
+
+    def test_empty_query_returns_none(self):
+        msgs = _make_messages("Hello world")
+        session = _make_search_session()
+        result = search_session_content("", msgs, session)
+        assert result is None
+
+    def test_phrase_matching(self):
+        msgs = _make_messages(
+            "The rolling update strategy works well",
+            "Update: rolling back the change",
+        )
+        session = _make_search_session()
+        result = search_session_content('"rolling update"', msgs, session)
+        assert result is not None
+        assert result.hit_count == 1  # only first message has exact phrase
+
+    def test_user_messages_score_higher(self):
+        msgs = [
+            SessionMessage(role="user", text="Fix the deployment bug", timestamp="2026-03-01T00:00:00Z"),
+            SessionMessage(role="assistant", text="Fix the deployment bug", timestamp="2026-03-01T00:01:00Z"),
+        ]
+        session = _make_search_session()
+        result = search_session_content("deployment bug", msgs, session)
+        assert result is not None
+        assert result.hits[0].role == "user"  # user hit scores higher
+
+    def test_frequency_bonus(self):
+        msgs = _make_messages(
+            "deploy deploy deploy",
+            "deploy once",
+        )
+        session = _make_search_session()
+        result = search_session_content("deploy", msgs, session)
+        assert result is not None
+        # First message has more occurrences → higher score
+        assert result.best_hit.message_idx == 0
+
+    def test_max_hits_limit(self):
+        msgs = _make_messages(*[f"match keyword number {i}" for i in range(20)])
+        session = _make_search_session()
+        result = search_session_content("keyword", msgs, session, max_hits=3)
+        assert result is not None
+        assert len(result.hits) <= 3
+
+
+class TestContentSearch:
+    def test_ranks_sessions_by_score(self):
+        s1 = _make_search_session("s1")
+        s1.jsonl_path = ""
+        s2 = _make_search_session("s2")
+        s2.jsonl_path = ""
+        cache = {
+            "s1": _make_messages("just one mention of deploy"),
+            "s2": _make_messages("deploy deploy deploy to production", "deploy again"),
+        }
+        results = content_search("deploy", [s1, s2], cache)
+        assert len(results) == 2
+        assert results[0].session.session_id == "s2"  # more hits → ranked first
+
+    def test_no_results_for_no_match(self):
+        s = _make_search_session()
+        s.jsonl_path = ""
+        cache = {"test-session": _make_messages("Hello world")}
+        results = content_search("nonexistent", [s], cache)
+        assert results == []
+
+    def test_empty_query_returns_empty(self):
+        s = _make_search_session()
+        s.jsonl_path = ""
+        cache = {"test-session": _make_messages("Hello")}
+        results = content_search("", [s], cache)
+        assert results == []
+
+    def test_case_insensitive(self):
+        s = _make_search_session()
+        s.jsonl_path = ""
+        cache = {"test-session": _make_messages("Deploy the Feature")}
+        results = content_search("deploy feature", [s], cache)
+        assert len(results) == 1

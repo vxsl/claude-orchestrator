@@ -84,11 +84,243 @@ def fuzzy_filter(query: str, items: Sequence[str]) -> list[tuple[int, int]]:
     results.sort(key=lambda t: t[1], reverse=True)
     return results
 
+import re
+from dataclasses import dataclass, field
+
 from models import (
     Category, Link, Origin, Status, Store, TodoItem, Workstream,
     STATUS_ICONS, _relative_time,
 )
-from sessions import ClaudeSession, get_live_session_ids, refresh_session_tail
+from sessions import ClaudeSession, SessionMessage, extract_session_content, get_live_session_ids, refresh_session_tail
+
+
+# ── Content search ─────────────────────────────────────────────────
+
+@dataclass
+class SearchHit:
+    """A single match within a session message."""
+    message_idx: int
+    role: str
+    timestamp: str
+    snippet: str                          # ~120 chars of context
+    match_ranges: list[tuple[int, int]]   # (start, end) in snippet for highlighting
+    score: float
+
+
+@dataclass
+class SessionSearchResult:
+    """Aggregated search results for one session."""
+    session: ClaudeSession
+    total_score: float
+    hit_count: int
+    best_hit: SearchHit
+    hits: list[SearchHit] = field(default_factory=list)
+
+
+def _parse_query(query: str) -> tuple[list[str], list[str]]:
+    """Parse query into phrase tokens and word tokens.
+
+    Quoted strings become phrase tokens; remaining words become word tokens.
+    Returns (phrases, words).
+    """
+    phrases: list[str] = []
+    remainder = query
+    for m in re.finditer(r'"([^"]+)"', query):
+        phrases.append(m.group(1).lower())
+        remainder = remainder.replace(m.group(0), " ")
+    words = [w for w in remainder.lower().split() if w]
+    return phrases, words
+
+
+def extract_snippet(
+    text: str,
+    query_words: list[str],
+    max_length: int = 140,
+) -> tuple[str, list[tuple[int, int]]]:
+    """Extract a snippet around the densest cluster of query words.
+
+    Returns ``(snippet_text, match_ranges)`` where match_ranges are
+    ``(start, end)`` offsets into snippet_text for highlighting.
+    """
+    text_lower = text.lower()
+
+    # Find all match positions
+    positions: list[tuple[int, int]] = []  # (start, end)
+    for w in query_words:
+        start = 0
+        while True:
+            idx = text_lower.find(w, start)
+            if idx == -1:
+                break
+            positions.append((idx, idx + len(w)))
+            start = idx + 1
+    if not positions:
+        # Fallback: return start of text
+        snip = text[:max_length].strip()
+        if len(text) > max_length:
+            snip += "…"
+        return snip, []
+
+    positions.sort()
+
+    # Find the window of max_length chars with the most matches
+    best_start = 0
+    best_count = 0
+    for anchor, _ in positions:
+        win_start = max(0, anchor - max_length // 4)
+        win_end = win_start + max_length
+        count = sum(1 for s, e in positions if s >= win_start and e <= win_end)
+        if count > best_count:
+            best_count = count
+            best_start = win_start
+
+    # Expand to word boundary
+    if best_start > 0:
+        sp = text.rfind(" ", max(0, best_start - 20), best_start + 10)
+        if sp != -1:
+            best_start = sp + 1
+
+    snip_raw = text[best_start:best_start + max_length]
+    # Collapse whitespace
+    snip = " ".join(snip_raw.split())
+
+    prefix = "…" if best_start > 0 else ""
+    suffix = "…" if best_start + max_length < len(text) else ""
+    snip = prefix + snip + suffix
+
+    # Recalculate match ranges within the snippet
+    snip_lower = snip.lower()
+    ranges: list[tuple[int, int]] = []
+    for w in query_words:
+        start = 0
+        while True:
+            idx = snip_lower.find(w, start)
+            if idx == -1:
+                break
+            ranges.append((idx, idx + len(w)))
+            start = idx + 1
+    # Merge overlapping ranges
+    ranges.sort()
+    merged: list[tuple[int, int]] = []
+    for s, e in ranges:
+        if merged and s <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], e))
+        else:
+            merged.append((s, e))
+
+    return snip, merged
+
+
+def search_session_content(
+    query: str,
+    messages: list[SessionMessage],
+    session: ClaudeSession,
+    max_hits: int = 5,
+) -> SessionSearchResult | None:
+    """Search through a session's messages for query terms.
+
+    All query words must appear in a single message (AND semantics).
+    Quoted phrases are matched literally.  Returns None if no match.
+    """
+    if not query.strip() or not messages:
+        return None
+
+    phrases, words = _parse_query(query)
+    all_terms = phrases + words
+    if not all_terms:
+        return None
+
+    hits: list[SearchHit] = []
+    n_messages = len(messages)
+
+    for i, msg in enumerate(messages):
+        msg_lower = msg.text.lower()
+
+        # Check AND: every term must appear
+        if not all(t in msg_lower for t in all_terms):
+            continue
+
+        # Score
+        score = 0.0
+        for t in all_terms:
+            freq = msg_lower.count(t)
+            score += 10 + (freq - 1) * 2  # base + frequency bonus
+
+        # Proximity bonus: all terms within 200-char window
+        if len(all_terms) > 1:
+            first_positions = []
+            for t in all_terms:
+                idx = msg_lower.find(t)
+                if idx != -1:
+                    first_positions.append(idx)
+            if first_positions:
+                spread = max(first_positions) - min(first_positions)
+                if spread < 200:
+                    score += 20
+
+        # User message bonus (user messages express intent)
+        if msg.role == "user":
+            score += 5
+
+        # Recency: mild bonus for later messages
+        if n_messages > 1:
+            score *= 1.0 + 0.1 * (i / (n_messages - 1))
+
+        snippet, match_ranges = extract_snippet(msg.text, all_terms)
+
+        hits.append(SearchHit(
+            message_idx=i,
+            role=msg.role,
+            timestamp=msg.timestamp,
+            snippet=snippet,
+            match_ranges=match_ranges,
+            score=score,
+        ))
+
+    if not hits:
+        return None
+
+    hits.sort(key=lambda h: h.score, reverse=True)
+    hits = hits[:max_hits]
+    total_score = sum(h.score for h in hits)
+
+    return SessionSearchResult(
+        session=session,
+        total_score=total_score,
+        hit_count=len(hits),
+        best_hit=hits[0],
+        hits=hits,
+    )
+
+
+def content_search(
+    query: str,
+    sessions: list[ClaudeSession],
+    content_cache: dict[str, list[SessionMessage]],
+) -> list[SessionSearchResult]:
+    """Search across all sessions, returning ranked results.
+
+    Populates *content_cache* for any sessions not yet extracted.
+    Results are sorted by total_score descending.
+    """
+    if not query.strip():
+        return []
+
+    results: list[SessionSearchResult] = []
+    for s in sessions:
+        if s.session_id not in content_cache:
+            if s.jsonl_path:
+                content_cache[s.session_id] = extract_session_content(s.jsonl_path)
+            else:
+                content_cache[s.session_id] = []
+
+        messages = content_cache[s.session_id]
+        result = search_session_content(query, messages, s)
+        if result is not None:
+            results.append(result)
+
+    results.sort(key=lambda r: r.total_score, reverse=True)
+    return results
 from threads import Thread, ThreadActivity, session_activity, load_last_seen, mark_thread_seen
 from rendering import ViewMode, _best_activity
 

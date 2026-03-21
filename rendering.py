@@ -358,6 +358,57 @@ def _render_session_option(
     return f"{line1}\n{line2}"
 
 
+# ─── Content search result rendering ─────────────────────────────
+
+def _highlight_snippet(snippet: str, match_ranges: list[tuple[int, int]]) -> str:
+    """Apply Rich markup highlighting to matched ranges within a snippet.
+
+    Escapes Rich markup in the snippet text first, then wraps matched
+    regions in bold yellow markup.
+    """
+    if not match_ranges:
+        return f"[{C_DIM}]{snippet}[/{C_DIM}]"
+
+    # Build highlighted string by splicing markup around matches
+    parts: list[str] = []
+    prev = 0
+    for start, end in match_ranges:
+        if start > prev:
+            parts.append(f"[{C_DIM}]{snippet[prev:start]}[/{C_DIM}]")
+        parts.append(f"[bold {C_YELLOW}]{snippet[start:end]}[/bold {C_YELLOW}]")
+        prev = end
+    if prev < len(snippet):
+        parts.append(f"[{C_DIM}]{snippet[prev:]}[/{C_DIM}]")
+    return "".join(parts)
+
+
+def _render_content_search_result(
+    result,  # SessionSearchResult — avoid circular import
+    title_width: int = 48,
+) -> str:
+    """Render a content search result as a formatted OptionList entry.
+
+    Line 1: session title
+    Line 2: hit count + model + age (dim)
+    Line 3: best snippet with matched words highlighted
+    """
+    s = result.session
+    hit = result.best_hit
+    title = _session_title(s)[:title_width]
+    model = _short_model(s.model)
+    tokens = _colored_tokens(s)
+
+    line1 = f" \u2738  {title}"  # ✸ search icon
+    line2 = (
+        f"      [{C_DIM}]{result.hit_count} match{'es' if result.hit_count != 1 else ''} · "
+        f"{model} · {s.message_count} msgs · [/{C_DIM}]{tokens}[{C_DIM}] · {s.age}[/{C_DIM}]"
+    )
+    role_tag = "you" if hit.role == "user" else "claude"
+    highlighted = _highlight_snippet(hit.snippet, hit.match_ranges)
+    line3 = f"      [{C_DIM}]{role_tag}:[/{C_DIM}] {highlighted}"
+    return f"{line1}\n{line2}\n{line3}"
+
+
 # ─── Notification Feed rendering ─────────────────────────────────
 
 def _render_notification_option(notif, max_width: int = 40) -> str:

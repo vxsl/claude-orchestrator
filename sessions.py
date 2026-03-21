@@ -14,6 +14,78 @@ CLAUDE_PROJECTS_DIR = Path.home() / ".claude" / "projects"
 CLAUDE_SESSIONS_DIR = Path.home() / ".claude" / "sessions"
 
 
+@dataclass
+class SessionMessage:
+    """A single message extracted from a session JSONL for content search."""
+    role: str       # "user" or "assistant"
+    text: str       # full message text (all text + thinking blocks concatenated)
+    timestamp: str  # ISO timestamp
+
+
+def _extract_full_text(data: dict) -> str:
+    """Extract full (untruncated) text from a user or assistant JSONL entry.
+
+    Unlike ``_extract_message_text`` this concatenates ALL text and thinking
+    blocks rather than taking just the first one, and never truncates.
+    """
+    msg = data.get("message", {})
+    if not msg:
+        return ""
+    content = msg.get("content", "")
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for block in content:
+            if not isinstance(block, dict):
+                continue
+            btype = block.get("type", "")
+            if btype == "text":
+                t = block.get("text", "")
+                if t and "[Request interrupted" not in t:
+                    parts.append(t)
+            elif btype == "thinking":
+                t = block.get("thinking", "")
+                if t:
+                    parts.append(t)
+        return "\n".join(parts)
+    return ""
+
+
+def extract_session_content(jsonl_path: str) -> list[SessionMessage]:
+    """Extract all user/assistant messages with full text from a session JSONL.
+
+    Returns messages in chronological order.  Includes text blocks and
+    thinking blocks from assistant messages.  Skips tool_use, tool_result,
+    and system messages.
+    """
+    messages: list[SessionMessage] = []
+    try:
+        with open(jsonl_path) as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    data = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                msg_type = data.get("type", "")
+                if msg_type not in ("user", "assistant"):
+                    continue
+                text = _extract_full_text(data)
+                if not text:
+                    continue
+                messages.append(SessionMessage(
+                    role=msg_type,
+                    text=text,
+                    timestamp=data.get("timestamp", ""),
+                ))
+    except OSError:
+        pass
+    return messages
+
+
 def _extract_message_text(data: dict) -> str:
     """Extract a short text snippet from a user or assistant JSONL entry."""
     msg = data.get("message", {})
