@@ -77,34 +77,37 @@ def find_tmux_window_for_session(session_id: str) -> str | None:
 def switch_to_tmux_window(window_id: str) -> bool:
     """Switch to an existing tmux window by ID.
 
-    If the window is in a different tmux session (e.g. orch-workers after an
-    orch restart), links it into the current session first.
+    Always links the window into the current tmux session first, because
+    select-window on a window in a different session (e.g. orch-workers)
+    silently switches THAT session's active window without affecting the
+    user's view.
     """
     try:
-        result = subprocess.run(
-            ["tmux", "select-window", "-t", window_id],
-            capture_output=True, timeout=5,
-        )
-        if result.returncode == 0:
-            return True
-
-        # Window is in a different session — link it into ours first
         cur = subprocess.run(
             ["tmux", "display-message", "-p", "#{session_name}"],
             capture_output=True, text=True, timeout=5,
         ).stdout.strip()
-        if cur:
-            subprocess.run(
-                ["tmux", "link-window", "-s", window_id, "-t", f"{cur}:"],
-                capture_output=True, timeout=5,
-            )
-            result = subprocess.run(
-                ["tmux", "select-window", "-t", window_id],
-                capture_output=True, timeout=5,
-            )
-            return result.returncode == 0
-        return False
-    except Exception:
+        if not cur:
+            log.debug("switch_to_tmux_window: can't determine current session")
+            return False
+
+        # Always try to link into the current session (idempotent if already linked)
+        link_result = subprocess.run(
+            ["tmux", "link-window", "-s", window_id, "-t", f"{cur}:"],
+            capture_output=True, text=True, timeout=5,
+        )
+        log.debug("switch_to_tmux_window: link-window %s -> %s rc=%d stderr=%s",
+                  window_id, cur, link_result.returncode, (link_result.stderr or "").strip())
+
+        # Now select it — it's guaranteed to be in our session
+        result = subprocess.run(
+            ["tmux", "select-window", "-t", window_id],
+            capture_output=True, text=True, timeout=5,
+        )
+        log.debug("switch_to_tmux_window: select-window %s rc=%d", window_id, result.returncode)
+        return result.returncode == 0
+    except Exception as e:
+        log.debug("switch_to_tmux_window: exception %s", e)
         return False
 
 
