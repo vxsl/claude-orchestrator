@@ -39,7 +39,7 @@ from sessions import ClaudeSession
 from threads import Thread, ThreadActivity, session_activity, load_last_seen, mark_thread_seen
 from rendering import (
     C_BLUE, C_CYAN, C_DIM, C_GREEN, C_ORANGE, C_PURPLE, C_RED, C_YELLOW,
-    BG_BASE,
+    BG_BASE, BG_SURFACE,
     STATUS_THEME, CATEGORY_THEME,
     LINK_TYPE_ICONS, LINK_ORDER, LINK_KINDS,
     THROBBER_FRAMES,
@@ -802,10 +802,11 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
     }}
     .detail-list-pane {{
         width: 1fr;
-        border: solid {C_DIM};
+        border: blank;
     }}
     .detail-list-pane.pane-focused {{
-        border: solid {C_BLUE};
+        border: round {C_BLUE};
+        background: {BG_SURFACE};
     }}
     .detail-list-label {{
         padding: 0 3;
@@ -834,20 +835,22 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
     }}
     #detail-scroll {{
         width: 3fr;
-        border: solid {C_DIM};
+        border: blank;
     }}
     #detail-scroll.pane-focused {{
-        border: solid {C_BLUE};
+        border: round {C_BLUE};
+        background: {BG_SURFACE};
     }}
     #detail-body {{
         padding: 1 3;
     }}
     #detail-feed-pane {{
         width: 2fr; min-width: 28;
-        border: solid {C_DIM};
+        border: blank;
     }}
     #detail-feed-pane.pane-focused {{
-        border: solid {C_BLUE};
+        border: round {C_BLUE};
+        background: {BG_SURFACE};
     }}
     .detail-feed-label {{
         padding: 0 3;
