@@ -801,3 +801,38 @@ class TestRepoLinking:
         dirs = state._ws_dirs(ws)
         assert str(d1) in dirs
         assert str(d2) in dirs
+
+    def test_infer_repo_paths_from_worktree_link(self, state, tmp_path):
+        """Backfill repo_path from worktree link pointing at a git repo."""
+        d = tmp_path / "infer-repo"
+        d.mkdir()
+        (d / ".git").mkdir()  # fake git repo
+        ws = Workstream(name="needs-infer")
+        ws.add_link(kind="worktree", value=str(d), label="repo")
+        state.store.add(ws)
+        count = state.infer_repo_paths()
+        assert count == 1
+        assert state.store.get(ws.id).repo_path == str(d)
+
+    def test_infer_repo_paths_skips_non_git(self, state, tmp_path):
+        """Non-git directories are not inferred."""
+        d = tmp_path / "not-git"
+        d.mkdir()
+        ws = Workstream(name="no-git")
+        ws.add_link(kind="file", value=str(d), label="dir")
+        state.store.add(ws)
+        count = state.infer_repo_paths()
+        assert count == 0
+        assert state.store.get(ws.id).repo_path == ""
+
+    def test_infer_repo_paths_skips_already_set(self, state, tmp_path):
+        """Workstreams with repo_path already set are not touched."""
+        d = tmp_path / "already-set"
+        d.mkdir()
+        (d / ".git").mkdir()
+        ws = Workstream(name="has-repo", repo_path="/other/path")
+        ws.add_link(kind="worktree", value=str(d), label="repo")
+        state.store.add(ws)
+        count = state.infer_repo_paths()
+        assert count == 0
+        assert state.store.get(ws.id).repo_path == "/other/path"

@@ -41,6 +41,7 @@ class AppState:
         self.throbber_frame: int = 0
         self.preview_sessions: list[ClaudeSession] = []
         self.last_seen_cache: dict[str, str] = {}
+        self.infer_repo_paths()
 
     # ── View navigation ──
 
@@ -139,6 +140,31 @@ class AppState:
         return next((w for w in self.store.workstreams if w.id == ws_id), None)
 
     # ── Repo linking ──
+
+    def infer_repo_paths(self) -> int:
+        """Backfill repo_path on workstreams that have directory links but no repo_path.
+
+        Returns count of workstreams updated.
+        """
+        count = 0
+        for ws in self.store.workstreams:
+            if ws.repo_path:
+                continue
+            # Prefer worktree links, then file links pointing at git repos
+            for kind in ("worktree", "file"):
+                for link in ws.links:
+                    if link.kind != kind:
+                        continue
+                    expanded = os.path.expanduser(link.value).rstrip("/")
+                    if os.path.isdir(expanded) and os.path.isdir(os.path.join(expanded, ".git")):
+                        ws.repo_path = expanded
+                        count += 1
+                        break
+                if ws.repo_path:
+                    break
+        if count:
+            self.store.save()
+        return count
 
     def _ws_dirs(self, ws: Workstream) -> set[str]:
         """Collect all directory paths for a workstream (repo_path + links)."""
