@@ -228,9 +228,12 @@ def parse_session(jsonl_path: Path) -> Optional[ClaudeSession]:
                                         "file-history-snapshot")):
                     session.turn_complete = True
 
+                # Count user-sent messages
+                if msg_type == "user":
+                    session.message_count += 1
+
                 # Extract usage and stop_reason from assistant messages
                 if msg_type == "assistant" and "message" in data:
-                    session.message_count += 1
                     msg = data["message"]
                     usage = msg.get("usage", {})
                     session.total_input_tokens += usage.get("input_tokens", 0)

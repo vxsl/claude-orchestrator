@@ -79,6 +79,11 @@ def sample_session_jsonl(tmp_path):
             "timestamp": "2026-03-20T10:00:00Z",
         }),
         json.dumps({
+            "type": "user",
+            "message": {"content": "first question"},
+            "timestamp": "2026-03-20T10:00:30Z",
+        }),
+        json.dumps({
             "type": "assistant",
             "message": {
                 "model": "claude-opus-4-6",
@@ -90,6 +95,11 @@ def sample_session_jsonl(tmp_path):
                 },
             },
             "timestamp": "2026-03-20T10:01:00Z",
+        }),
+        json.dumps({
+            "type": "user",
+            "message": {"content": "follow up"},
+            "timestamp": "2026-03-20T10:03:00Z",
         }),
         json.dumps({
             "type": "assistant",
