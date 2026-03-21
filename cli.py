@@ -203,6 +203,16 @@ def cmd_status(args):
 
 
 def cmd_tui(args):
+    import logging
+    log_file = Path("~/.cache/orch/debug.log").expanduser()
+    log_file.parent.mkdir(parents=True, exist_ok=True)
+    logging.basicConfig(
+        filename=str(log_file),
+        level=logging.DEBUG,
+        format="%(asctime)s %(name)s %(levelname)s %(message)s",
+        datefmt="%H:%M:%S",
+    )
+    logging.getLogger("orch").setLevel(logging.DEBUG)
     from app import OrchestratorApp
     OrchestratorApp().run()
 

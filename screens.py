@@ -6,9 +6,12 @@ and return results via dismiss(). No direct access to app state.
 
 from __future__ import annotations
 
+import logging
 import os
 from datetime import datetime, timezone
 from pathlib import Path
+
+log = logging.getLogger("orch.screens")
 
 from textual import on, work
 from textual.app import ComposeResult
@@ -564,6 +567,9 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         if hasattr(app, 'state'):
             all_sessions = app.state.sessions_for_ws(self.ws, include_archived_threads=True)
             archived = self.ws.archived_sessions
+            log.debug("load_detail: ws=%s all=%d archived_map=%s",
+                      self.ws.name, len(all_sessions),
+                      {k: v for k, v in archived.items()})
             revived = set()
             for s in all_sessions:
                 if s.session_id in archived:
@@ -572,12 +578,15 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
                     if last_act and archived_at and self._parse_ts(last_act) > self._parse_ts(archived_at):
                         revived.add(s.session_id)
             if revived:
+                log.debug("load_detail: reviving %s", revived)
                 for sid in revived:
                     del self.ws.archived_sessions[sid]
                 self.store.update(self.ws)
             hidden = set(self.ws.archived_sessions)
             self._detail_sessions = [s for s in all_sessions if s.session_id not in hidden]
             self._archived_sessions = [s for s in all_sessions if s.session_id in hidden]
+            log.debug("load_detail: active=%d archived=%d",
+                      len(self._detail_sessions), len(self._archived_sessions))
         else:
             from actions import find_sessions_for_ws
             self._detail_sessions = find_sessions_for_ws(self.ws, getattr(app, 'sessions', []))
@@ -647,8 +656,10 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
             if act in (ThreadActivity.THINKING, ThreadActivity.AWAITING_INPUT):
                 animating.append((i, act))
             prompt = _render_session_option(s, act, self._throbber_frame)
+            log.debug("build_session_list[%d] id=%s title=%s", i, s.session_id, s.display_name)
             olist.add_option(Option(prompt, id=s.session_id))
         self._animating_sessions = animating
+        log.debug("build_session_list: %d options added, option_count=%d", len(self._detail_sessions), olist.option_count)
 
     def _build_archived_list(self):
         olist = self.query_one("#detail-archived", OptionList)
@@ -673,12 +684,32 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
 
     def on_option_list_option_selected(self, event: OptionList.OptionSelected):
         oid = event.option_id
+        log.debug("option_selected: option_id=%r option_index=%r widget_id=%s",
+                  oid, event.option_index, event.option_list.id if hasattr(event, 'option_list') else "?")
+        if oid is None:
+            log.warning("option_selected: option_id is None! Falling back to index lookup")
+            # Fallback: use index from the focused list
+            olist = self._focused_olist()
+            idx = olist.highlighted
+            sessions = self._archived_sessions if self._active_pane == "archived" else self._detail_sessions
+            if idx is not None and idx < len(sessions):
+                session = sessions[idx]
+                log.debug("option_selected: fallback found session %s (%s)", session.session_id, session.display_name)
+                mark_thread_seen(session.session_id)
+                dirs = ws_directories(self.ws)
+                resume_session_now(self.ws, session, dirs, self.app)
+            return
         sid = oid.removeprefix("a:")  # archived IDs are "a:<session_id>"
         session = self._find_session_by_id(sid)
+        log.debug("option_selected: sid=%s found=%s", sid, session is not None)
         if session:
             mark_thread_seen(session.session_id)
             dirs = ws_directories(self.ws)
             resume_session_now(self.ws, session, dirs, self.app)
+        else:
+            log.warning("option_selected: session not found for sid=%s, detail_sids=%s, archived_sids=%s",
+                        sid, [s.session_id for s in self._detail_sessions],
+                        [s.session_id for s in self._archived_sessions])
 
     def _render_title(self) -> str:
         return f"[bold {C_PURPLE}]{self.ws.name}[/bold {C_PURPLE}]"
@@ -786,16 +817,23 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
     def action_archive_thread(self):
         olist = self._focused_olist()
         idx = olist.highlighted
+        log.debug("archive_thread: pane=%s idx=%s option_count=%d detail=%d archived=%d",
+                  self._active_pane, idx, olist.option_count,
+                  len(self._detail_sessions), len(self._archived_sessions))
         if self._active_pane == "archived":
             if idx is None or idx >= len(self._archived_sessions):
+                log.warning("archive_thread: idx out of range for archived")
                 return
             sid = self._archived_sessions[idx].session_id
+            log.debug("archive_thread: unarchiving sid=%s", sid)
             self.ws.archived_sessions.pop(sid, None)
             self.store.update(self.ws)
         else:
             if idx is None or idx >= len(self._detail_sessions):
+                log.warning("archive_thread: idx out of range for detail")
                 return
             sid = self._detail_sessions[idx].session_id
+            log.debug("archive_thread: archiving sid=%s", sid)
             if sid not in self.ws.archived_sessions:
                 self.ws.archived_sessions[sid] = datetime.now(timezone.utc).isoformat()
                 self.store.update(self.ws)
