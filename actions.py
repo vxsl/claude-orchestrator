@@ -5,9 +5,12 @@ No Textual dependency. Functions take explicit parameters instead of reaching in
 
 from __future__ import annotations
 
+import logging
 import os
 import subprocess
 from datetime import datetime
+
+log = logging.getLogger("orch.actions")
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -53,15 +56,21 @@ def find_tmux_window_for_session(session_id: str) -> str | None:
             capture_output=True, text=True, timeout=5,
         )
         if result.returncode != 0:
+            log.debug("find_tmux_window: list-windows failed rc=%d", result.returncode)
             return None
+        matches = []
         for line in result.stdout.strip().split("\n"):
             if "\t" not in line:
                 continue
             tag, wid = line.split("\t", 1)
+            if tag:
+                matches.append((tag, wid))
             if tag == session_id:
+                log.debug("find_tmux_window: found %s -> %s", session_id, wid)
                 return wid
-    except Exception:
-        pass
+        log.debug("find_tmux_window: no match for %s among %d tagged windows", session_id, len(matches))
+    except Exception as e:
+        log.debug("find_tmux_window: exception %s", e)
     return None
 
 
@@ -171,6 +180,8 @@ def launch_orch_claude(
         # if the orch session is destroyed (e.g. destroy-unattached).
         _ensure_worker_session()
 
+        log.debug("launch_orch_claude: new-window in %s, name=%s, cwd=%s, resume=%s",
+                  WORKER_SESSION, window_name, cwd, session_id)
         result = subprocess.run(
             ["tmux", "new-window", "-t", WORKER_SESSION,
              "-n", window_name, "-c", cwd,
@@ -178,22 +189,29 @@ def launch_orch_claude(
             capture_output=True, text=True, timeout=5,
         )
         if result.returncode != 0:
+            log.error("launch_orch_claude: new-window FAILED rc=%d stderr=%s",
+                      result.returncode, result.stderr.strip())
             return False, result.stderr.strip()
 
         window_id = result.stdout.strip()
+        log.debug("launch_orch_claude: created window %s", window_id)
 
         # Link the window into the orch session so the user sees it
-        subprocess.run(
+        link_result = subprocess.run(
             ["tmux", "link-window", "-s", window_id, "-t", f"{orch_session}:"],
-            capture_output=True, timeout=5,
+            capture_output=True, text=True, timeout=5,
         )
-        subprocess.run(
+        log.debug("launch_orch_claude: link-window rc=%d stderr=%s",
+                  link_result.returncode, (link_result.stderr or "").strip())
+        sel_result = subprocess.run(
             ["tmux", "select-window", "-t", window_id],
-            capture_output=True, timeout=5,
+            capture_output=True, text=True, timeout=5,
         )
+        log.debug("launch_orch_claude: select-window rc=%d", sel_result.returncode)
 
         return True, ""
     except Exception as e:
+        log.error("launch_orch_claude: exception %s", e)
         return False, str(e)
 
 
@@ -242,17 +260,26 @@ def resume_session_now(ws: Workstream, session: ClaudeSession, dirs: list[str], 
     If the session is already running in a tmux window (detached), switches
     to that window instead of spawning a duplicate.
     """
+    log.debug("resume_session_now: sid=%s title=%s", session.session_id, session.display_name)
     mark_thread_seen(session.session_id)
 
     existing_wid = find_tmux_window_for_session(session.session_id)
+    log.debug("resume_session_now: existing_wid=%s", existing_wid)
     if existing_wid and switch_to_tmux_window(existing_wid):
+        log.debug("resume_session_now: switched to existing window %s", existing_wid)
         return
 
     cwd = session.project_path
     if not os.path.isdir(cwd):
+        log.debug("resume_session_now: cwd %s not a dir, falling back", cwd)
         cwd = dirs[0] if dirs else os.getcwd()
-    launch_orch_claude(ws, session_id=session.session_id, cwd=cwd)
-    app.notify(f"Resuming: {session.display_name}", timeout=2)
+    ok, err = launch_orch_claude(ws, session_id=session.session_id, cwd=cwd)
+    log.debug("resume_session_now: launch_orch_claude ok=%s err=%r", ok, err)
+    if ok:
+        app.notify(f"Resuming: {session.display_name}", timeout=2)
+    else:
+        log.error("resume_session_now: FAILED sid=%s err=%s", session.session_id, err)
+        app.notify(f"Resume failed: {err}", severity="error", timeout=4)
 
 
 def do_resume(ws: Workstream, app, sessions: list[ClaudeSession] | None = None,
