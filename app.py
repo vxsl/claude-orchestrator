@@ -15,6 +15,7 @@ from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
+from textual.theme import Theme
 from textual.widgets import (
     DataTable,
     Input,
@@ -32,9 +33,16 @@ from models import (
     STATUS_ICONS, STATUS_ORDER,
     _relative_time,
 )
-from sessions import discover_sessions, ClaudeSession
-from threads import Thread, discover_threads
-from thread_namer import apply_cached_names, name_uncached_threads
+from sessions import discover_sessions, get_live_session_ids, refresh_session_tail, ClaudeSession
+from threads import (
+    Thread, ThreadActivity, discover_threads, _extract_first_message,
+    mark_thread_seen, session_activity, load_last_seen,
+)
+from thread_namer import (
+    apply_cached_names, name_uncached_threads,
+    title_sessions, get_session_title,
+)
+from watcher import SessionWatcher
 from workstream_synthesizer import (
     synthesize_workstreams,
     get_discovered_workstreams,
@@ -42,6 +50,14 @@ from workstream_synthesizer import (
     pin_workstream,
     dismiss_workstream,
 )
+
+
+from textual.message import Message
+
+
+class SessionsChanged(Message):
+    """Posted on the app when the session list has been updated."""
+    pass
 
 
 # ─── Color Palette (matching fzedit / jira-fzf) ─────────────────────
@@ -54,8 +70,13 @@ C_GREEN = "#87d787"      # 114 — success, done
 C_YELLOW = "#ffd75f"     # 221 — warnings, queued
 C_ORANGE = "#d7875f"     # 173 — secondary accents
 C_RED = "#d75f5f"        # 167 — errors, blocked
-C_LIGHT = "#bcbcbc"      # 250 — light text
-C_DIM = "#808080"        # 244 — dimmed text
+C_LIGHT = "#a0a0a0"      # soft foreground text
+C_DIM = "#585858"        # subdued — present but not loud
+
+# ─── Background Palette (hardcoded to bypass Textual's auto-tinting) ──
+BG_BASE = "#141414"      # deepest — screen background
+BG_SURFACE = "#1a1a1a"   # slightly lifted — tables, panes
+BG_RAISED = "#222222"    # bars, headers, inputs
 
 
 def _token_color(total_tokens: int) -> str:
@@ -97,6 +118,97 @@ CATEGORY_THEME = {
     Category.PERSONAL: C_PURPLE,
     Category.META: C_DIM,
 }
+
+# ─── Thread Activity Display ─────────────────────────────────────────
+
+THROBBER_FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+
+def _refresh_liveness(sessions: list[ClaudeSession]) -> None:
+    """Update is_live flags on cached sessions from current process state."""
+    live_ids = get_live_session_ids()
+    for s in sessions:
+        s.is_live = s.session_id in live_ids
+
+_ACTIVITY_PRIORITY = {
+    ThreadActivity.THINKING: 0,
+    ThreadActivity.AWAITING_INPUT: 1,
+    ThreadActivity.RESPONSE_FRESH: 2,
+    ThreadActivity.RESPONSE_READY: 3,
+    ThreadActivity.IDLE: 4,
+}
+
+
+def _activity_icon(activity: ThreadActivity, throbber_frame: int = 0) -> str:
+    """Return a Rich-markup activity indicator. Animated for THINKING."""
+    if activity == ThreadActivity.THINKING:
+        frame = THROBBER_FRAMES[throbber_frame % len(THROBBER_FRAMES)]
+        return f"[bold {C_CYAN}]{frame}[/bold {C_CYAN}]"
+    if activity == ThreadActivity.AWAITING_INPUT:
+        return f"[{C_YELLOW}]◉[/{C_YELLOW}]"
+    if activity == ThreadActivity.RESPONSE_FRESH:
+        return f"[bold {C_GREEN}]●[/bold {C_GREEN}]"
+    if activity == ThreadActivity.RESPONSE_READY:
+        return f"[{C_ORANGE}]●[/{C_ORANGE}]"
+    return f"[{C_DIM}]·[/{C_DIM}]"
+
+
+def _activity_badge(activity: ThreadActivity) -> str:
+    """Return a Rich-markup pill/badge for non-idle activity states."""
+    if activity == ThreadActivity.THINKING:
+        return f"[italic {C_CYAN}]thinking…[/italic {C_CYAN}]"
+    if activity == ThreadActivity.AWAITING_INPUT:
+        return f"[{C_YELLOW}]your turn[/{C_YELLOW}]"
+    if activity == ThreadActivity.RESPONSE_FRESH:
+        return f"[bold {C_GREEN}]done[/bold {C_GREEN}]"
+    if activity == ThreadActivity.RESPONSE_READY:
+        return f"[{C_ORANGE}]done[/{C_ORANGE}]"
+    return ""
+
+
+def _best_activity(sessions: list, last_seen: dict[str, str] | None = None) -> ThreadActivity:
+    """Return the most urgent activity state across a list of sessions."""
+    if not sessions:
+        return ThreadActivity.IDLE
+    best = ThreadActivity.IDLE
+    for s in sessions:
+        act = session_activity(s, last_seen)
+        if _ACTIVITY_PRIORITY[act] < _ACTIVITY_PRIORITY[best]:
+            best = act
+    return best
+
+
+def _render_session_option(
+    s: ClaudeSession, act: ThreadActivity, throbber_frame: int = 0,
+    title_width: int = 48,
+) -> str:
+    """Render a session as a formatted two-line OptionList entry."""
+    icon = _activity_icon(act, throbber_frame)
+    badge = _activity_badge(act)
+    model = _short_model(s.model)
+    title = _session_title(s)[:title_width]
+    tokens = _colored_tokens(s)
+
+    # Title color by state
+    if act == ThreadActivity.IDLE:
+        title_fmt = f"[{C_DIM}]{title}[/{C_DIM}]"
+    elif act in (ThreadActivity.THINKING, ThreadActivity.AWAITING_INPUT):
+        title_fmt = f"[bold]{title}[/bold]"
+    elif act == ThreadActivity.RESPONSE_FRESH:
+        title_fmt = f"[bold {C_GREEN}]{title}[/bold {C_GREEN}]"
+    elif act == ThreadActivity.RESPONSE_READY:
+        title_fmt = f"[{C_ORANGE}]{title}[/{C_ORANGE}]"
+    else:
+        title_fmt = title
+
+    # Align badges by padding raw title to fixed width
+    pad = " " * max(1, title_width + 2 - len(title))
+    badge_part = f"{pad}{badge}" if badge else ""
+    line1 = f" {icon}  {title_fmt}{badge_part}"
+    line2 = (
+        f"      [{C_DIM}]{model} · {s.message_count} msgs · "
+        f"[/{C_DIM}]{tokens}[{C_DIM}] tok · {s.age}[/{C_DIM}]"
+    )
+    return f"{line1}\n{line2}"
 
 LINK_TYPE_ICONS = {
     "worktree": "\U0001f333",
@@ -178,8 +290,8 @@ class HelpScreen(ModalScreen[None]):
         height: auto;
         max-height: 90%;
         padding: 1 2;
-        background: $surface;
-        border: solid {C_BLUE};
+        background: {BG_BASE};
+        border: round $primary 30%;
     }}
     #help-content {{
         padding: 0 1;
@@ -245,6 +357,45 @@ class HelpScreen(ModalScreen[None]):
             yield Static(help_text, id="help-content")
 
 
+# ─── Quick Note Screen ───────────────────────────────────────────────
+
+class QuickNoteScreen(ModalScreen[str | None]):
+    BINDINGS = [
+        Binding("escape", "cancel", "Cancel", priority=True),
+    ]
+
+    DEFAULT_CSS = f"""
+    QuickNoteScreen {{ align: center middle; }}
+    #qnote-container {{
+        width: 70; height: 9;
+        padding: 1 2; background: {BG_BASE}; border: round $primary 30%;
+    }}
+    #qnote-title {{ text-style: bold; color: {C_PURPLE}; padding-bottom: 1; }}
+    #qnote-input {{ height: 3; }}
+    #qnote-hint {{ text-align: center; color: {C_DIM}; padding-top: 1; }}
+    """
+
+    def __init__(self, ws: Workstream):
+        super().__init__()
+        self.ws = ws
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="qnote-container"):
+            yield Label(f"Note: {self.ws.name}", id="qnote-title")
+            yield Input(placeholder="type a note...", id="qnote-input")
+            yield Static(f"[{C_DIM}]Enter[/{C_DIM}] save  [{C_DIM}]Esc[/{C_DIM}] cancel", id="qnote-hint")
+
+    def on_mount(self):
+        self.query_one("#qnote-input", Input).focus()
+
+    @on(Input.Submitted, "#qnote-input")
+    def on_submit(self, event: Input.Submitted):
+        self.dismiss(event.value.strip() or None)
+
+    def action_cancel(self):
+        self.dismiss(None)
+
+
 # ─── Notes Screen ───────────────────────────────────────────────────
 
 class NotesScreen(ModalScreen[None]):
@@ -254,7 +405,7 @@ class NotesScreen(ModalScreen[None]):
     NotesScreen {{ align: center middle; }}
     #notes-container {{
         width: 80; height: auto; max-height: 80%;
-        padding: 1 2; background: $surface; border: solid {C_BLUE};
+        padding: 1 2; background: {BG_BASE}; border: round $primary 30%;
     }}
     #notes-title {{ text-style: bold; color: {C_PURPLE}; padding-bottom: 1; }}
     #notes-editor {{ height: 20; margin: 0 0 1 0; }}
@@ -279,19 +430,62 @@ class NotesScreen(ModalScreen[None]):
         self.dismiss()
 
 
+# ─── Vim OptionList Navigation Mixin ─────────────────────────────────
+
+class _VimOptionListMixin:
+    """Adds j/k, Ctrl+D/U, gg/G navigation to any screen with an OptionList."""
+
+    _option_list_id: str = ""  # subclass sets this
+
+    VIM_BINDINGS = [
+        Binding("j,down", "cursor_down", show=False),
+        Binding("k,up", "cursor_up", show=False),
+        Binding("ctrl+d", "half_page_down", show=False),
+        Binding("ctrl+u", "half_page_up", show=False),
+        Binding("g", "jump_top", show=False),
+        Binding("G", "jump_bottom", show=False),
+    ]
+
+    def _olist(self) -> OptionList:
+        return self.query_one(f"#{self._option_list_id}", OptionList)  # type: ignore[attr-defined]
+
+    def action_cursor_down(self):
+        ol = self._olist()
+        if ol.highlighted is not None and ol.highlighted < ol.option_count - 1:
+            ol.action_cursor_down()
+
+    def action_cursor_up(self):
+        ol = self._olist()
+        if ol.highlighted is not None and ol.highlighted > 0:
+            ol.action_cursor_up()
+
+    def action_half_page_down(self):
+        self._olist().action_page_down()
+
+    def action_half_page_up(self):
+        self._olist().action_page_up()
+
+    def action_jump_top(self):
+        self._olist().action_first()
+
+    def action_jump_bottom(self):
+        self._olist().action_last()
+
+
 # ─── Links Screen ───────────────────────────────────────────────────
 
-class LinksScreen(ModalScreen[None]):
+class LinksScreen(_VimOptionListMixin, ModalScreen[None]):
+    _option_list_id = "links-list"
     BINDINGS = [
         Binding("escape,q", "dismiss", "Back"),
         Binding("enter", "open_link", "Open"),
-    ]
+    ] + _VimOptionListMixin.VIM_BINDINGS
 
     DEFAULT_CSS = f"""
     LinksScreen {{ align: center middle; }}
     #links-container {{
         width: 80; height: auto; max-height: 80%;
-        padding: 1 2; background: $surface; border: solid {C_BLUE};
+        padding: 1 2; background: {BG_BASE}; border: round $primary 30%;
     }}
     #links-title {{ text-style: bold; color: {C_PURPLE}; padding-bottom: 1; }}
     #links-list {{ height: auto; max-height: 20; }}
@@ -315,6 +509,9 @@ class LinksScreen(ModalScreen[None]):
             yield OptionList(*options, id="links-list")
             yield Static(f"[{C_DIM}]Enter[/{C_DIM}] open  [{C_DIM}]Esc[/{C_DIM}] back", id="links-hint")
 
+    def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
+        self.action_open_link()
+
     def action_open_link(self):
         option_list = self.query_one("#links-list", OptionList)
         idx = option_list.highlighted
@@ -333,7 +530,7 @@ class AddScreen(ModalScreen[Workstream | None]):
     AddScreen {{ align: center middle; }}
     #add-container {{
         width: 70; height: auto; max-height: 80%;
-        padding: 1 2; background: $surface; border: solid {C_BLUE};
+        padding: 1 2; background: {BG_BASE}; border: round $primary 30%;
     }}
     #add-title {{ text-style: bold; color: {C_PURPLE}; padding-bottom: 1; }}
     #add-container Input {{ margin: 0 0 1 0; }}
@@ -379,106 +576,237 @@ class AddScreen(ModalScreen[Workstream | None]):
 
 # ─── Detail Screen ──────────────────────────────────────────────────
 
-class DetailScreen(ModalScreen[None]):
+class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
     BINDINGS = [
         Binding("q,escape", "dismiss", "Back"),
-        Binding("j,down", "scroll_down", show=False),
-        Binding("k,up", "scroll_up", show=False),
         Binding("s", "cycle_status", "Status"),
         Binding("S", "cycle_status_back", "Status\u2190"),
         Binding("c", "spawn", "Spawn"),
         Binding("r", "resume", "Resume"),
+        Binding("n", "quick_note", "Note"),
         Binding("l", "add_link", "Link+"),
         Binding("e", "edit_notes", "Edit notes"),
         Binding("o", "open_links", "Open links"),
         Binding("x", "archive", "Archive"),
-    ]
+        Binding("a", "archive_thread", "Archive thread"),
+        Binding("A", "toggle_archived_threads", "Show archived"),
+    ] + _VimOptionListMixin.VIM_BINDINGS
 
     DEFAULT_CSS = f"""
     DetailScreen {{ align: center middle; }}
     #detail-container {{
-        width: 80; height: auto; max-height: 90%;
-        padding: 1 2; background: $surface; border: solid {C_BLUE};
+        width: 100%; height: 100%;
+        padding: 0; background: {BG_BASE};
     }}
-    #detail-header {{ text-style: bold; text-align: center; padding-bottom: 1; }}
-    #detail-scroll {{ max-height: 40; }}
-    #detail-body {{ padding: 0 1; }}
-    #detail-help {{ text-align: center; color: {C_DIM}; padding-top: 1; }}
+
+    /* Header */
+    #detail-header {{
+        height: auto;
+        padding: 1 3;
+        background: {BG_BASE};
+    }}
+    #detail-title {{ text-style: bold; }}
+    #detail-meta {{ color: {C_DIM}; }}
+    #detail-desc {{ padding-top: 1; }}
+
+    /* Session list */
+    #detail-sessions-label {{
+        padding: 0 3;
+        color: {C_BLUE};
+        text-style: bold;
+    }}
+    #detail-sessions {{
+        height: auto; max-height: 50%;
+        margin: 0 1; padding: 0;
+        border: none;
+        background: {BG_BASE};
+    }}
+    #detail-sessions > .option-list--option-highlighted {{
+        background: #252525;
+    }}
+    #detail-no-sessions {{
+        padding: 1 3;
+        color: {C_DIM};
+    }}
+
+    /* Body */
+    #detail-scroll {{
+        height: 1fr;
+        border-top: blank;
+    }}
+    #detail-body {{
+        padding: 1 3;
+    }}
+
+    /* Help bar */
+    #detail-help {{
+        height: 1;
+        padding: 0 2;
+        background: {BG_BASE};
+        color: {C_DIM};
+        dock: bottom;
+    }}
     """
+
+    _option_list_id = "detail-sessions"
 
     def __init__(self, ws: Workstream, store: Store):
         super().__init__()
         self.ws = ws
         self.store = store
+        self._detail_sessions: list[ClaudeSession] = []
+        self._throbber_frame: int = 0
+        self._last_seen_cache: dict[str, str] = {}
+        self._show_archived_threads: bool = False
 
     def compose(self) -> ComposeResult:
         with Vertical(id="detail-container"):
-            yield Static(self._render_header(), id="detail-header")
-            yield Rule()
+            # Header band
+            with Vertical(id="detail-header"):
+                yield Static(self._render_title(), id="detail-title")
+                yield Static(self._render_meta(), id="detail-meta")
+                if self.ws.description:
+                    yield Static(self.ws.description, id="detail-desc")
+
+            # Session list
+            yield Static(f"[bold {C_BLUE}]Sessions[/bold {C_BLUE}]", id="detail-sessions-label")
+            yield OptionList(id="detail-sessions")
+            yield Static(f"[{C_DIM}]No sessions discovered[/{C_DIM}]", id="detail-no-sessions")
+
+            # Scrollable body (context, notes, timeline)
             with VerticalScroll(id="detail-scroll"):
                 yield Static(self._render_body(), id="detail-body")
-            yield Rule()
-            yield Static(
-                f"[{C_DIM}]s/S[/{C_DIM}] status  [{C_DIM}]c[/{C_DIM}] spawn  "
-                f"[{C_DIM}]r[/{C_DIM}] resume  [{C_DIM}]l[/{C_DIM}] link+  "
-                f"[{C_DIM}]e[/{C_DIM}] notes  [{C_DIM}]o[/{C_DIM}] open  "
-                f"[{C_DIM}]x[/{C_DIM}] archive  [{C_DIM}]q[/{C_DIM}] back",
-                id="detail-help",
-            )
 
-    def _render_header(self) -> str:
-        return (
-            f"[bold]{self.ws.name}[/bold]\n"
-            f"{_category_markup(self.ws.category)}  {_status_markup(self.ws.status)}"
-        )
+            # Help bar
+            yield Static(self._render_help(), id="detail-help")
+
+    def on_mount(self):
+        self._last_seen_cache = load_last_seen()
+        self._load_detail_sessions()
+        self._throbber_timer = self.set_interval(0.08, self._tick_throbber)
+        self.set_interval(3, self._refresh_session_liveness)
+
+    def _refresh_session_liveness(self):
+        _refresh_liveness(self._detail_sessions)
+
+    def on_sessions_changed(self, event: SessionsChanged):
+        """React to real-time session updates from the file watcher."""
+        self._load_detail_sessions()
+        self._refresh()
+
+    # -- Throbber animation --
+
+    def _tick_throbber(self):
+        """Animate only the thinking/awaiting sessions in-place."""
+        self._throbber_frame += 1
+        olist = self.query_one("#detail-sessions", OptionList)
+        for i, s in enumerate(self._detail_sessions):
+            act = session_activity(s, self._last_seen_cache)
+            if act in (ThreadActivity.THINKING, ThreadActivity.AWAITING_INPUT):
+                prompt = _render_session_option(s, act, self._throbber_frame)
+                olist.replace_option_prompt_at_index(i, prompt)
+
+    # -- Session list --
+
+    def _load_detail_sessions(self):
+        app = self.app
+        if hasattr(app, '_sessions_for_ws'):
+            if self._show_archived_threads:
+                self._detail_sessions = app._sessions_for_ws(self.ws, include_archived_threads=True)
+            else:
+                self._detail_sessions = app._sessions_for_ws(self.ws)
+        else:
+            self._detail_sessions = _find_sessions_for_ws(self.ws, getattr(app, 'sessions', []))
+        olist = self.query_one("#detail-sessions", OptionList)
+        no_sess = self.query_one("#detail-no-sessions", Static)
+
+        # Update label to show archived count
+        label = self.query_one("#detail-sessions-label", Static)
+        archived_count = len(self.ws.archived_thread_ids)
+        if self._show_archived_threads and archived_count:
+            label.update(f"[bold {C_BLUE}]Sessions[/bold {C_BLUE}]  [{C_DIM}](showing archived)[/{C_DIM}]")
+        elif archived_count:
+            label.update(f"[bold {C_BLUE}]Sessions[/bold {C_BLUE}]  [{C_DIM}]({archived_count} archived)[/{C_DIM}]")
+        else:
+            label.update(f"[bold {C_BLUE}]Sessions[/bold {C_BLUE}]")
+
+        if self._detail_sessions:
+            olist.display = True
+            no_sess.display = False
+            self._build_session_list()
+        else:
+            olist.display = False
+            no_sess.display = True
+
+    def _archived_session_ids(self) -> set[str]:
+        """Get session IDs belonging to archived threads (cached per rebuild)."""
+        if not self.ws.archived_thread_ids:
+            return set()
+        app = self.app
+        if not hasattr(app, 'threads'):
+            return set()
+        archived_tids = set(self.ws.archived_thread_ids)
+        sids = set()
+        for t in app.threads:
+            if t.thread_id in archived_tids:
+                for s in t.sessions:
+                    sids.add(s.session_id)
+        return sids
+
+    def _build_session_list(self):
+        """Full rebuild of the session OptionList."""
+        olist = self.query_one("#detail-sessions", OptionList)
+        olist.clear_options()
+        archived_sids = self._archived_session_ids() if self._show_archived_threads else set()
+        for i, s in enumerate(self._detail_sessions):
+            act = session_activity(s, self._last_seen_cache)
+            prompt = _render_session_option(s, act, self._throbber_frame)
+            if s.session_id in archived_sids:
+                prompt = f"[{C_DIM}][archived][/{C_DIM}] " + prompt
+            olist.add_option(Option(prompt, id=str(i)))
+
+    def on_option_list_option_selected(self, event: OptionList.OptionSelected):
+        idx = int(event.option_id)
+        if idx < len(self._detail_sessions):
+            session = self._detail_sessions[idx]
+            mark_thread_seen(session.session_id)
+            dirs = _ws_directories(self.ws)
+            _resume_session_now(self.ws, session, dirs, self.app)
+
+    # -- Render helpers --
+
+    def _render_title(self) -> str:
+        return f"[bold {C_PURPLE}]{self.ws.name}[/bold {C_PURPLE}]"
+
+    def _render_meta(self) -> str:
+        parts = [_status_markup(self.ws.status), _category_markup(self.ws.category)]
+        if self._detail_sessions:
+            n = len(self._detail_sessions)
+            total_tok = sum(s.total_input_tokens + s.total_output_tokens for s in self._detail_sessions)
+            total_msgs = sum(s.message_count for s in self._detail_sessions)
+            _tk = f"{total_tok / 1_000_000:.1f}M" if total_tok > 1_000_000 else f"{total_tok / 1_000:.0f}k" if total_tok > 1_000 else str(total_tok)
+            parts.append(
+                f"[{C_DIM}]{n} sessions \u00b7 {total_msgs} msgs \u00b7 "
+                f"{_token_color_markup(_tk, total_tok)} tok[/{C_DIM}]"
+            )
+        return "  ".join(parts)
 
     def _render_body(self) -> str:
         lines = []
-        all_sessions = getattr(self.app, 'sessions', [])
 
-        # Description
-        if self.ws.description:
-            lines.append(self.ws.description)
-            lines.append("")
-
-        # Auto-discovered sessions
-        thread_sessions = _find_sessions_for_ws(self.ws, all_sessions)
-        if thread_sessions:
-            total_tokens = sum(s.total_input_tokens + s.total_output_tokens for s in thread_sessions)
-            total_msgs = sum(s.message_count for s in thread_sessions)
-            _tk = f"{total_tokens / 1_000_000:.1f}M" if total_tokens > 1_000_000 else f"{total_tokens / 1_000:.0f}k" if total_tokens > 1_000 else str(total_tokens)
-
-            lines.append(f"[bold {C_BLUE}]Activity[/bold {C_BLUE}]")
-            lines.append(
-                f"  [{C_CYAN}]{len(thread_sessions)}[/{C_CYAN}] sessions  "
-                f"[{C_DIM}]\u00b7[/{C_DIM}]  {total_msgs} messages  "
-                f"[{C_DIM}]\u00b7[/{C_DIM}]  [{C_ORANGE}]{_token_color_markup(_tk, total_tokens)} tokens[/{C_ORANGE}]"
-            )
-            lines.append(f"  [{C_DIM}]Last active[/{C_DIM}] {thread_sessions[0].age}")
-            lines.append("")
-
-            lines.append(f"[bold {C_BLUE}]Recent threads[/bold {C_BLUE}]")
-            for s in thread_sessions[:8]:
-                model = _short_model(s.model)
-                title = s.display_name[:50]
-                lines.append(f"  [{C_CYAN}]{title}[/{C_CYAN}]")
-                lines.append(f"    {model} \u00b7 {s.message_count} msgs \u00b7 {_colored_tokens(s)} tokens \u00b7 {s.age}")
-            if len(thread_sessions) > 8:
-                lines.append(f"  [{C_DIM}]+ {len(thread_sessions) - 8} older[/{C_DIM}]")
-            lines.append("")
-
-        # Context (directories)
+        # Context
         dirs = _ws_directories(self.ws)
-        if dirs:
+        other_links = [lnk for lnk in self.ws.links
+                       if lnk.kind not in ("worktree", "file")
+                       or not os.path.isdir(os.path.expanduser(lnk.value))]
+        if dirs or other_links:
             lines.append(f"[bold {C_BLUE}]Context[/bold {C_BLUE}]")
             for d in dirs:
                 short = d.replace(str(Path.home()), "~")
                 lines.append(f"  [{C_DIM}]{short}[/{C_DIM}]")
-            # Non-directory links
-            other_links = [lnk for lnk in self.ws.links if lnk.kind not in ("worktree", "file") or not os.path.isdir(os.path.expanduser(lnk.value))]
             for lnk in other_links:
                 icon = _link_icon(lnk.kind)
-                lines.append(f"  {icon} {lnk.label}: {lnk.value}")
+                lines.append(f"  {icon} [{C_DIM}]{lnk.label}:[/{C_DIM}] {lnk.value}")
             lines.append("")
 
         # Notes
@@ -488,20 +816,30 @@ class DetailScreen(ModalScreen[None]):
                 lines.append(f"  {line}")
             lines.append("")
 
-        # Compact timeline
-        lines.append(f"[{C_DIM}]Created {_relative_time(self.ws.created_at)} \u00b7 Updated {_relative_time(self.ws.updated_at)}[/{C_DIM}]")
-
+        # Timeline
+        lines.append(
+            f"[{C_DIM}]Created {_relative_time(self.ws.created_at)} \u00b7 "
+            f"Updated {_relative_time(self.ws.updated_at)}[/{C_DIM}]"
+        )
         return "\n".join(lines)
 
+    def _render_help(self) -> str:
+        pairs = [
+            ("Enter", "resume"), ("s/S", "status"), ("c", "spawn"),
+            ("n", "note"), ("e", "edit"), ("l", "link+"),
+            ("o", "open"), ("x", "archive ws"),
+            ("a", "archive thread"), ("A", "show archived"),
+            ("q", "back"),
+        ]
+        return "  ".join(f"[{C_YELLOW}]{k}[/{C_YELLOW}] {v}" for k, v in pairs)
+
     def _refresh(self):
-        self.query_one("#detail-header", Static).update(self._render_header())
+        self.query_one("#detail-title", Static).update(self._render_title())
+        self.query_one("#detail-meta", Static).update(self._render_meta())
         self.query_one("#detail-body", Static).update(self._render_body())
+        self._load_detail_sessions()
 
-    def action_scroll_down(self):
-        self.query_one("#detail-scroll", VerticalScroll).scroll_down()
-
-    def action_scroll_up(self):
-        self.query_one("#detail-scroll", VerticalScroll).scroll_up()
+    # -- Actions --
 
     def action_cycle_status(self):
         statuses = list(Status)
@@ -516,6 +854,18 @@ class DetailScreen(ModalScreen[None]):
         self.ws.set_status(statuses[(idx - 1) % len(statuses)])
         self.store.update(self.ws)
         self._refresh()
+
+    def action_quick_note(self):
+        def on_note(text: str | None):
+            if not text or not text.strip():
+                return
+            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
+            entry = f"[{timestamp}] {text.strip()}"
+            self.ws.notes = (self.ws.notes + "\n" + entry) if self.ws.notes else entry
+            self.store.update(self.ws)
+            self._refresh()
+            self.app.notify("Note added", timeout=1)
+        self.app.push_screen(QuickNoteScreen(self.ws), callback=on_note)
 
     def action_edit_notes(self):
         def on_notes_close(_):
@@ -536,13 +886,70 @@ class DetailScreen(ModalScreen[None]):
         self.app.notify(f"Archived: {self.ws.name}", timeout=2)
         self.dismiss()
 
-    def action_spawn(self):
-        def on_prompt(prompt: str | None):
-            if prompt is None:
-                return
-            _launch_orch_claude(self.ws, prompt=prompt)
+    def _thread_for_session(self, session: ClaudeSession) -> str | None:
+        """Find the thread_id that contains this session."""
+        app = self.app
+        if not hasattr(app, 'threads'):
+            return None
+        for t in app.threads:
+            if any(s.session_id == session.session_id for s in t.sessions):
+                return t.thread_id
+        return None
 
-        self.app.push_screen(SpawnPromptScreen(self.ws), callback=on_prompt)
+    def action_archive_thread(self):
+        """Archive the thread containing the currently selected session."""
+        olist = self.query_one("#detail-sessions", OptionList)
+        idx = olist.highlighted
+        if idx is None or idx >= len(self._detail_sessions):
+            return
+        session = self._detail_sessions[idx]
+        tid = self._thread_for_session(session)
+        if not tid:
+            self.app.notify("Could not find thread", severity="warning", timeout=2)
+            return
+        old_idx = olist.highlighted
+        if self._show_archived_threads and tid in self.ws.archived_thread_ids:
+            # Unarchive
+            self.ws.archived_thread_ids.remove(tid)
+            self.store.update(self.ws)
+            self.app.notify("Thread unarchived", timeout=2)
+        elif tid not in self.ws.archived_thread_ids:
+            self.ws.archived_thread_ids.append(tid)
+            self.store.update(self.ws)
+            self.app.notify("Thread archived", timeout=2)
+        self._refresh()
+        # Restore cursor to nearest valid position
+        olist = self.query_one("#detail-sessions", OptionList)
+        if self._detail_sessions and old_idx is not None:
+            olist.highlighted = min(old_idx, len(self._detail_sessions) - 1)
+
+    def action_toggle_archived_threads(self):
+        """Toggle showing archived threads in the session list."""
+        if not self.ws.archived_thread_ids:
+            self.app.notify("No archived threads", timeout=2)
+            return
+        self._show_archived_threads = not self._show_archived_threads
+        self._refresh()
+
+    def action_spawn(self):
+        ok, err = _launch_orch_claude(self.ws, store=self.store)
+        if ok:
+            self.app.notify("Session spawned", timeout=2)
+            self._add_spawning_placeholder()
+        else:
+            self.app.notify(f"Spawn failed: {err}", severity="error", timeout=4)
+
+    def _add_spawning_placeholder(self):
+        """Show a placeholder entry instantly while the real session spins up."""
+        olist = self.query_one("#detail-sessions", OptionList)
+        no_sess = self.query_one("#detail-no-sessions", Static)
+        olist.display = True
+        no_sess.display = False
+        frame = THROBBER_FRAMES[self._throbber_frame % len(THROBBER_FRAMES)]
+        line1 = f" [bold {C_CYAN}]{frame}[/bold {C_CYAN}]  [bold]Starting session…[/bold]"
+        line2 = f"      [{C_DIM}]waiting for Claude to initialize[/{C_DIM}]"
+        olist.add_option(Option(f"{line1}\n{line2}", id="spawning"))
+        self._refresh()
 
     def action_resume(self):
         _do_resume(self.ws, self.app, getattr(self.app, 'sessions', []))
@@ -570,7 +977,7 @@ class BrainDumpScreen(ModalScreen[str | None]):
     BrainDumpScreen {{ align: center middle; }}
     #brain-container {{
         width: 80; height: auto; max-height: 85%;
-        padding: 1 2; background: $surface; border: solid {C_BLUE};
+        padding: 1 2; background: {BG_BASE}; border: round $primary 30%;
     }}
     #brain-title {{ text-style: bold; color: {C_PURPLE}; padding-bottom: 1; }}
     #brain-desc {{ color: {C_DIM}; padding-bottom: 1; }}
@@ -615,7 +1022,7 @@ class BrainPreviewScreen(ModalScreen[bool]):
     BrainPreviewScreen {{ align: center middle; }}
     #brain-preview-container {{
         width: 80; height: auto; max-height: 85%;
-        padding: 1 2; background: $surface; border: solid {C_BLUE};
+        padding: 1 2; background: {BG_BASE}; border: round $primary 30%;
     }}
     #brain-preview-title {{ text-style: bold; color: {C_PURPLE}; padding-bottom: 1; }}
     #brain-preview-body {{ padding: 0 1; max-height: 30; }}
@@ -658,7 +1065,7 @@ class AddLinkScreen(ModalScreen[Link | None]):
     AddLinkScreen {{ align: center middle; }}
     #addlink-container {{
         width: 70; height: auto; max-height: 80%;
-        padding: 1 2; background: $surface; border: solid {C_BLUE};
+        padding: 1 2; background: {BG_BASE}; border: round $primary 30%;
     }}
     #addlink-title {{ text-style: bold; color: {C_PURPLE}; padding-bottom: 1; }}
     #addlink-container Input {{ margin: 0 0 1 0; }}
@@ -704,66 +1111,22 @@ class AddLinkScreen(ModalScreen[Link | None]):
         self.dismiss(None)
 
 
-# ─── Spawn Prompt Screen ────────────────────────────────────────────
-
-class SpawnPromptScreen(ModalScreen[str | None]):
-    BINDINGS = [
-        Binding("ctrl+s", "submit", "Spawn", priority=True),
-        Binding("escape", "cancel", "Cancel", priority=True),
-    ]
-
-    DEFAULT_CSS = f"""
-    SpawnPromptScreen {{ align: center middle; }}
-    #spawn-container {{
-        width: 80; height: auto; max-height: 80%;
-        padding: 1 2; background: $surface; border: solid {C_BLUE};
-    }}
-    #spawn-title {{ text-style: bold; color: {C_PURPLE}; padding-bottom: 1; }}
-    #spawn-desc {{ color: {C_DIM}; padding-bottom: 1; }}
-    #spawn-editor {{ height: 8; margin: 0 0 1 0; }}
-    #spawn-hint {{ text-align: center; color: {C_DIM}; }}
-    """
-
-    def __init__(self, ws: Workstream):
-        super().__init__()
-        self.ws = ws
-
-    def compose(self) -> ComposeResult:
-        prompt = f"Working on: {self.ws.name}"
-        if self.ws.description:
-            prompt += f"\n{self.ws.description}"
-        with Vertical(id="spawn-container"):
-            yield Label(f"New session: {self.ws.name}", id="spawn-title")
-            yield Static(f"[{C_DIM}]Describe what you want to work on. Claude will receive your thread context automatically.[/{C_DIM}]", id="spawn-desc")
-            yield TextArea(prompt, id="spawn-editor")
-            yield Static(f"[{C_DIM}]Ctrl+S[/{C_DIM}] spawn  [{C_DIM}]Esc[/{C_DIM}] cancel", id="spawn-hint")
-
-    def on_mount(self):
-        self.query_one("#spawn-editor", TextArea).focus()
-
-    def action_submit(self):
-        text = self.query_one("#spawn-editor", TextArea).text.strip()
-        self.dismiss(text or "")
-
-    def action_cancel(self):
-        self.dismiss(None)
-
-
 # ─── Link Session Screen ────────────────────────────────────────────
 
-class LinkSessionScreen(ModalScreen[Workstream | None]):
+class LinkSessionScreen(_VimOptionListMixin, ModalScreen[Workstream | None]):
     """Select a workstream to link a session to."""
 
+    _option_list_id = "linksession-list"
     BINDINGS = [
         Binding("escape,q", "cancel", "Cancel"),
         Binding("enter", "confirm", "Link"),
-    ]
+    ] + _VimOptionListMixin.VIM_BINDINGS
 
     DEFAULT_CSS = f"""
     LinkSessionScreen {{ align: center middle; }}
     #linksession-container {{
         width: 70; height: auto; max-height: 80%;
-        padding: 1 2; background: $surface; border: solid {C_BLUE};
+        padding: 1 2; background: {BG_BASE}; border: round $primary 30%;
     }}
     #linksession-title {{ text-style: bold; color: {C_PURPLE}; padding-bottom: 1; }}
     #linksession-list {{ height: auto; max-height: 20; }}
@@ -776,7 +1139,7 @@ class LinkSessionScreen(ModalScreen[Workstream | None]):
         self.session = session
 
     def compose(self) -> ComposeResult:
-        title = self.session.display_name[:40]
+        title = self.session.display_name
         with Vertical(id="linksession-container"):
             yield Label(f"Link session to workstream: {title}", id="linksession-title")
             options = []
@@ -805,7 +1168,127 @@ class LinkSessionScreen(ModalScreen[Workstream | None]):
         self.dismiss(None)
 
 
-# ─── Confirm Screen ─────────────────────────────────────────────────
+# ─── Thread Picker Screen ────────────────────────────────────────────
+
+def _session_title(session: ClaudeSession, titles: dict[str, str] | None = None) -> str:
+    """Best available title for a session: AI title > cached > first message > project."""
+    # AI-generated title (from cache)
+    if titles and session.session_id in titles:
+        return titles[session.session_id]
+    cached = get_session_title(session)
+    if cached:
+        return cached
+    # Fall back to first user message
+    first_msg = _extract_first_message(session)
+    if first_msg:
+        line = first_msg.split("\n")[0].strip()
+        if line.startswith("#"):
+            line = line.lstrip("# ")
+        if len(line) > 60:
+            line = line[:57] + "..."
+        return line
+    return _short_project(session.project_path)
+
+
+class ThreadPickerScreen(_VimOptionListMixin, ModalScreen[ClaudeSession | None]):
+    """Pick a thread to resume from a workstream's matching sessions."""
+
+    _option_list_id = "threadpick-list"
+    BINDINGS = [
+        Binding("escape,q", "cancel", "Cancel"),
+        Binding("enter", "confirm", "Resume"),
+    ] + _VimOptionListMixin.VIM_BINDINGS
+
+    DEFAULT_CSS = f"""
+    ThreadPickerScreen {{ align: center middle; }}
+    #threadpick-container {{
+        width: 90%; height: auto; max-height: 85%;
+        padding: 1 2; background: {BG_BASE}; border: round $primary 30%;
+    }}
+    #threadpick-title {{ text-style: bold; color: {C_PURPLE}; padding-bottom: 1; }}
+    #threadpick-list {{ height: auto; max-height: 24; }}
+    #threadpick-list > .option-list--option-highlighted {{
+        background: $primary 15%;
+    }}
+    #threadpick-hint {{ text-align: center; color: {C_DIM}; padding-top: 1; }}
+    """
+
+    def __init__(self, ws: Workstream, sessions: list[ClaudeSession]):
+        super().__init__()
+        self.ws = ws
+        self.thread_sessions = sessions
+        self._throbber_frame: int = 0
+        self._last_seen_cache: dict[str, str] = {}
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="threadpick-container"):
+            yield Label(f"Resume: {self.ws.name}", id="threadpick-title")
+            yield OptionList(*self._build_options(), id="threadpick-list")
+            yield Static(
+                f"[{C_DIM}]Enter[/{C_DIM}] resume  [{C_DIM}]Esc[/{C_DIM}] cancel",
+                id="threadpick-hint",
+            )
+
+    def on_mount(self):
+        self._last_seen_cache = load_last_seen()
+        self._generate_titles()
+        self._rebuild_options()
+        self._throbber_timer = self.set_interval(0.08, self._tick_throbber)
+        self.set_interval(3, self._refresh_session_liveness)
+
+    def _refresh_session_liveness(self):
+        _refresh_liveness(self.thread_sessions)
+
+    def _tick_throbber(self):
+        """Animate only the thinking/awaiting sessions in-place."""
+        self._throbber_frame += 1
+        olist = self.query_one("#threadpick-list", OptionList)
+        for i, s in enumerate(self.thread_sessions):
+            act = session_activity(s, self._last_seen_cache)
+            if act in (ThreadActivity.THINKING, ThreadActivity.AWAITING_INPUT):
+                prompt = _render_session_option(s, act, self._throbber_frame)
+                olist.replace_option_prompt_at_index(i, prompt)
+
+    @work(thread=True)
+    def _generate_titles(self):
+        """Generate AI titles for untitled sessions in the background."""
+        untitled = [s for s in self.thread_sessions if not get_session_title(s)]
+        if untitled:
+            title_sessions(untitled)
+            self.app.call_from_thread(self._rebuild_options)
+
+    def _build_options(self) -> list[Option]:
+        options = []
+        for i, s in enumerate(self.thread_sessions):
+            act = session_activity(s, self._last_seen_cache)
+            prompt = _render_session_option(s, act, self._throbber_frame)
+            options.append(Option(prompt, id=str(i)))
+        return options
+
+    def _rebuild_options(self):
+        """Full rebuild after titles are generated."""
+        olist = self.query_one("#threadpick-list", OptionList)
+        highlighted = olist.highlighted
+        olist.clear_options()
+        for opt in self._build_options():
+            olist.add_option(opt)
+        if highlighted is not None:
+            olist.highlighted = highlighted
+
+    def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
+        self.action_confirm()
+
+    def action_confirm(self):
+        option_list = self.query_one("#threadpick-list", OptionList)
+        idx = option_list.highlighted
+        if idx is not None and idx < len(self.thread_sessions):
+            self.dismiss(self.thread_sessions[idx])
+            return
+        self.app.notify("No thread selected", severity="error", timeout=2)
+
+    def action_cancel(self):
+        self.dismiss(None)
+
 
 class ConfirmScreen(ModalScreen[bool]):
     BINDINGS = [
@@ -817,7 +1300,7 @@ class ConfirmScreen(ModalScreen[bool]):
     ConfirmScreen {{ align: center middle; }}
     #confirm-container {{
         width: 50; height: auto; padding: 1 2;
-        background: $surface; border: solid {C_RED};
+        background: {BG_BASE}; border: round $error 40%;
     }}
     #confirm-msg {{ text-align: center; padding: 1; }}
     #confirm-hint {{ text-align: center; color: {C_DIM}; }}
@@ -888,20 +1371,74 @@ def _has_tmux() -> bool:
     return bool(os.environ.get("TMUX"))
 
 
+def _find_tmux_window_for_session(session_id: str) -> str | None:
+    """Find a tmux window already running a Claude session (via @orch_session_id tag).
+
+    Returns the window_id if found, None otherwise.
+    """
+    try:
+        result = subprocess.run(
+            ["tmux", "list-windows", "-F",
+             "#{@orch_session_id}\t#{window_id}"],
+            capture_output=True, text=True, timeout=5,
+        )
+        if result.returncode != 0:
+            return None
+        for line in result.stdout.strip().split("\n"):
+            if "\t" not in line:
+                continue
+            tag, wid = line.split("\t", 1)
+            if tag == session_id:
+                return wid
+    except Exception:
+        pass
+    return None
+
+
+def _switch_to_tmux_window(window_id: str) -> bool:
+    """Switch to an existing tmux window by ID."""
+    try:
+        result = subprocess.run(
+            ["tmux", "select-window", "-t", window_id],
+            capture_output=True, timeout=5,
+        )
+        return result.returncode == 0
+    except Exception:
+        return False
+
+
 def _launch_orch_claude(
     ws: Workstream,
+    store: Store | None = None,
     session_id: str | None = None,
     prompt: str | None = None,
     cwd: str | None = None,
-):
-    """Launch Claude via the orch-claude wrapper in a new tmux window."""
+) -> tuple[bool, str]:
+    """Launch Claude via the orch-claude wrapper in a new tmux window.
+
+    Returns (success, error_message).
+    """
+    if not os.environ.get("TMUX"):
+        return False, "Not running inside tmux"
+
     wrapper = str(Path(__file__).parent / "orch-claude")
 
     if cwd is None:
         cwd = _ws_working_dir(ws)
 
+    # Save the prompt as a note so it's never lost
+    if prompt and prompt.strip() and store:
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
+        entry = f"[{timestamp}] spawn: {prompt.strip()}"
+        ws.notes = (ws.notes + "\n" + entry) if ws.notes else entry
+        store.update(ws)
+
+    # Determine the tmux session we're running in
+    tmux_session = os.environ.get("TMUX_SESSION", "orch")
+
     cmd = [
-        "tmux", "new-window", "-n", f"\U0001f916{ws.name[:18]}",
+        "tmux", "new-window", "-t", tmux_session,
+        "-n", f"\U0001f916{ws.name[:18]}",
         "-c", cwd,
         wrapper,
         "--ws-id", ws.id,
@@ -920,7 +1457,19 @@ def _launch_orch_claude(
     elif prompt:
         cmd += ["--prompt", prompt]
 
-    subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    try:
+        proc = subprocess.Popen(cmd, stderr=subprocess.PIPE)
+        # Give tmux a moment to fail (it fails fast if session doesn't exist)
+        try:
+            proc.wait(timeout=2)
+            if proc.returncode != 0:
+                err = proc.stderr.read().decode().strip() if proc.stderr else "unknown error"
+                return False, err
+        except subprocess.TimeoutExpired:
+            pass  # Still running = success (tmux window is up)
+        return True, ""
+    except Exception as e:
+        return False, str(e)
 
 
 def _ws_directories(ws: Workstream) -> list[str]:
@@ -977,21 +1526,29 @@ def _find_sessions_for_ws(ws: Workstream, all_sessions: list[ClaudeSession]) -> 
 
 
 def _do_resume(ws: Workstream, app, sessions: list[ClaudeSession] | None = None):
-    """Smart resume: auto-discover sessions, fall back to directory."""
+    """Smart resume: auto-discover sessions, fall back to directory.
+
+    With 1 matching session: resumes immediately.
+    With 2+: opens a thread picker so the user can choose.
+    """
     if not _has_tmux():
         app.notify("Not in a tmux session", severity="error", timeout=2)
         return
 
-    matching = _find_sessions_for_ws(ws, sessions or [])
+    if hasattr(app, '_sessions_for_ws'):
+        matching = app._sessions_for_ws(ws)
+    else:
+        matching = _find_sessions_for_ws(ws, sessions or [])
     dirs = _ws_directories(ws)
 
     if matching:
-        session = matching[0]
-        cwd = session.project_path
-        if not os.path.isdir(cwd):
-            cwd = dirs[0] if dirs else os.getcwd()
-        _launch_orch_claude(ws, session_id=session.session_id, cwd=cwd)
-        app.notify(f"Resuming: {session.display_name}", timeout=2)
+        if len(matching) == 1:
+            _resume_session_now(ws, matching[0], dirs, app)
+        else:
+            def on_pick(session: ClaudeSession | None):
+                if session:
+                    _resume_session_now(ws, session, dirs, app)
+            app.push_screen(ThreadPickerScreen(ws, matching), callback=on_pick)
         return
 
     if dirs:
@@ -1000,6 +1557,27 @@ def _do_resume(ws: Workstream, app, sessions: list[ClaudeSession] | None = None)
         return
 
     app.notify("No sessions or directories found", timeout=2)
+
+
+def _resume_session_now(ws: Workstream, session: ClaudeSession, dirs: list[str], app):
+    """Resume a specific session immediately.
+
+    If the session is already running in a tmux window (detached), switches
+    to that window instead of spawning a duplicate.
+    """
+    mark_thread_seen(session.session_id)
+
+    # Check if this session is already running in a tmux window
+    existing_wid = _find_tmux_window_for_session(session.session_id)
+    if existing_wid and _switch_to_tmux_window(existing_wid):
+        app.notify(f"Reattached: {session.display_name}", timeout=2)
+        return
+
+    cwd = session.project_path
+    if not os.path.isdir(cwd):
+        cwd = dirs[0] if dirs else os.getcwd()
+    _launch_orch_claude(ws, session_id=session.session_id, cwd=cwd)
+    app.notify(f"Resuming: {session.display_name}", timeout=2)
 
 
 def _open_link(link: Link, ws: Workstream | None = None, app=None):
@@ -1042,31 +1620,34 @@ class OrchestratorApp(App):
 
     CSS = f"""
     Screen {{
-        background: $surface;
+        background: {BG_BASE};
     }}
 
-    /* ── Status Bar (top) ── */
+    /* ── All bars: flat, no background — text color only ── */
     #status-bar {{
         height: 1;
         padding: 0 1;
-        background: $primary-background;
+        background: {BG_BASE};
         dock: top;
     }}
-
-    /* ── View Bar ── */
     #view-bar {{
         height: 1;
         padding: 0 1;
-        background: $surface;
+        background: {BG_BASE};
         dock: top;
     }}
-
-    /* ── Filter Bar ── */
     #filter-bar {{
         height: 1;
         padding: 0 1;
-        background: $primary-background;
+        background: {BG_BASE};
         dock: top;
+    }}
+    #summary-bar {{
+        height: 1;
+        padding: 0 1;
+        background: {BG_BASE};
+        color: {C_DIM};
+        dock: bottom;
     }}
 
     /* ── Main Content ── */
@@ -1078,26 +1659,24 @@ class OrchestratorApp(App):
     DataTable {{
         width: 1fr;
     }}
-    DataTable > .datatable--header {{
-        text-style: bold;
-        background: $primary-background;
-        color: {C_BLUE};
-    }}
-    DataTable > .datatable--cursor {{
-        background: $accent 30%;
-        text-style: bold;
-    }}
 
     /* ── Preview Pane ── */
     #preview-pane {{
-        width: 40;
-        min-width: 28;
-        border-left: solid {C_BLUE} 50%;
+        width: 1fr;
+        min-width: 40;
+        border-left: blank;
         padding: 1 2;
-        background: $surface;
+        background: {BG_BASE};
     }}
     #preview-content {{
         width: 100%;
+    }}
+    #preview-sessions {{
+        height: auto;
+        max-height: 16;
+        width: 100%;
+        margin: 0;
+        padding: 0;
     }}
 
     /* ── Inline Inputs ── */
@@ -1106,24 +1685,17 @@ class OrchestratorApp(App):
         height: 1;
         display: none;
         border: none;
-        background: $primary-background;
+        background: {BG_BASE};
     }}
     #search-input:focus, #command-input:focus, #note-input:focus, #rename-input:focus {{
         border: none;
-    }}
-
-    /* ── Summary Bar ── */
-    #summary-bar {{
-        height: 1;
-        padding: 0 1;
-        background: $primary-background;
-        color: {C_DIM};
-        dock: bottom;
+        background: {BG_BASE};
     }}
     """
 
     TITLE = "orchestrator"
-    theme = "textual-dark"
+    CSS_PATH = "orchestrator.tcss"
+    theme = "mellow"
 
     BINDINGS = [
         # Navigation
@@ -1184,6 +1756,40 @@ class OrchestratorApp(App):
 
     def __init__(self):
         super().__init__()
+        self.register_theme(Theme(
+            name="mellow",
+            primary="#87afaf",       # muted teal — structural/borders
+            secondary="#af87ff",     # soft purple — headings
+            background="#141414",    # true dark
+            surface="#1a1a1a",       # barely lifted
+            panel="#222222",         # subtle differentiation
+            foreground="#a0a0a0",    # matches C_LIGHT — easy on the eyes
+            accent="#5fd7ff",        # muted cyan — active states
+            warning="#ffd75f",       # warm yellow
+            error="#d75f5f",         # muted red
+            success="#87d787",       # soft green
+            dark=True,
+            luminosity_spread=0.08,  # very tight shade ramp
+            text_alpha=0.85,
+            variables={
+                "scrollbar": "#333333",
+                "scrollbar-hover": "#555555",
+                "scrollbar-active": "#87afaf",
+                "scrollbar-background": "#141414",
+                "scrollbar-background-hover": "#1a1a1a",
+                "scrollbar-background-active": "#1a1a1a",
+                "scrollbar-corner-color": "#141414",
+                "footer-background": "#141414",
+                "footer-foreground": "#555555",
+                "block-cursor-text-style": "bold",
+                "border": "#333333",
+                "border-blurred": "#282828",
+                "input-cursor-background": "#87afaf",
+                "input-cursor-foreground": "#141414",
+                "input-selection-background": "#87afaf 30%",
+            },
+        ))
+        self.theme = "mellow"
         self.store = Store()
         self.view_mode: ViewMode = ViewMode.WORKSTREAMS
         self.filter_mode: str = "all"
@@ -1195,6 +1801,11 @@ class OrchestratorApp(App):
         self.preview_visible: bool = True
         self._tmux_paths: set[str] = set()
         self._tmux_names: set[str] = set()
+        self._throbber_frame: int = 0
+        self._throbber_timer = None
+        self._preview_sessions: list[ClaudeSession] = []
+        self._last_seen_cache: dict[str, str] = {}
+        self._session_watcher: SessionWatcher | None = None
 
     def compose(self) -> ComposeResult:
         yield Static("", id="status-bar")
@@ -1206,6 +1817,7 @@ class OrchestratorApp(App):
             yield DataTable(id="archived-table")
             with VerticalScroll(id="preview-pane"):
                 yield Static("", id="preview-content")
+                yield OptionList(id="preview-sessions")
         yield SearchInput(placeholder="Search...", id="search-input")
         yield CommandInput(placeholder=":", id="command-input")
         yield QuickNoteInput(placeholder="note: ", id="note-input")
@@ -1216,20 +1828,20 @@ class OrchestratorApp(App):
         # Workstreams table
         ws_table = self.query_one("#ws-table", DataTable)
         ws_table.cursor_type = "row"
-        ws_table.zebra_stripes = True
+        ws_table.zebra_stripes = False
         ws_table.add_columns("", "Name", "Sess", "Category", "Updated")
 
         # Sessions table (hidden initially)
         sessions_table = self.query_one("#sessions-table", DataTable)
         sessions_table.cursor_type = "row"
-        sessions_table.zebra_stripes = True
+        sessions_table.zebra_stripes = False
         sessions_table.add_columns("Title", "Thread", "Model", "Tokens", "Age")
         sessions_table.display = False
 
         # Archived table (hidden initially)
         archived_table = self.query_one("#archived-table", DataTable)
         archived_table.cursor_type = "row"
-        archived_table.zebra_stripes = True
+        archived_table.zebra_stripes = False
         archived_table.add_columns("", "Name", "Sess", "Category", "Updated")
         archived_table.display = False
 
@@ -1241,12 +1853,32 @@ class OrchestratorApp(App):
         # Update all bars
         self._update_all_bars()
 
+        # Hide preview sessions list initially
+        self.query_one("#preview-sessions", OptionList).display = False
+
         # Start tmux polling
         self._poll_tmux()
         self.set_interval(30, self._poll_tmux)
 
+        # File watcher for real-time session discovery (inotify/FSEvents)
+        self._session_watcher = SessionWatcher(
+            on_change=lambda: self.call_from_thread(self._poll_sessions),
+            debounce=1.0,
+        )
+        self._session_watcher.start()
+        # Fallback poll in case watcher misses events (e.g. NFS, edge cases)
+        self.set_interval(10, self._poll_sessions)
+
+        # Throbber animation for thinking sessions
+        self._throbber_timer = self.set_interval(0.1, self._tick_throbber)
+        self.set_interval(3, self._refresh_session_liveness)
+
         # Focus main table
         ws_table.focus()
+
+    def on_unmount(self):
+        if self._session_watcher:
+            self._session_watcher.stop()
 
     # ── Active table helper ──
 
@@ -1326,6 +1958,41 @@ class OrchestratorApp(App):
         self.preview_visible = not self.preview_visible
         pane.display = self.preview_visible
 
+    def _refresh_session_liveness(self):
+        old_live = {s.session_id for s in self.sessions if s.is_live}
+        _refresh_liveness(self.sessions)
+        _refresh_liveness(self._preview_sessions)
+        new_live = {s.session_id for s in self.sessions if s.is_live}
+
+        # Tail-read metadata for live sessions + sessions that just died
+        changed = old_live != new_live
+        active_ids = new_live | (old_live - new_live)
+        seen = set()
+        for s in self.sessions:
+            if s.session_id in active_ids and s.session_id not in seen:
+                seen.add(s.session_id)
+                if refresh_session_tail(s):
+                    changed = True
+        for s in self._preview_sessions:
+            if s.session_id in active_ids and s.session_id not in seen:
+                seen.add(s.session_id)
+                refresh_session_tail(s)
+
+        if changed:
+            self._refresh_ws_table()
+            if self.view_mode == ViewMode.SESSIONS:
+                self._refresh_sessions_table()
+
+    def _tick_throbber(self):
+        """Animate throbbers in-place for thinking/awaiting sessions."""
+        self._throbber_frame += 1
+        olist = self.query_one("#preview-sessions", OptionList)
+        for i, s in enumerate(self._preview_sessions):
+            act = session_activity(s, self._last_seen_cache)
+            if act in (ThreadActivity.THINKING, ThreadActivity.AWAITING_INPUT):
+                prompt = _render_session_option(s, act, self._throbber_frame, title_width=35)
+                olist.replace_option_prompt_at_index(i, prompt)
+
     def _update_preview(self):
         if not self.preview_visible:
             return
@@ -1349,8 +2016,11 @@ class OrchestratorApp(App):
 
     def _render_ws_preview(self, ws: Workstream | None, archived: bool = False):
         content = self.query_one("#preview-content", Static)
+        olist = self.query_one("#preview-sessions", OptionList)
         if not ws:
             content.update(f"[{C_DIM}]Select a thread[/{C_DIM}]\n\n{self._nav_hints()}")
+            olist.display = False
+            self._preview_sessions = []
             return
 
         lines = []
@@ -1377,31 +2047,21 @@ class OrchestratorApp(App):
             lines.append(
                 f"  [{C_CYAN}]{len(thread_sessions)}[/{C_CYAN}] sessions  "
                 f"[{C_DIM}]\u00b7[/{C_DIM}]  {total_msgs} messages  "
-                f"[{C_DIM}]\u00b7[/{C_DIM}]  [{C_ORANGE}]{_token_color_markup(_tk, total_tokens)} tokens[/{C_ORANGE}]"
+                f"[{C_DIM}]\u00b7[/{C_DIM}]  {_token_color_markup(_tk, total_tokens)} tokens"
             )
             lines.append(f"  [{C_DIM}]Last active[/{C_DIM}] {last_active}")
             lines.append("")
 
-            # Show recent sessions as conversation threads
-            lines.append(f"[bold {C_BLUE}]Recent threads[/bold {C_BLUE}]")
-            for s in thread_sessions[:5]:
-                model = _short_model(s.model)
-                title = s.display_name[:32]
-                lines.append(f"  [{C_CYAN}]{title}[/{C_CYAN}]")
-                lines.append(f"    {model} \u00b7 {s.message_count} msgs \u00b7 {_colored_tokens(s)} tokens \u00b7 {s.age}")
-            if len(thread_sessions) > 5:
-                lines.append(f"  [{C_DIM}]+ {len(thread_sessions) - 5} older[/{C_DIM}]")
-            lines.append("")
+            archived_count = len(ws.archived_thread_ids)
+            if archived_count:
+                lines.append(f"[bold {C_BLUE}]Sessions[/bold {C_BLUE}]  [{C_DIM}]({archived_count} archived)[/{C_DIM}]")
+            else:
+                lines.append(f"[bold {C_BLUE}]Sessions[/bold {C_BLUE}]")
         else:
             lines.append(f"[{C_DIM}]No Claude sessions found[/{C_DIM}]")
             dirs = _ws_directories(ws)
             if not dirs:
                 lines.append(f"[{C_DIM}]Link a directory to auto-discover sessions[/{C_DIM}]")
-            lines.append("")
-
-        # Live session indicator
-        if self._ws_has_tmux(ws):
-            lines.append(f"[bold {C_GREEN}]\u26a1 Live session[/bold {C_GREEN}]")
             lines.append("")
 
         # Context (directories, notes — collapsed, not the focus)
@@ -1437,7 +2097,32 @@ class OrchestratorApp(App):
 
         content.update("\n".join(lines))
 
+        # Populate the interactive session picker
+        self._preview_sessions = thread_sessions
+        self._last_seen_cache = load_last_seen()
+        if thread_sessions:
+            olist.display = True
+            self._refresh_preview_sessions()
+        else:
+            olist.display = False
+
+    def _refresh_preview_sessions(self):
+        """Rebuild the preview session OptionList with activity indicators."""
+        olist = self.query_one("#preview-sessions", OptionList)
+        highlighted = olist.highlighted
+        olist.clear_options()
+        for i, s in enumerate(self._preview_sessions):
+            act = session_activity(s, self._last_seen_cache)
+            olist.add_option(Option(
+                _render_session_option(s, act, self._throbber_frame, title_width=35),
+                id=str(i),
+            ))
+        if highlighted is not None and highlighted < len(self._preview_sessions):
+            olist.highlighted = highlighted
+
     def _render_session_preview(self, session: ClaudeSession | None):
+        self.query_one("#preview-sessions", OptionList).display = False
+        self._preview_sessions = []
         content = self.query_one("#preview-content", Static)
         if not session:
             content.update(f"[{C_DIM}]No session selected[/{C_DIM}]\n\n{self._nav_hints()}")
@@ -1485,6 +2170,8 @@ class OrchestratorApp(App):
         content.update("\n".join(lines))
 
     def _render_thread_preview(self, thread: Thread):
+        self.query_one("#preview-sessions", OptionList).display = False
+        self._preview_sessions = []
         content = self.query_one("#preview-content", Static)
         lines = []
 
@@ -1513,7 +2200,7 @@ class OrchestratorApp(App):
                                  key=lambda s: s.last_activity or "", reverse=True)
         for s in sorted_sessions[:8]:
             live_mark = f"[{C_GREEN}]\u25cf[/{C_GREEN}] " if s.is_live else "  "
-            title = s.display_name[:35]
+            title = s.display_name
             lines.append(f"  {live_mark}[{C_CYAN}]{title}[/{C_CYAN}]")
             lines.append(f"      {_short_model(s.model)} \u00b7 {s.message_count} msgs \u00b7 {_colored_tokens(s)} tokens \u00b7 {s.age}")
         if len(thread.sessions) > 8:
@@ -1673,8 +2360,20 @@ class OrchestratorApp(App):
         elif self.filter_mode == "personal":
             discovered = [w for w in discovered if w.category == Category.PERSONAL]
 
-        # Sort discovered by last activity
-        discovered.sort(key=lambda w: w.updated_at or "", reverse=True)
+        # Sort discovered: unread responses float to top, then by last user message time.
+        # This prevents thinking threads from constantly reordering the list.
+        last_seen = load_last_seen()
+        def _has_unread(ws: Workstream) -> bool:
+            sessions = self._sessions_for_ws(ws)
+            best = _best_activity(sessions, last_seen)
+            return best in (
+                ThreadActivity.RESPONSE_FRESH,
+                ThreadActivity.RESPONSE_READY,
+                ThreadActivity.AWAITING_INPUT,
+            )
+        # Stable sort chain: first by user activity (newest first), then by unread (top).
+        discovered.sort(key=lambda w: w.last_user_activity or w.updated_at or "", reverse=True)
+        discovered.sort(key=lambda w: 0 if _has_unread(w) else 1)
 
         return manual + discovered
 
@@ -1705,16 +2404,25 @@ class OrchestratorApp(App):
 
         items = self._get_unified_items()
 
+        last_seen = load_last_seen()
+
         for ws in items:
             is_discovered = ws.origin == Origin.DISCOVERED
-            is_live = getattr(ws, "_is_live", False)
 
             # Status column
             if is_discovered:
-                if is_live:
-                    status_cell = Text("\u25cf", style=C_GREEN)
-                else:
-                    status_cell = Text("\u25cb", style=C_DIM)
+                # Use best activity state across sessions
+                ws_sessions = self._sessions_for_ws(ws)
+                best = _best_activity(ws_sessions, last_seen)
+                _ACTIVITY_ICONS = {
+                    ThreadActivity.THINKING: ("◉", C_CYAN),
+                    ThreadActivity.AWAITING_INPUT: ("◉", C_YELLOW),
+                    ThreadActivity.RESPONSE_FRESH: ("●", C_GREEN),
+                    ThreadActivity.RESPONSE_READY: ("●", C_ORANGE),
+                    ThreadActivity.IDLE: ("·", C_DIM),
+                }
+                icon, color = _ACTIVITY_ICONS[best]
+                status_cell = Text(icon, style=color)
             else:
                 status_cell = Text(STATUS_ICONS[ws.status], style=STATUS_THEME[ws.status])
 
@@ -1752,13 +2460,47 @@ class OrchestratorApp(App):
             return ws
         return next((w for w in self.discovered_ws if w.id == key), None)
 
-    def _sessions_for_ws(self, ws: Workstream) -> list[ClaudeSession]:
-        """Find sessions for a workstream via thread_ids or directory matching."""
-        if ws.thread_ids:
+    def _sessions_for_ws(self, ws: Workstream, include_archived_threads: bool = False) -> list[ClaudeSession]:
+        """Find sessions for a workstream via thread_ids or directory matching.
+
+        By default, sessions belonging to archived threads are excluded.
+        Pass include_archived_threads=True to get everything.
+        """
+        archived_tids = set(ws.archived_thread_ids) if not include_archived_threads else set()
+
+        # Build effective thread list — use explicit thread_ids if available,
+        # otherwise derive from directory-matched threads (manual workstreams).
+        effective_tids = ws.thread_ids
+        if not effective_tids and self.threads:
+            ws_dirs = set()
+            for link in ws.links:
+                if link.kind in ("worktree", "file"):
+                    expanded = os.path.expanduser(link.value).rstrip("/")
+                    if os.path.isdir(expanded):
+                        ws_dirs.add(expanded)
+            explicit_sids = {link.value for link in ws.links if link.kind == "claude-session"}
+            matched = set()
+            for t in self.threads:
+                if t.project_path.rstrip("/") in ws_dirs:
+                    matched.add(t.thread_id)
+                elif explicit_sids:
+                    for s in t.sessions:
+                        if s.session_id in explicit_sids or any(
+                            s.session_id.startswith(sid) for sid in explicit_sids
+                        ):
+                            matched.add(t.thread_id)
+                            break
+            # Include archived thread IDs so Path A can skip them properly
+            matched.update(ws.archived_thread_ids)
+            effective_tids = list(matched)
+
+        if effective_tids:
             thread_map = {t.thread_id: t for t in self.threads}
             sessions = []
             seen = set()
-            for tid in ws.thread_ids:
+            for tid in effective_tids:
+                if tid in archived_tids:
+                    continue
                 t = thread_map.get(tid)
                 if t:
                     for s in t.sessions:
@@ -1767,12 +2509,61 @@ class OrchestratorApp(App):
                             seen.add(s.session_id)
             sessions.sort(key=lambda s: s.last_activity or "", reverse=True)
             return sessions
+
+        # Fallback when no threads loaded yet
         return _find_sessions_for_ws(ws, self.sessions)
+
+    def _archived_sessions_for_ws(self, ws: Workstream) -> list[ClaudeSession]:
+        """Find sessions from archived threads only."""
+        if not ws.archived_thread_ids:
+            return []
+        thread_map = {t.thread_id: t for t in self.threads}
+        sessions = []
+        seen = set()
+        for tid in ws.archived_thread_ids:
+            t = thread_map.get(tid)
+            if t:
+                for s in t.sessions:
+                    if s.session_id not in seen:
+                        sessions.append(s)
+                        seen.add(s.session_id)
+        sessions.sort(key=lambda s: s.last_activity or "", reverse=True)
+        return sessions
 
     # ── Sessions & threads loading ──
 
     def _load_sessions(self):
         self._do_load_sessions()
+
+    def _poll_sessions(self):
+        """Lightweight periodic check for new sessions (no AI calls)."""
+        self._do_poll_sessions()
+
+    @work(thread=True, exclusive=True, group="poll_sessions")
+    def _do_poll_sessions(self):
+        threads = discover_threads()
+        apply_cached_names(threads)
+
+        sessions = []
+        for t in threads:
+            sessions.extend(t.sessions)
+        sessions.sort(key=lambda s: s.last_activity or "", reverse=True)
+
+        # Only update UI if session state actually changed
+        def _fingerprint(sl):
+            return {(s.session_id, s.is_live, s.last_message_role, s.last_activity)
+                    for s in sl}
+        old_ids = {s.session_id for s in self.sessions}
+        new_ids = {s.session_id for s in sessions}
+        if _fingerprint(self.sessions) == _fingerprint(sessions):
+            return
+
+        discovered = get_discovered_workstreams(threads)
+        self.call_from_thread(self._apply_sessions, sessions, threads, discovered)
+
+        # If there are genuinely new sessions, trigger full load for AI naming
+        if new_ids - old_ids:
+            self._do_load_sessions()
 
     @work(thread=True, exclusive=True, group="sessions")
     def _do_load_sessions(self):
@@ -1806,6 +2597,9 @@ class OrchestratorApp(App):
         self.discovered_ws = discovered
         self._refresh_ws_table()
         self._refresh_sessions_table()
+        # Notify all screens (modals like DetailScreen need this)
+        for screen in self.screen_stack:
+            screen.post_message(SessionsChanged())
 
     def _apply_synthesis(self, threads: list[Thread], discovered: list[Workstream]):
         self.threads = threads
@@ -1828,14 +2622,14 @@ class OrchestratorApp(App):
         for session in self.sessions:
             # Live indicator prefix
             live_prefix = "\u25cf " if session.is_live else "  "
-            title_text = live_prefix + session.display_name[:33]
+            title_text = live_prefix + session.display_name
             title_style = C_GREEN if session.is_live else ""
             title_cell = Text(title_text, style=title_style)
 
             # Show linked workstream or project name
             linked_ws = ws_lookup.get(session.session_id)
             if linked_ws:
-                thread_cell = Text(linked_ws[:20], style=C_CYAN)
+                thread_cell = Text(linked_ws, style=C_CYAN)
             else:
                 thread_cell = Text(_short_project(session.project_path), style=C_DIM)
 
@@ -1926,6 +2720,24 @@ class OrchestratorApp(App):
     def on_archived_row_selected(self, event: DataTable.RowSelected):
         self._open_archived_detail()
 
+    @on(OptionList.OptionSelected, "#preview-sessions")
+    def on_preview_session_selected(self, event: OptionList.OptionSelected):
+        """Resume a session selected from the preview pane."""
+        idx = int(event.option_id)
+        if idx < len(self._preview_sessions):
+            session = self._preview_sessions[idx]
+            # Mark as seen
+            mark_thread_seen(session.session_id)
+            ws = self._selected_ws()
+            if ws:
+                dirs = _ws_directories(ws)
+                _resume_session_now(ws, session, dirs, self)
+            else:
+                self._suspend_claude(
+                    ["claude", "--resume", session.session_id],
+                    cwd=session.project_path,
+                )
+
     def _open_detail(self):
         ws = self._selected_ws()
         if ws:
@@ -1981,20 +2793,24 @@ class OrchestratorApp(App):
             self.notify(f"{ws.name} \u2192 {STATUS_ICONS[ws.status]} {ws.status.value}", timeout=1)
 
     def action_quick_note(self):
-        """Quick inline note — press n, type, enter."""
+        """Quick note via modal — press n, type, enter."""
         if self.view_mode != ViewMode.WORKSTREAMS:
             return
         ws = self._selected_ws()
         if not ws:
             return
-        # Hide other inputs
-        self.query_one("#search-input").display = False
-        self.query_one("#command-input").display = False
-        self.query_one("#rename-input").display = False
-        note_input = self.query_one("#note-input", QuickNoteInput)
-        note_input.display = True
-        note_input.value = ""
-        note_input.focus()
+
+        def on_note(text: str | None):
+            if not text or not text.strip():
+                return
+            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
+            entry = f"[{timestamp}] {text.strip()}"
+            ws.notes = (ws.notes + "\n" + entry) if ws.notes else entry
+            self.store.update(ws)
+            self._refresh_ws_table()
+            self.notify("Note added", timeout=1)
+
+        self.push_screen(QuickNoteScreen(ws), callback=on_note)
 
     @on(Input.Submitted, "#note-input")
     def on_note_submitted(self, event: Input.Submitted):
@@ -2154,13 +2970,11 @@ class OrchestratorApp(App):
         if not ws:
             self.notify("No workstream selected", timeout=2)
             return
-
-        def on_prompt(prompt: str | None):
-            if prompt is None:
-                return
-            _launch_orch_claude(ws, prompt=prompt)
-
-        self.push_screen(SpawnPromptScreen(ws), callback=on_prompt)
+        ok, err = _launch_orch_claude(ws, store=self.store)
+        if ok:
+            self.notify("Session spawned", timeout=2)
+        else:
+            self.notify(f"Spawn failed: {err}", severity="error", timeout=4)
 
     def action_resume(self):
         if self.view_mode == ViewMode.WORKSTREAMS:
@@ -2243,7 +3057,7 @@ class OrchestratorApp(App):
                 ws.add_link(
                     kind="claude-session",
                     value=session.session_id,
-                    label=session.display_name[:30],
+                    label=session.display_name,
                 )
                 self.store.update(ws)
                 self._refresh_ws_table()

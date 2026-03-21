@@ -7,9 +7,11 @@ from pathlib import Path
 from models import Category, Link, Status, Store, Workstream
 from app import (
     OrchestratorApp,
+    ThreadPickerScreen,
     ViewMode,
     _ws_indicators,
     _ws_directories,
+    _do_resume,
     _find_sessions_for_ws,
     _launch_orch_claude,
     _short_project,
@@ -422,18 +424,18 @@ class TestStatusCycling:
 
 @pytest.mark.asyncio
 class TestQuickNote:
-    async def test_n_opens_note_input(self, app_with_store):
+    async def test_n_opens_note_modal(self, app_with_store):
         async with app_with_store.run_test(size=(120, 40)) as pilot:
             await pilot.press("n")
-            note_input = pilot.app.query_one("#note-input")
-            assert note_input.display is True
+            from app import QuickNoteScreen
+            assert isinstance(pilot.app.screen, QuickNoteScreen)
 
-    async def test_note_input_escape_cancels(self, app_with_store):
+    async def test_note_modal_escape_cancels(self, app_with_store):
         async with app_with_store.run_test(size=(120, 40)) as pilot:
             await pilot.press("n")
             await pilot.press("escape")
-            note_input = pilot.app.query_one("#note-input")
-            assert note_input.display is False
+            from app import QuickNoteScreen
+            assert not isinstance(pilot.app.screen, QuickNoteScreen)
 
     async def test_note_adds_to_workstream(self, app_with_store):
         async with app_with_store.run_test(size=(120, 40)) as pilot:
@@ -533,3 +535,55 @@ class TestUILanguage:
         async with app_with_store.run_test(size=(120, 40)) as pilot:
             rendered = pilot.app._render_summary_bar()
             assert "threads" in rendered
+
+
+class TestDoResume:
+    """Tests for _do_resume branching: 1 session → immediate, 2+ → picker."""
+
+    def _make_session(self, sid, project_path="/tmp/test", age="1m ago", msgs=5):
+        return ClaudeSession(
+            session_id=sid, project_dir="d",
+            project_path=project_path, message_count=msgs,
+        )
+
+    @patch("app._has_tmux", return_value=True)
+    @patch("app._launch_orch_claude", return_value=(True, ""))
+    @patch("app._find_sessions_for_ws")
+    def test_single_session_resumes_immediately(self, mock_find, mock_launch, mock_tmux):
+        """With exactly 1 matching session, resume without showing picker."""
+        session = self._make_session("s1", project_path="/tmp/test")
+        mock_find.return_value = [session]
+        ws = Workstream(name="test", category=Category.META)
+        app = MagicMock()
+
+        _do_resume(ws, app, [session])
+
+        mock_launch.assert_called_once()
+        app.push_screen.assert_not_called()
+
+    @patch("app._has_tmux", return_value=True)
+    @patch("app._find_sessions_for_ws")
+    def test_multiple_sessions_shows_picker(self, mock_find, mock_tmux):
+        """With 2+ matching sessions, show ThreadPickerScreen."""
+        sessions = [self._make_session(f"s{i}") for i in range(3)]
+        mock_find.return_value = sessions
+        ws = Workstream(name="test", category=Category.META)
+        app = MagicMock()
+
+        _do_resume(ws, app, sessions)
+
+        app.push_screen.assert_called_once()
+        screen_arg = app.push_screen.call_args[0][0]
+        assert isinstance(screen_arg, ThreadPickerScreen)
+        assert len(screen_arg.thread_sessions) == 3
+
+    @patch("app._has_tmux", return_value=False)
+    def test_no_tmux_notifies_error(self, mock_tmux):
+        """Without tmux, show error notification."""
+        ws = Workstream(name="test", category=Category.META)
+        app = MagicMock()
+
+        _do_resume(ws, app, [])
+
+        app.notify.assert_called_once()
+        assert "tmux" in app.notify.call_args[0][0].lower()
