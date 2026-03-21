@@ -115,7 +115,7 @@ fi
 CLAUDE_ARGS+=(--append-system-prompt "$CONTEXT")
 CLAUDE_ARGS+=(-n "orch:${WS_NAME}")
 if [[ -n "$PROMPT" ]]; then
-    CLAUDE_ARGS+=(-p "$PROMPT")
+    CLAUDE_ARGS+=("$PROMPT")
 fi
 
 # Belt-and-suspenders: disable SIGQUIT on the terminal so Ctrl+\ can never
