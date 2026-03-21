@@ -712,10 +712,14 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
     def _load_detail_sessions(self):
         app = self.app
         if hasattr(app, '_sessions_for_ws'):
+            # Always fetch ALL sessions, then partition locally so
+            # archived / non-archived are true complements.
+            all_sessions = app._sessions_for_ws(self.ws, include_archived_threads=True)
+            archived_sids = self._archived_session_ids()
             if self._show_archived_threads:
-                self._detail_sessions = app._archived_sessions_for_ws(self.ws)
+                self._detail_sessions = [s for s in all_sessions if s.session_id in archived_sids]
             else:
-                self._detail_sessions = app._sessions_for_ws(self.ws)
+                self._detail_sessions = [s for s in all_sessions if s.session_id not in archived_sids]
         else:
             self._detail_sessions = _find_sessions_for_ws(self.ws, getattr(app, 'sessions', []))
         olist = self.query_one("#detail-sessions", OptionList)
@@ -760,12 +764,9 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         """Full rebuild of the session OptionList."""
         olist = self.query_one("#detail-sessions", OptionList)
         olist.clear_options()
-        archived_sids = self._archived_session_ids() if self._show_archived_threads else set()
         for i, s in enumerate(self._detail_sessions):
             act = session_activity(s, self._last_seen_cache)
             prompt = _render_session_option(s, act, self._throbber_frame)
-            if s.session_id in archived_sids:
-                prompt = f"[{C_DIM}][archived][/{C_DIM}] " + prompt
             olist.add_option(Option(prompt, id=str(i)))
 
     def on_option_list_option_selected(self, event: OptionList.OptionSelected):
