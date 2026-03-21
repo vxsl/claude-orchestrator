@@ -211,6 +211,14 @@ class OrchestratorApp(App):
                     screen.action_prev_panel()
                 else:
                     self.action_prev_panel()
+        elif event.key == "ctrl+l":
+            event.prevent_default()
+            event.stop()
+            screen = self.screen
+            if hasattr(screen, 'action_resume'):
+                screen.action_resume()
+            else:
+                self.action_resume()
 
     # ── Convenience accessors for backward compat ──
 
