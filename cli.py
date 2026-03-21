@@ -416,7 +416,7 @@ def cmd_sessions(args):
             f"    {_c('dim', 'project:')} {s.project_path.replace(str(Path.home()), '~')}"
         )
         print(
-            f"    {_c('dim', 'tokens:')} {tokens}  "
+            f"    {_c('dim', 'tok:')} {tokens}  "
             f"{_c('dim', 'msgs:')} {s.message_count}  "
             f"{_c('dim', 'model:')} {model}  "
             f"{_c('dim', 'age:')} {s.age}"

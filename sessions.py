@@ -60,30 +60,6 @@ class ClaudeSession:
     last_message_text: str = ""  # Snippet of last user or assistant message
 
     @property
-    def cost_display(self) -> str:
-        """Rough cost estimate based on model and token counts."""
-        # Per-1M-token pricing: (input, output)
-        pricing = {
-            "opus": (15.0, 75.0),
-            "sonnet": (3.0, 15.0),
-            "haiku": (0.80, 4.0),
-        }
-        model_key = ""
-        for k in pricing:
-            if k in self.model.lower():
-                model_key = k
-                break
-        if not model_key:
-            return "—"
-        inp_rate, out_rate = pricing[model_key]
-        cost = (self.total_input_tokens * inp_rate + self.total_output_tokens * out_rate) / 1_000_000
-        if cost < 0.01:
-            return "<$0.01"
-        if cost < 1.0:
-            return f"${cost:.2f}"
-        return f"${cost:.1f}"
-
-    @property
     def model_short(self) -> str:
         for k in ("opus", "sonnet", "haiku"):
             if k in self.model.lower():

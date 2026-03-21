@@ -458,7 +458,7 @@ class OrchestratorApp(App):
             lines.append(
                 f"  [{C_CYAN}]{len(thread_sessions)}[/{C_CYAN}] sessions  "
                 f"[{C_DIM}]\u00b7[/{C_DIM}]  {total_msgs} messages  "
-                f"[{C_DIM}]\u00b7[/{C_DIM}]  {_token_color_markup(_tk, total_tokens)} tokens"
+                f"[{C_DIM}]\u00b7[/{C_DIM}]  {_token_color_markup(_tk, total_tokens)}"
             )
             lines.append(f"  [{C_DIM}]Last active[/{C_DIM}] {last_active}")
             lines.append("")
@@ -544,8 +544,8 @@ class OrchestratorApp(App):
         lines.append("")
 
         lines.append(f"[bold {C_BLUE}]Usage[/bold {C_BLUE}]")
-        lines.append(f"  [{C_DIM}]Input[/{C_DIM}]    {session.total_input_tokens:,} tokens")
-        lines.append(f"  [{C_DIM}]Output[/{C_DIM}]   {session.total_output_tokens:,} tokens")
+        lines.append(f"  [{C_DIM}]Input[/{C_DIM}]    {session.total_input_tokens:,}")
+        lines.append(f"  [{C_DIM}]Output[/{C_DIM}]   {session.total_output_tokens:,}")
         lines.append(f"  [{C_DIM}]Total[/{C_DIM}]    {session.tokens_display}")
         lines.append("")
 
@@ -614,7 +614,7 @@ class OrchestratorApp(App):
             if total_tokens > 0:
                 _tk = f"{total_tokens / 1_000_000:.1f}M" if total_tokens > 1_000_000 else f"{total_tokens / 1_000:.0f}k" if total_tokens > 1_000 else str(total_tokens)
                 parts.append(f"[{C_DIM}]\u2502[/{C_DIM}]")
-                parts.append(f"{_token_color_markup(_tk, total_tokens)} tokens")
+                parts.append(f"{_token_color_markup(_tk, total_tokens)}")
 
         return "  ".join(parts)
 
