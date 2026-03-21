@@ -1536,7 +1536,7 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
             super().action_dismiss(None)
 
     def action_go_back(self):
-        """Ctrl+H: cancel search if active, otherwise dismiss."""
+        """Ctrl+H/Backspace: cancel search if active, otherwise dismiss."""
         if self._search_is_active():
             self._cancel_search()
         else:
