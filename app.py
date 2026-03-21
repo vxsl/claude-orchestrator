@@ -588,7 +588,7 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         Binding("e", "edit_notes", "Edit notes"),
         Binding("o", "open_links", "Open links"),
         Binding("x", "archive", "Archive"),
-        Binding("space", "archive_thread", "Archive/restore"),
+        Binding("a", "archive_thread", "Archive/restore"),
         Binding("h", "focus_sessions", show=False),
         Binding("l", "focus_archived", show=False),
     ] + _VimOptionListMixin.VIM_BINDINGS
@@ -921,7 +921,7 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
             ("Enter", "resume"), ("s/S", "status"), ("c", "spawn"),
             ("n", "note"), ("e", "edit"),
             ("o", "open"), ("x", "archive ws"),
-            ("Space", "archive/restore"), ("h/l", "panes"),
+            ("a", "archive/restore"), ("h/l", "panes"),
             ("q", "back"),
         ]
         return "  ".join(f"[{C_YELLOW}]{k}[/{C_YELLOW}] {v}" for k, v in pairs)
