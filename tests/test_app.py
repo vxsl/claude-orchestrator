@@ -480,10 +480,10 @@ class TestQuickNote:
             from screens import QuickNoteScreen
             assert isinstance(pilot.app.screen, QuickNoteScreen)
 
-    async def test_note_modal_ctrl_h_cancels(self, app_with_store):
+    async def test_note_modal_alt_h_cancels(self, app_with_store):
         async with app_with_store.run_test(size=(120, 40)) as pilot:
             await pilot.press("n")
-            await pilot.press("ctrl+h")
+            await pilot.press("alt+h")
             from screens import QuickNoteScreen
             assert not isinstance(pilot.app.screen, QuickNoteScreen)
 
@@ -553,10 +553,10 @@ class TestHelpScreen:
             await pilot.press("question_mark")
             assert pilot.app.screen.__class__.__name__ == "HelpScreen"
 
-    async def test_help_closes_with_ctrl_h(self, app_with_store):
+    async def test_help_closes_with_alt_h(self, app_with_store):
         async with app_with_store.run_test(size=(120, 40)) as pilot:
             await pilot.press("question_mark")
-            await pilot.press("ctrl+h")
+            await pilot.press("alt+h")
             assert pilot.app.screen.__class__.__name__ != "HelpScreen"
 
     async def test_help_closes_with_escape(self, app_with_store):
@@ -681,31 +681,31 @@ class TestHierarchyNavigation:
     async def test_ctrl_l_opens_detail_from_main(self, app_with_store):
         """Ctrl+L on main screen should open DetailScreen (drill in)."""
         async with app_with_store.run_test(size=(120, 40)) as pilot:
-            await pilot.press("ctrl+l")
+            await pilot.press("alt+l")
             from screens import DetailScreen
             assert isinstance(pilot.app.screen, DetailScreen)
 
-    async def test_ctrl_h_dismisses_detail_screen(self, app_with_store):
+    async def test_alt_h_dismisses_detail_screen(self, app_with_store):
         """Ctrl+H should dismiss DetailScreen back to main."""
         async with app_with_store.run_test(size=(120, 40)) as pilot:
-            await pilot.press("ctrl+l")
+            await pilot.press("alt+l")
             from screens import DetailScreen
             assert isinstance(pilot.app.screen, DetailScreen)
-            await pilot.press("ctrl+h")
+            await pilot.press("alt+h")
             assert not isinstance(pilot.app.screen, DetailScreen)
 
-    async def test_ctrl_h_dismisses_help_screen(self, app_with_store):
+    async def test_alt_h_dismisses_help_screen(self, app_with_store):
         """Ctrl+H should dismiss HelpScreen."""
         async with app_with_store.run_test(size=(120, 40)) as pilot:
             await pilot.press("question_mark")
             assert pilot.app.screen.__class__.__name__ == "HelpScreen"
-            await pilot.press("ctrl+h")
+            await pilot.press("alt+h")
             assert pilot.app.screen.__class__.__name__ != "HelpScreen"
 
     async def test_escape_does_not_dismiss_detail(self, app_with_store):
         """Escape should not dismiss DetailScreen (no binding)."""
         async with app_with_store.run_test(size=(120, 40)) as pilot:
-            await pilot.press("ctrl+l")
+            await pilot.press("alt+l")
             from screens import DetailScreen
             assert isinstance(pilot.app.screen, DetailScreen)
             await pilot.press("escape")
@@ -714,7 +714,7 @@ class TestHierarchyNavigation:
     async def test_q_does_not_dismiss_detail(self, app_with_store):
         """q should not dismiss DetailScreen (binding removed)."""
         async with app_with_store.run_test(size=(120, 40)) as pilot:
-            await pilot.press("ctrl+l")
+            await pilot.press("alt+l")
             from screens import DetailScreen
             assert isinstance(pilot.app.screen, DetailScreen)
             await pilot.press("q")
@@ -728,19 +728,19 @@ class TestHierarchyNavigation:
             await pilot.press("escape")
             assert pilot.app.screen.__class__.__name__ != "HelpScreen"
 
-    async def test_ctrl_h_at_root_does_nothing(self, app_with_store):
+    async def test_alt_h_at_root_does_nothing(self, app_with_store):
         """Ctrl+H at root screen should do nothing (no action_go_back)."""
         async with app_with_store.run_test(size=(120, 40)) as pilot:
             screen_before = pilot.app.screen.__class__.__name__
-            await pilot.press("ctrl+h")
+            await pilot.press("alt+h")
             assert pilot.app.screen.__class__.__name__ == screen_before
 
 
-class TestCtrlHBindingOnScreens:
-    """Regression: ctrl+h must be a screen-level BINDING, not just app.on_key().
+class TestAltHBindingOnScreens:
+    """Regression: alt+h must be a screen-level BINDING, not just app.on_key().
 
     ModalScreens don't bubble key events to App in a real terminal,
-    so every modal must declare its own ctrl+h binding.
+    so every modal must declare its own alt+h binding.
     """
 
     @pytest.mark.parametrize("screen_cls_name", [
@@ -751,8 +751,8 @@ class TestCtrlHBindingOnScreens:
         "SessionPickerScreen", "RepoPickerScreen",
         "WorkstreamPickerScreen", "ConfirmScreen",
     ])
-    def test_screen_has_ctrl_h_binding(self, screen_cls_name):
-        """Every modal screen must have ctrl+h in its BINDINGS."""
+    def test_screen_has_alt_h_binding(self, screen_cls_name):
+        """Every modal screen must have alt+h in its BINDINGS."""
         import screens as screens_module
         cls = getattr(screens_module, screen_cls_name)
         binding_keys = []
@@ -761,5 +761,5 @@ class TestCtrlHBindingOnScreens:
                 binding_keys.append(b[0])
             else:
                 binding_keys.append(b.key)
-        assert any("ctrl+h" in k for k in binding_keys), \
-            f"{screen_cls_name} missing ctrl+h in BINDINGS"
+        assert any("alt+h" in k for k in binding_keys), \
+            f"{screen_cls_name} missing alt+h in BINDINGS"
