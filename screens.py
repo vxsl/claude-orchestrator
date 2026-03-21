@@ -506,7 +506,7 @@ class TodoScreen(_VimOptionListMixin, ModalScreen[None]):
         prompt = item.text
         if item.context:
             prompt = f"{item.text}\n\n{item.context}"
-        ok, err = launch_orch_claude(self.ws, store=self.store, prompt=prompt, switch_to=False)
+        ok, err = launch_orch_claude(self.ws, store=self.store, prompt=prompt)
         if ok:
             self._app_state.toggle_todo(self.ws.id, item.id)  # mark done
             self._rebuild()
