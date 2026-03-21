@@ -1,0 +1,105 @@
+/* ── Orchestrator Global Styles ──
+ * Single flat dark background. Differentiation through text color only.
+ * BG=#141414 everywhere. Cursor is the only elevated element.
+ */
+
+Screen {
+    background: #141414;
+    color: #888888;
+}
+
+* {
+    scrollbar-size: 1 1;
+    scrollbar-background: transparent;
+    scrollbar-color: #282828;
+    scrollbar-color-hover: #444444;
+    scrollbar-color-active: #87afaf 60%;
+    scrollbar-background-hover: transparent;
+    scrollbar-background-active: transparent;
+    scrollbar-corner-color: transparent;
+}
+
+/* ── DataTable: flat, cursor pops ── */
+DataTable {
+    scrollbar-size: 1 1;
+    background: #141414;
+    color: #888888;
+}
+DataTable > .datatable--header {
+    text-style: bold;
+    color: #87afaf;
+    background: #141414;
+}
+DataTable > .datatable--cursor {
+    background: #252525;
+    color: #d0d0d0;
+    text-style: bold;
+}
+DataTable > .datatable--hover {
+    background: #1e1e1e;
+}
+DataTable > .datatable--even-row {
+    background: #141414;
+}
+DataTable > .datatable--odd-row {
+    background: #141414;
+}
+
+/* ── OptionList: flat ── */
+OptionList {
+    scrollbar-size: 1 1;
+    border: none;
+    background: #141414;
+}
+OptionList > .option-list--option-highlighted {
+    background: #252525;
+    text-style: bold;
+}
+OptionList > .option-list--option-hover {
+    background: #1e1e1e;
+}
+
+/* ── Inputs ── */
+Input {
+    border: none;
+    background: #1e1e1e;
+    padding: 0 1;
+    height: 1;
+}
+Input:focus {
+    border: none;
+    background: #1e1e1e;
+}
+
+/* ── TextArea ── */
+TextArea {
+    border: round #282828;
+    background: #141414;
+}
+TextArea:focus {
+    border: round #87afaf 30%;
+}
+
+/* ── Select ── */
+Select {
+    border: round #282828;
+}
+Select:focus {
+    border: round #87afaf 30%;
+}
+SelectOverlay {
+    background: #1a1a1a;
+    border: round #282828;
+}
+
+/* ── Modal scrim ── */
+ModalScreen {
+    background: #0a0a0a 90%;
+}
+
+/* ── Toast ── */
+Toast {
+    background: #1e1e1e;
+    color: #a0a0a0;
+    border: round #282828;
+}

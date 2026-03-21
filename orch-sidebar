@@ -1,0 +1,195 @@
+#!/usr/bin/env bash
+# orch-sidebar — session list for the current workstream
+#
+# One line per session: activity icon + title. Refreshes every 5s.
+set -euo pipefail
+
+# ─── Mellow palette ─────────────────────────────────────────────
+C_BLUE=$'\033[38;5;109m'
+C_CYAN=$'\033[38;5;81m'
+C_GREEN=$'\033[38;5;114m'
+C_YELLOW=$'\033[38;5;221m'
+C_ORANGE=$'\033[38;5;215m'
+C_DIM=$'\033[38;5;244m'
+C_RESET=$'\033[0m'
+C_BOLD=$'\033[1m'
+C_BG=$'\033[48;5;234m'
+
+# ─── Parse arguments ────────────────────────────────────────────
+WS_ID="" CURRENT_SID=""
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --ws-id)      WS_ID="$2"; shift 2;;
+        --session-id) CURRENT_SID="$2"; shift 2;;
+        *)            shift;;
+    esac
+done
+
+ORCH_DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
+
+printf '\033[?25l'
+trap 'printf "\033[?25h"' EXIT
+
+# ─── Render loop ────────────────────────────────────────────────
+FRAME=0
+while true; do
+    ROWS=$(tput lines 2>/dev/null || echo 20)
+    COLS=$(tput cols 2>/dev/null || echo 36)
+    TITLE_W=$((COLS - 5))
+    (( TITLE_W < 8 )) && TITLE_W=8
+
+    OUTPUT=$(python3 -c "
+import sys, os
+sys.path.insert(0, '$ORCH_DIR')
+from models import Store
+from sessions import discover_sessions, get_live_session_ids
+from threads import session_activity, ThreadActivity, load_last_seen, _extract_first_message
+
+THROBBER = '\u280b\u2819\u2839\u2838\u283c\u2834\u2826\u2827\u2807\u280f'
+frame = $FRAME
+tw = $TITLE_W
+
+store = Store()
+ws = store.get('$WS_ID')
+all_sessions = discover_sessions(min_messages=0)
+live_ids = get_live_session_ids()
+for s in all_sessions:
+    s.is_live = s.session_id in live_ids
+last_seen = load_last_seen()
+current_sid = '$CURRENT_SID'
+
+if not ws:
+    sys.exit(0)
+
+# Find sessions for this workstream
+found = []
+seen = set()
+for link in ws.links:
+    if link.kind == 'claude-session':
+        for s in all_sessions:
+            if (s.session_id == link.value or s.session_id.startswith(link.value)) \
+                    and s.session_id not in seen:
+                found.append(s)
+                seen.add(s.session_id)
+ws_dirs = set()
+for link in ws.links:
+    if link.kind in ('worktree', 'file'):
+        expanded = os.path.expanduser(link.value).rstrip('/')
+        if os.path.isdir(expanded):
+            ws_dirs.add(expanded)
+if ws_dirs:
+    for s in all_sessions:
+        if s.session_id in seen:
+            continue
+        if s.project_path.rstrip('/') in ws_dirs:
+            found.append(s)
+            seen.add(s.session_id)
+
+found.sort(key=lambda s: s.last_activity or '', reverse=True)
+found.sort(key=lambda s: s.is_live, reverse=True)
+
+# Get AI-generated titles: generate on first frame, cache-only after
+from thread_namer import title_sessions, get_session_title
+if frame == 0:
+    titles = title_sessions(found) if found else {}
+else:
+    titles = {s.session_id: get_session_title(s) for s in found}
+    titles = {k: v for k, v in titles.items() if v}
+
+for s in found:
+    act = session_activity(s, last_seen)
+
+    if act == ThreadActivity.THINKING:
+        icon = THROBBER[frame % len(THROBBER)]
+        color = 'cyan'
+    elif act == ThreadActivity.AWAITING_INPUT:
+        icon = '\u25c9'
+        color = 'yellow'
+    elif act == ThreadActivity.RESPONSE_FRESH:
+        icon = '\u25cf'
+        color = 'green'
+    elif act == ThreadActivity.RESPONSE_READY:
+        icon = '\u25cf'
+        color = 'orange'
+    else:
+        icon = '\u00b7'
+        color = 'dim'
+
+    if act in (ThreadActivity.THINKING, ThreadActivity.AWAITING_INPUT):
+        tcolor = 'bold'
+    elif act == ThreadActivity.RESPONSE_FRESH:
+        tcolor = 'green'
+    elif act == ThreadActivity.RESPONSE_READY:
+        tcolor = 'orange'
+    else:
+        tcolor = 'dim'
+
+    is_current = '1' if s.session_id == current_sid else '0'
+    # AI title > first message > age
+    title = titles.get(s.session_id, '')
+    if not title:
+        first = _extract_first_message(s)
+        if first:
+            title = first.split(chr(10))[0].strip()
+            if title.startswith('#'):
+                title = title.lstrip('# ')
+        else:
+            title = s.age
+    title = title[:tw]
+
+    print(f'{icon}\t{color}\t{tcolor}\t{is_current}\t{title}')
+
+print(f'SUM\t{len(found)}')
+" 2>/dev/null) || true
+
+    printf '\033[H\033[2J'
+
+    # Header
+    printf '%s %s%sSESSIONS%s\n' "$C_BG" "$C_BOLD" "$C_BLUE" "$C_RESET"
+
+    LINE_NUM=1
+    MAX_LINES=$((ROWS - 2))
+    SHOWN=0
+    TOTAL=0
+
+    while IFS=$'\t' read -r FIRST REST; do
+        [[ -z "$FIRST" ]] && continue
+
+        if [[ "$FIRST" == "SUM" ]]; then
+            TOTAL="$REST"
+            continue
+        fi
+
+        ICON="$FIRST"
+        IFS=$'\t' read -r COLOR TCOLOR CURRENT TITLE <<< "$REST"
+
+        (( LINE_NUM >= MAX_LINES )) && continue
+        SHOWN=$((SHOWN + 1))
+
+        case "$COLOR" in
+            cyan)   IC="$C_CYAN";; yellow) IC="$C_YELLOW";;
+            green)  IC="$C_GREEN";; orange) IC="$C_ORANGE";;
+            *)      IC="$C_DIM";;
+        esac
+        case "$TCOLOR" in
+            bold)   TC="$C_BOLD";; green)  TC="$C_GREEN";;
+            orange) TC="$C_ORANGE";; *)     TC="$C_DIM";;
+        esac
+
+        [[ "$CURRENT" == "1" ]] && MK="${C_CYAN}▸${C_RESET}" || MK=" "
+
+        printf '%s%s %s%s%s %s%s%s\n' \
+            "$C_BG" "$MK" \
+            "$IC" "$ICON" "$C_RESET$C_BG" \
+            "$TC" "$TITLE" "$C_RESET"
+        LINE_NUM=$((LINE_NUM + 1))
+    done <<< "$OUTPUT"
+
+    if (( TOTAL > SHOWN && SHOWN > 0 )); then
+        printf '%s %s+%d more%s\n' "$C_BG" "$C_DIM" "$((TOTAL - SHOWN))" "$C_RESET"
+    fi
+
+    FRAME=$((FRAME + 1))
+    sleep 5
+done
