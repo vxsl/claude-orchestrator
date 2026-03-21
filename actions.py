@@ -171,14 +171,6 @@ def launch_orch_claude(
         # if the orch session is destroyed (e.g. destroy-unattached).
         _ensure_worker_session()
 
-        # Check if worker session was just created (has only the default shell).
-        # If so, use that window directly instead of leaving an orphan.
-        wc = subprocess.run(
-            ["tmux", "list-windows", "-t", WORKER_SESSION, "-F", "#{window_id}"],
-            capture_output=True, text=True, timeout=5,
-        )
-        worker_windows = wc.stdout.strip().split("\n") if wc.returncode == 0 else []
-
         result = subprocess.run(
             ["tmux", "new-window", "-t", WORKER_SESSION,
              "-n", window_name, "-c", cwd,
@@ -189,14 +181,6 @@ def launch_orch_claude(
             return False, result.stderr.strip()
 
         window_id = result.stdout.strip()
-
-        # If the worker session previously had only one default shell window,
-        # kill it now that we have a real window.
-        if len(worker_windows) == 1 and worker_windows[0] != window_id:
-            subprocess.run(
-                ["tmux", "kill-window", "-t", worker_windows[0]],
-                capture_output=True, timeout=5,
-            )
 
         # Link the window into the orch session so the user sees it
         subprocess.run(
