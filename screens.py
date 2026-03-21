@@ -875,13 +875,15 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
     }}
     #detail-search {{
         dock: bottom;
-        height: auto;
+        height: 1;
         display: none;
         margin: 0 1;
-        background: {BG_BASE};
+        background: {BG_RAISED};
+        border: round {C_DIM};
+        padding: 0 1;
     }}
     #detail-search:focus {{
-        border: tall {C_BLUE};
+        border: round {C_BLUE};
     }}
     #detail-help {{
         height: 1;
