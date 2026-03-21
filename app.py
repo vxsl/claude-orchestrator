@@ -197,14 +197,22 @@ class OrchestratorApp(App):
         self._session_watcher: SessionWatcher | None = None
 
     def on_key(self, event) -> None:
-        if event.key == "ctrl+j":
+        if event.key in ("ctrl+j", "ctrl+k"):
             event.prevent_default()
             event.stop()
-            self.action_next_panel()
-        elif event.key == "ctrl+k":
-            event.prevent_default()
-            event.stop()
-            self.action_prev_panel()
+            # Route to the active screen if it has panel navigation,
+            # otherwise handle at app level
+            screen = self.screen
+            if event.key == "ctrl+j":
+                if hasattr(screen, 'action_next_panel'):
+                    screen.action_next_panel()
+                else:
+                    self.action_next_panel()
+            else:
+                if hasattr(screen, 'action_prev_panel'):
+                    screen.action_prev_panel()
+                else:
+                    self.action_prev_panel()
 
     # ── Convenience accessors for backward compat ──
 
