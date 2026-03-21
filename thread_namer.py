@@ -19,6 +19,7 @@ from sessions import ClaudeSession
 
 CACHE_DIR = Path.home() / ".cache" / "claude-orchestrator"
 CACHE_FILE = CACHE_DIR / "thread-names.json"
+SESSION_TITLE_CACHE = CACHE_DIR / "session-titles.json"
 
 # Max threads to title in one batch (to limit cost/latency)
 BATCH_SIZE = 15
@@ -225,3 +226,136 @@ def name_uncached_threads(threads: list[Thread]) -> int:
 
     _save_cache(cache)
     return named_count
+
+
+# ─── Session-level titles ────────────────────────────────────────────
+
+
+def _load_session_cache() -> dict[str, str]:
+    """Load {session_id: title} cache."""
+    if not SESSION_TITLE_CACHE.exists():
+        return {}
+    try:
+        return json.loads(SESSION_TITLE_CACHE.read_text())
+    except (json.JSONDecodeError, OSError):
+        return {}
+
+
+def _save_session_cache(cache: dict[str, str]):
+    CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    SESSION_TITLE_CACHE.write_text(json.dumps(cache, indent=2))
+
+
+def _extract_session_context(session: ClaudeSession) -> str:
+    """Build context for titling a single session."""
+    from threads import _extract_first_message, _extract_git_branch
+
+    parts = [f"Project: {session.project_path}"]
+
+    branch = _extract_git_branch(session)
+    if branch and branch not in ("master", "main", "HEAD"):
+        parts.append(f"Git branch: {branch}")
+
+    msg = _extract_first_message(session)
+    if msg:
+        parts.append(f"First user message: {msg[:200]}")
+
+    parts.append(f"Messages: {session.message_count}")
+    return "\n".join(parts)
+
+
+def _build_session_prompt(sessions_context: list[tuple[str, str]]) -> str:
+    """Build a prompt for batch session naming."""
+    blocks = []
+    for sid, ctx in sessions_context:
+        blocks.append(f"[SESSION {sid[:8]}]\n{ctx}")
+
+    return f"""You are titling Claude Code sessions for a developer dashboard sidebar.
+
+For each session, provide a SHORT title (3-8 words max) that captures what the developer was working on.
+
+Rules:
+- Titles should read like a ChatGPT sidebar title — concise and descriptive
+- Use ticket IDs if present (e.g. "UB-6732 time range fix")
+- For config/dotfile work, name the thing being configured
+- Keep titles lowercase unless they contain proper nouns or ticket IDs
+- If the first message is a question, summarize the intent, not the question
+
+Respond with ONLY a JSON object mapping the session ID prefix to the title string.
+
+{chr(10).join(blocks)}"""
+
+
+def title_sessions(sessions: list[ClaudeSession]) -> dict[str, str]:
+    """Title sessions that don't have cached titles.
+
+    Returns {session_id: title} for all sessions (cached + newly generated).
+    """
+    cache = _load_session_cache()
+    result = {}
+    uncached = []
+
+    for s in sessions:
+        if s.session_id in cache:
+            result[s.session_id] = cache[s.session_id]
+        else:
+            uncached.append(s)
+
+    if not uncached:
+        return result
+
+    # Build contexts for uncached sessions
+    contexts = []
+    for s in uncached[:BATCH_SIZE]:
+        ctx = _extract_session_context(s)
+        contexts.append((s.session_id[:8], ctx))
+
+    try:
+        proc = subprocess.run(
+            ["claude", "-p", "--model", "haiku",
+             "--no-session-persistence",
+             "--output-format", "json",
+             "--max-budget-usd", "0.05",
+             "--allowedTools", ""],
+            input=_build_session_prompt(contexts),
+            capture_output=True, text=True, timeout=30,
+        )
+
+        if proc.returncode != 0:
+            return result
+
+        # Parse response
+        try:
+            outer = json.loads(proc.stdout)
+            text = outer["result"] if isinstance(outer, dict) and "result" in outer else proc.stdout
+        except (json.JSONDecodeError, KeyError):
+            text = proc.stdout
+
+        text = text.strip()
+        if text.startswith("```"):
+            lines = text.split("\n")
+            text = "\n".join(lines[1:-1] if lines[-1].strip() == "```" else lines[1:])
+
+        data = json.loads(text)
+
+        # Map short IDs back to full session IDs
+        for s in uncached[:BATCH_SIZE]:
+            prefix = s.session_id[:8]
+            if prefix in data:
+                title = data[prefix]
+                if isinstance(title, str) and title:
+                    cache[s.session_id] = title
+                    result[s.session_id] = title
+
+        _save_session_cache(cache)
+
+    except (subprocess.TimeoutExpired, OSError, json.JSONDecodeError, KeyError):
+        pass
+
+    return result
+
+
+def get_session_title(session: ClaudeSession) -> str:
+    """Get a cached title for a session, or empty string if not yet titled."""
+    cache = _load_session_cache()
+    return cache.get(session.session_id, "")

@@ -62,17 +62,46 @@ if [[ -n "$PROMPT" ]]; then
     CONTEXT+=$'\n\n'"Initial task: ${PROMPT}"
 fi
 
-# ─── Launch header pane ─────────────────────────────────────────
-HEADER_PANE=$(tmux split-window -b -l 1 -P -F '#{pane_id}' \
+# ─── Record start time for elapsed calculation ─────────────────
+SESSION_START=$(date +%s)
+
+# ─── Launch header pane (2 lines, above main) ──────────────────
+HEADER_PANE=$(tmux split-window -b -l 2 -P -F '#{pane_id}' \
     "${ORCH_DIR}/orch-header" \
     --ws-name "$WS_NAME" \
     --ws-status "$WS_STATUS" \
     --ws-category "$WS_CATEGORY" \
+    --ws-desc "$WS_DESC" \
     --session-id "$SESSION_ID" \
     --jsonl "$JSONL_PATH")
 
 # Focus back to the main pane (below the header)
 tmux select-pane -D
+
+# ─── Launch footer pane (1 line, below main) ───────────────────
+FOOTER_ARGS=(
+    "${ORCH_DIR}/orch-footer"
+    --session-id "$SESSION_ID"
+    --cwd "$CWD"
+)
+[[ -n "$WS_NOTES" ]] && FOOTER_ARGS+=(--ws-notes "$WS_NOTES")
+
+FOOTER_PANE=$(tmux split-window -l 1 -P -F '#{pane_id}' "${FOOTER_ARGS[@]}")
+
+# Focus back to the main pane (above the footer)
+tmux select-pane -U
+
+# ─── Launch sidebar pane (right of main) ────────────────────────
+SIDEBAR_PANE=$(tmux split-window -h -l 36 -P -F '#{pane_id}' \
+    "${ORCH_DIR}/orch-sidebar" \
+    --ws-id "$WS_ID" \
+    --session-id "$SESSION_ID")
+
+# Focus back to the main pane (left of sidebar)
+tmux select-pane -L
+
+# ─── Tag this window with session ID (for reattach detection) ────
+tmux set-option -w @orch_session_id "$SESSION_ID" 2>/dev/null || true
 
 # ─── Build and run Claude command ────────────────────────────────
 cd "$CWD"
@@ -86,10 +115,36 @@ fi
 CLAUDE_ARGS+=(--append-system-prompt "$CONTEXT")
 CLAUDE_ARGS+=(-n "orch:${WS_NAME}")
 
-claude "${CLAUDE_ARGS[@]}" || true
+# Belt-and-suspenders: disable SIGQUIT on the terminal so Ctrl+\ can never
+# kill Claude even if the tmux C-\\ binding somehow doesn't intercept it.
+# (Claude runs in raw mode so this is likely redundant, but costs nothing.)
+stty quit undef 2>/dev/null || true
+trap '' QUIT  # ignore SIGQUIT in the wrapper script too
 
-# ─── Post-session: kill header ───────────────────────────────────
+claude "${CLAUDE_ARGS[@]}" && CLAUDE_EXIT=0 || CLAUDE_EXIT=$?
+
+# Restore terminal
+stty quit '^\' 2>/dev/null || true
+trap - QUIT
+
+# ─── Diagnostic: log why Claude exited ────────────────────────────
+DIAG_DIR="$HOME/.cache/claude-orchestrator/diag"
+mkdir -p "$DIAG_DIR"
+DIAG_LOG="$DIAG_DIR/session-exits.log"
+LAST_ROLE=""
+LAST_TYPE=""
+if [[ -f "$JSONL_PATH" ]]; then
+    LAST_ROLE=$(tail -c 4096 "$JSONL_PATH" 2>/dev/null | grep -oP '"type"\s*:\s*"(user|assistant)"' | tail -1 | grep -oP '(user|assistant)' || true)
+    LAST_TYPE=$(tail -c 4096 "$JSONL_PATH" 2>/dev/null | grep -oP '"type"\s*:\s*"\w+"' | tail -1 | grep -oP '"\w+"$' | tr -d '"' || true)
+fi
+printf '%s  exit=%d  last_role=%s  last_type=%s  session=%s  ws=%s\n' \
+    "$(date -Iseconds)" "$CLAUDE_EXIT" "${LAST_ROLE:-?}" "${LAST_TYPE:-?}" \
+    "${SESSION_ID:0:8}" "$WS_NAME" >> "$DIAG_LOG" 2>/dev/null || true
+
+# ─── Post-session: kill surrounding panes ────────────────────────
+tmux kill-pane -t "$SIDEBAR_PANE" 2>/dev/null || true
 tmux kill-pane -t "$HEADER_PANE" 2>/dev/null || true
+tmux kill-pane -t "$FOOTER_PANE" 2>/dev/null || true
 
 # ─── Auto-link session to workstream (with dedup) ───────────────
 if [[ -n "$WS_ID" ]]; then
@@ -108,9 +163,21 @@ if ws:
     fi
 fi
 
+# ─── Compute elapsed time ──────────────────────────────────────
+END_TIME=$(date +%s)
+ELAPSED_SECS=$((END_TIME - SESSION_START))
+if (( ELAPSED_SECS < 60 )); then
+    ELAPSED="${ELAPSED_SECS}s"
+elif (( ELAPSED_SECS < 3600 )); then
+    ELAPSED="$((ELAPSED_SECS / 60))m$((ELAPSED_SECS % 60))s"
+else
+    ELAPSED="$((ELAPSED_SECS / 3600))h$(((ELAPSED_SECS % 3600) / 60))m"
+fi
+
 # ─── Post-session summary ───────────────────────────────────────
 echo ""
-echo "${C_PURPLE}${C_BOLD}\u2500\u2500 session ended \u2500\u2500${C_RESET}"
+echo "${C_PURPLE}${C_BOLD}── session ended ──${C_RESET}"
+echo ""
 
 if [[ -f "$JSONL_PATH" ]]; then
     python3 -c "
@@ -120,14 +187,20 @@ from sessions import parse_session
 from pathlib import Path
 s = parse_session(Path('$JSONL_PATH'))
 if s:
-    print(f'${C_CYAN}{WS_NAME}${C_RESET}  ${C_DIM}\u2502${C_RESET}  {s.message_count} msgs  \u00b7  {s.tokens_display}  \u00b7  {s.cost_display}')
+    print(f'  ${C_CYAN}${WS_NAME}${C_RESET}')
+    print(f'  ${C_DIM}model${C_RESET}    {s.model_short}')
+    print(f'  ${C_DIM}msgs${C_RESET}     {s.message_count}')
+    print(f'  ${C_DIM}tokens${C_RESET}   {s.tokens_display}')
+    print(f'  ${C_DIM}cost${C_RESET}     {s.cost_display}')
+    print(f'  ${C_DIM}elapsed${C_RESET}  ${ELAPSED}')
 " 2>/dev/null || true
 else
-    echo "${C_DIM}no session data found${C_RESET}"
+    echo "  ${C_DIM}no session data found${C_RESET}"
 fi
 
+echo ""
 if [[ -n "$WS_ID" && "$ALREADY_LINKED" != "yes" ]]; then
-    echo "${C_GREEN}\u2713${C_RESET} ${C_DIM}session linked to workstream${C_RESET}"
+    echo "  ${C_GREEN}\u2713${C_RESET} ${C_DIM}session linked to workstream${C_RESET}"
 fi
 
 echo ""
