@@ -32,7 +32,7 @@ from textual.widgets import (
 from textual.widgets.option_list import Option
 
 from models import (
-    Category, Link, Status, Store, Workstream,
+    Category, Link, Status, Store, TodoItem, Workstream,
     STATUS_ICONS, _relative_time,
 )
 from sessions import ClaudeSession
@@ -48,6 +48,7 @@ from rendering import (
     _colored_tokens, _token_color_markup,
     _short_model, _short_project,
     _render_session_option, _session_title,
+    _render_todo_option, TODO_UNDONE_ICON, TODO_DONE_ICON,
 )
 from actions import (
     launch_orch_claude, ws_directories, resume_session_now, open_link,
@@ -99,12 +100,12 @@ class HelpScreen(ModalScreen[None]):
 [bold {C_CYAN}]Actions (Threads)[/bold {C_CYAN}]
   [{C_YELLOW}]a[/{C_YELLOW}]   Add new thread
   [{C_YELLOW}]b[/{C_YELLOW}]   Brain dump (multi-line)
-  [{C_YELLOW}]n[/{C_YELLOW}]   Quick note (inline)
+  [{C_YELLOW}]n[/{C_YELLOW}]   Quick todo (inline)
   [{C_YELLOW}]s/S[/{C_YELLOW}] Cycle status forward / backward
   [{C_YELLOW}]c[/{C_YELLOW}]   New Claude session (with context)
   [{C_YELLOW}]r[/{C_YELLOW}]   Resume most recent session
   [{C_YELLOW}]l[/{C_YELLOW}]   Add link
-  [{C_YELLOW}]e[/{C_YELLOW}]   Edit notes (full editor)
+  [{C_YELLOW}]e[/{C_YELLOW}]   Todo list (full screen)
   [{C_YELLOW}]E[/{C_YELLOW}]   Rename thread
   [{C_YELLOW}]o[/{C_YELLOW}]   Open links
   [{C_YELLOW}]x[/{C_YELLOW}]   Archive
@@ -257,6 +258,412 @@ class _VimOptionListMixin:
         self._olist().action_last()
 
 
+# ─── Todo Screen ────────────────────────────────────────────────────
+
+class TodoScreen(_VimOptionListMixin, ModalScreen[None]):
+    """Interactive todo list — each item is a potential pending Claude session."""
+
+    _option_list_id = "todo-active"
+
+    BINDINGS = [
+        Binding("q,escape", "dismiss", "Back"),
+        Binding("a", "add_todo", "Add"),
+        Binding("enter,space", "toggle_done", "Toggle done", priority=True),
+        Binding("e", "edit_todo", "Edit"),
+        Binding("x", "archive_todo", "Archive/Restore"),
+        Binding("c", "spawn_todo", "Spawn"),
+        Binding("d", "delete_todo", "Delete"),
+        Binding("ctrl+e", "edit_context", "Edit context"),
+        Binding("K", "move_up", "Move \u2191", show=False),
+        Binding("J", "move_down", "Move \u2193", show=False),
+        Binding("h", "focus_active", show=False, priority=True),
+        Binding("l", "focus_archived", show=False, priority=True),
+        Binding("N", "edit_notes", "Old notes"),
+    ] + _VimOptionListMixin.VIM_BINDINGS
+
+    DEFAULT_CSS = f"""
+    TodoScreen {{ align: center middle; }}
+    #todo-container {{
+        width: 100%; height: 100%;
+        padding: 0; background: {BG_BASE};
+    }}
+    #todo-title {{
+        text-style: bold; color: {C_PURPLE};
+        padding: 1 3;
+    }}
+    #todo-lists {{
+        height: 1fr;
+    }}
+    .todo-list-pane {{
+        width: 1fr;
+    }}
+    .todo-list-label {{
+        padding: 0 3;
+        color: {C_BLUE};
+        text-style: bold;
+    }}
+    #todo-active, #todo-archived {{
+        height: auto;
+        margin: 0 1; padding: 0;
+        border: none;
+        background: {BG_BASE};
+    }}
+    #todo-active > .option-list--option-highlighted,
+    #todo-archived > .option-list--option-highlighted {{
+        background: #252525;
+    }}
+    #todo-no-active, #todo-no-archived {{
+        padding: 1 3;
+        color: {C_DIM};
+    }}
+    #todo-archived-pane {{
+        display: none;
+    }}
+    #todo-context {{
+        height: auto;
+        max-height: 6;
+        padding: 0 3;
+        color: {C_DIM};
+        border-top: blank;
+    }}
+    #todo-help {{
+        height: 1;
+        padding: 0 2;
+        background: {BG_BASE};
+        color: {C_DIM};
+        dock: bottom;
+    }}
+    """
+
+    def __init__(self, ws: Workstream, store: Store):
+        super().__init__()
+        self.ws = ws
+        self.store = store
+        self._active_pane: str = "active"
+        self._active_items: list[TodoItem] = []
+        self._archived_items: list[TodoItem] = []
+
+    @property
+    def _app_state(self):
+        return self.app.state
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="todo-container"):
+            yield Static(f"[bold {C_PURPLE}]Todos: {self.ws.name}[/bold {C_PURPLE}]", id="todo-title")
+
+            with Horizontal(id="todo-lists"):
+                with Vertical(id="todo-active-pane", classes="todo-list-pane"):
+                    yield Static(f"[bold {C_BLUE}]Active[/bold {C_BLUE}]", id="todo-active-label", classes="todo-list-label")
+                    yield OptionList(id="todo-active")
+                    yield Static(f"[{C_DIM}]No todos \u2014 press a to add[/{C_DIM}]", id="todo-no-active")
+                with Vertical(id="todo-archived-pane", classes="todo-list-pane"):
+                    yield Static(f"[{C_DIM}]Archived[/{C_DIM}]", id="todo-archived-label", classes="todo-list-label")
+                    yield OptionList(id="todo-archived")
+                    yield Static(f"[{C_DIM}]Empty[/{C_DIM}]", id="todo-no-archived")
+
+            yield Static("", id="todo-context")
+            yield Static(self._render_help(), id="todo-help")
+
+    def on_mount(self):
+        self._rebuild()
+        self.query_one("#todo-active", OptionList).focus()
+
+    def _focused_olist(self) -> OptionList:
+        if self._active_pane == "archived":
+            return self.query_one("#todo-archived", OptionList)
+        return self.query_one("#todo-active", OptionList)
+
+    def _olist(self) -> OptionList:
+        return self._focused_olist()
+
+    def _rebuild(self):
+        """Reload data and rebuild both panes."""
+        from state import AppState
+        self.ws = self.store.get(self.ws.id) or self.ws
+        self._active_items = AppState.active_todos(self.ws)
+        self._archived_items = AppState.archived_todos(self.ws)
+
+        # Active pane
+        olist = self.query_one("#todo-active", OptionList)
+        no_active = self.query_one("#todo-no-active", Static)
+        old_id = self._highlighted_item_id(olist, self._active_items)
+        olist.clear_options()
+        if self._active_items:
+            olist.display = True
+            no_active.display = False
+            for item in self._active_items:
+                prompt = _render_todo_option(item)
+                olist.add_option(Option(prompt, id=item.id))
+            self._restore_highlight(olist, self._active_items, old_id)
+        else:
+            olist.display = False
+            no_active.display = True
+
+        # Archived pane
+        arch_olist = self.query_one("#todo-archived", OptionList)
+        no_arch = self.query_one("#todo-no-archived", Static)
+        arch_pane = self.query_one("#todo-archived-pane")
+        arch_pane.display = True
+        old_arch_id = self._highlighted_item_id(arch_olist, self._archived_items)
+        arch_olist.clear_options()
+        if self._archived_items:
+            arch_olist.display = True
+            no_arch.display = False
+            for item in self._archived_items:
+                prompt = _render_todo_option(item, is_archived=True)
+                arch_olist.add_option(Option(prompt, id=item.id))
+            self._restore_highlight(arch_olist, self._archived_items, old_arch_id)
+        else:
+            arch_olist.display = False
+            no_arch.display = True
+            if self._active_pane == "archived":
+                self._active_pane = "active"
+                self.query_one("#todo-active", OptionList).focus()
+
+        self._update_pane_labels()
+        self._update_context_preview()
+
+    @staticmethod
+    def _highlighted_item_id(olist: OptionList, items: list[TodoItem]) -> str | None:
+        if olist.highlighted is not None and olist.option_count > 0:
+            try:
+                return olist.get_option_at_index(olist.highlighted).id
+            except Exception:
+                pass
+        return None
+
+    @staticmethod
+    def _restore_highlight(olist: OptionList, items: list[TodoItem], item_id: str | None):
+        if not olist.option_count:
+            return
+        if item_id:
+            for i, t in enumerate(items):
+                if t.id == item_id:
+                    olist.highlighted = i
+                    return
+        olist.highlighted = 0
+
+    def _update_pane_labels(self):
+        active_label = self.query_one("#todo-active-label", Static)
+        arch_label = self.query_one("#todo-archived-label", Static)
+        na = len(self._active_items)
+        narch = len(self._archived_items)
+        if self._active_pane == "active":
+            active_label.update(f"[bold {C_BLUE}]Active[/bold {C_BLUE}] [{C_DIM}]({na})[/{C_DIM}]")
+            arch_label.update(f"[{C_DIM}]Archived ({narch})[/{C_DIM}]")
+        else:
+            active_label.update(f"[{C_DIM}]Active ({na})[/{C_DIM}]")
+            arch_label.update(f"[bold {C_BLUE}]Archived[/bold {C_BLUE}] [{C_DIM}]({narch})[/{C_DIM}]")
+
+    def _update_context_preview(self):
+        item = self._highlighted_item()
+        ctx_widget = self.query_one("#todo-context", Static)
+        if item and item.context:
+            # Show first 4 lines of context
+            lines = item.context.strip().split("\n")[:4]
+            preview = "\n".join(lines)
+            if len(item.context.strip().split("\n")) > 4:
+                preview += f"\n[{C_DIM}]...[/{C_DIM}]"
+            ctx_widget.update(f"[{C_BLUE}]Context:[/{C_BLUE}] {preview}")
+        elif item:
+            ctx_widget.update(f"[{C_DIM}]No context \u2014 Ctrl+E to add[/{C_DIM}]")
+        else:
+            ctx_widget.update("")
+
+    def _highlighted_item(self) -> TodoItem | None:
+        olist = self._focused_olist()
+        items = self._archived_items if self._active_pane == "archived" else self._active_items
+        if olist.highlighted is not None and olist.highlighted < len(items):
+            return items[olist.highlighted]
+        return None
+
+    def on_option_list_option_highlighted(self, event: OptionList.OptionHighlighted):
+        self._update_context_preview()
+
+    def _render_help(self) -> str:
+        pairs = [
+            ("a", "add"), ("Enter", "done"), ("e", "edit"), ("c", "spawn"),
+            ("x", "archive"), ("d", "delete"), ("Ctrl+E", "context"),
+            ("J/K", "reorder"), ("h/l", "panes"), ("N", "notes"), ("q", "back"),
+        ]
+        return "  ".join(f"[{C_YELLOW}]{k}[/{C_YELLOW}] {v}" for k, v in pairs)
+
+    # ── Actions ────────────────────────────────────────────────────
+
+    def action_add_todo(self):
+        def on_text(text: str | None):
+            if text and text.strip():
+                self._app_state.add_todo(self.ws.id, text.strip())
+                self._rebuild()
+                self.app.notify("Todo added", timeout=1)
+        self.app.push_screen(QuickNoteScreen(self.ws), callback=on_text)
+
+    def action_toggle_done(self):
+        item = self._highlighted_item()
+        if not item:
+            return
+        self._app_state.toggle_todo(self.ws.id, item.id)
+        self._rebuild()
+
+    def action_edit_todo(self):
+        item = self._highlighted_item()
+        if not item:
+            return
+        def on_text(text: str | None):
+            if text and text.strip():
+                self._app_state.edit_todo(self.ws.id, item.id, text=text.strip())
+                self._rebuild()
+        self.app.push_screen(_TodoEditScreen(item.text), callback=on_text)
+
+    def action_archive_todo(self):
+        item = self._highlighted_item()
+        if not item:
+            return
+        if self._active_pane == "archived":
+            self._app_state.unarchive_todo(self.ws.id, item.id)
+        else:
+            self._app_state.archive_todo(self.ws.id, item.id)
+        self._rebuild()
+
+    def action_delete_todo(self):
+        item = self._highlighted_item()
+        if not item:
+            return
+        self._app_state.delete_todo(self.ws.id, item.id)
+        self._rebuild()
+        self.app.notify("Todo deleted", timeout=1)
+
+    def action_spawn_todo(self):
+        item = self._highlighted_item()
+        if not item:
+            return
+        prompt = item.text
+        if item.context:
+            prompt = f"{item.text}\n\n{item.context}"
+        ok, err = launch_orch_claude(self.ws, store=self.store, prompt=prompt)
+        if ok:
+            self._app_state.toggle_todo(self.ws.id, item.id)  # mark done
+            self._rebuild()
+            self.app.notify("Session spawned", timeout=2)
+        else:
+            self.app.notify(f"Spawn failed: {err}", severity="error", timeout=4)
+
+    def action_edit_context(self):
+        item = self._highlighted_item()
+        if not item:
+            return
+        def on_close(_):
+            self.ws = self.store.get(self.ws.id) or self.ws
+            self._rebuild()
+        self.app.push_screen(_TodoContextScreen(self.ws, self.store, item.id), callback=on_close)
+
+    def action_move_up(self):
+        item = self._highlighted_item()
+        if item and self._active_pane == "active":
+            self._app_state.reorder_todo(self.ws.id, item.id, -1)
+            self._rebuild()
+
+    def action_move_down(self):
+        item = self._highlighted_item()
+        if item and self._active_pane == "active":
+            self._app_state.reorder_todo(self.ws.id, item.id, 1)
+            self._rebuild()
+
+    def action_focus_active(self):
+        self._active_pane = "active"
+        self.query_one("#todo-active", OptionList).focus()
+        self._update_pane_labels()
+        self._update_context_preview()
+
+    def action_focus_archived(self):
+        if not self._archived_items:
+            return
+        self._active_pane = "archived"
+        self.query_one("#todo-archived", OptionList).focus()
+        self._update_pane_labels()
+        self._update_context_preview()
+
+    def action_edit_notes(self):
+        """Escape hatch to the old free-text notes editor."""
+        def on_close(_):
+            self.ws = self.store.get(self.ws.id) or self.ws
+        self.app.push_screen(NotesScreen(self.ws, self.store), callback=on_close)
+
+
+class _TodoEditScreen(ModalScreen[str | None]):
+    """Single-line input pre-filled with existing text."""
+    BINDINGS = [Binding("escape", "cancel", "Cancel", priority=True)]
+
+    DEFAULT_CSS = f"""
+    _TodoEditScreen {{ align: center middle; }}
+    #todo-edit-container {{
+        width: 70; height: 9;
+        padding: 1 2; background: {BG_BASE}; border: round $primary 30%;
+    }}
+    #todo-edit-title {{ text-style: bold; color: {C_PURPLE}; padding-bottom: 1; }}
+    #todo-edit-input {{ height: 3; }}
+    #todo-edit-hint {{ text-align: center; color: {C_DIM}; padding-top: 1; }}
+    """
+
+    def __init__(self, initial_text: str):
+        super().__init__()
+        self._initial = initial_text
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="todo-edit-container"):
+            yield Label("Edit Todo", id="todo-edit-title")
+            yield Input(value=self._initial, id="todo-edit-input")
+            yield Static(f"[{C_DIM}]Enter[/{C_DIM}] save  [{C_DIM}]Esc[/{C_DIM}] cancel", id="todo-edit-hint")
+
+    def on_mount(self):
+        self.query_one("#todo-edit-input", Input).focus()
+
+    @on(Input.Submitted, "#todo-edit-input")
+    def on_submit(self, event: Input.Submitted):
+        self.dismiss(event.value.strip() or None)
+
+    def action_cancel(self):
+        self.dismiss(None)
+
+
+class _TodoContextScreen(ModalScreen[None]):
+    """TextArea editor for a todo item's context field."""
+    BINDINGS = [Binding("escape", "save_and_close", "Save & back", priority=True)]
+
+    DEFAULT_CSS = f"""
+    _TodoContextScreen {{ align: center middle; }}
+    #todo-ctx-container {{
+        width: 80; height: auto; max-height: 80%;
+        padding: 1 2; background: {BG_BASE}; border: round $primary 30%;
+    }}
+    #todo-ctx-title {{ text-style: bold; color: {C_PURPLE}; padding-bottom: 1; }}
+    #todo-ctx-editor {{ height: 15; margin: 0 0 1 0; }}
+    #todo-ctx-hint {{ text-align: center; color: {C_DIM}; }}
+    """
+
+    def __init__(self, ws: Workstream, store: Store, todo_id: str):
+        super().__init__()
+        self.ws = ws
+        self.store = store
+        self.todo_id = todo_id
+        self._item = next((t for t in ws.todos if t.id == todo_id), None)
+
+    def compose(self) -> ComposeResult:
+        text = self._item.context if self._item else ""
+        label = self._item.text[:40] if self._item else "?"
+        with Vertical(id="todo-ctx-container"):
+            yield Label(f"Context: {label}", id="todo-ctx-title")
+            yield TextArea(text, id="todo-ctx-editor")
+            yield Static(f"[{C_DIM}]Esc[/{C_DIM}] save & back", id="todo-ctx-hint")
+
+    def action_save_and_close(self):
+        if self._item:
+            editor = self.query_one("#todo-ctx-editor", TextArea)
+            self._item.context = editor.text.strip()
+            self.store.update(self.ws)
+        self.dismiss()
+
+
 # ─── Links Screen ───────────────────────────────────────────────────
 
 class LinksScreen(_VimOptionListMixin, ModalScreen[None]):
@@ -368,9 +775,9 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         Binding("S", "cycle_status_back", "Status\u2190"),
         Binding("c", "spawn", "Spawn"),
         Binding("r", "resume", "Resume"),
-        Binding("n", "quick_note", "Note"),
+        Binding("n", "quick_note", "+todo"),
         Binding("L", "add_link", "Link+"),
-        Binding("e", "edit_notes", "Edit notes"),
+        Binding("e", "open_todos", "Todos"),
         Binding("o", "open_links", "Open links"),
         Binding("x", "archive", "Archive"),
         Binding("a", "archive_thread", "Archive/restore", priority=True),
@@ -742,6 +1149,23 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
                 icon = _link_icon(lnk.kind)
                 lines.append(f"  {icon} [{C_DIM}]{lnk.label}:[/{C_DIM}] {lnk.value}")
             lines.append("")
+        # Todo summary
+        from state import AppState
+        active_todos = AppState.active_todos(self.ws)
+        if active_todos:
+            undone = [t for t in active_todos if not t.done]
+            done = [t for t in active_todos if t.done]
+            lines.append(f"[bold {C_BLUE}]Todos[/bold {C_BLUE}] [{C_DIM}]({len(undone)} pending, {len(done)} done)[/{C_DIM}]")
+            for t in active_todos[:6]:
+                icon = TODO_DONE_ICON if t.done else TODO_UNDONE_ICON
+                color = C_GREEN if t.done else ""
+                if color:
+                    lines.append(f"  [{color}]{icon} {t.text}[/{color}]")
+                else:
+                    lines.append(f"  {icon} {t.text}")
+            if len(active_todos) > 6:
+                lines.append(f"  [{C_DIM}]... +{len(active_todos) - 6} more[/{C_DIM}]")
+            lines.append("")
         if self.ws.notes:
             lines.append(f"[bold {C_BLUE}]Notes[/bold {C_BLUE}]")
             for line in self.ws.notes.split("\n"):
@@ -756,7 +1180,7 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
     def _render_help(self) -> str:
         pairs = [
             ("Enter", "resume"), ("s/S", "status"), ("c", "spawn"),
-            ("n", "note"), ("e", "edit"),
+            ("n", "+todo"), ("e", "todos"),
             ("o", "open"), ("x", "archive ws"),
             ("a", "archive/restore"), ("h/l", "panes"),
             ("q", "back"),
@@ -787,20 +1211,18 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         def on_note(text: str | None):
             if not text or not text.strip():
                 return
-            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
-            entry = f"[{timestamp}] {text.strip()}"
-            self.ws.notes = (self.ws.notes + "\n" + entry) if self.ws.notes else entry
-            self.store.update(self.ws)
+            self.app.state.add_todo(self.ws.id, text.strip())
+            self.ws = self.store.get(self.ws.id) or self.ws
             self._refresh()
-            self.app.notify("Note added", timeout=1)
+            self.app.notify("Todo added", timeout=1)
         self.app.push_screen(QuickNoteScreen(self.ws), callback=on_note)
 
-    def action_edit_notes(self):
-        def on_notes_close(_):
+    def action_open_todos(self):
+        def on_close(_):
             self.store.load()
             self.ws = self.store.get(self.ws.id) or self.ws
             self._refresh()
-        self.app.push_screen(NotesScreen(self.ws, self.store), callback=on_notes_close)
+        self.app.push_screen(TodoScreen(self.ws, self.store), callback=on_close)
 
     def action_open_links(self):
         if self.ws.links:

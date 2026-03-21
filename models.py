@@ -64,6 +64,17 @@ STATUS_ORDER = {
 
 
 @dataclass
+class TodoItem:
+    """A todo item — potential pending Claude session."""
+    id: str = field(default_factory=lambda: str(uuid.uuid4())[:8])
+    text: str = ""
+    done: bool = False
+    archived: bool = False
+    context: str = ""  # extra instructions for spawning a session
+    created_at: str = field(default_factory=lambda: datetime.now().isoformat())
+
+
+@dataclass
 class Link:
     """A link to an external resource."""
     kind: str  # "worktree", "ticket", "claude-session", "slack", "file", "url"
@@ -97,6 +108,7 @@ class Workstream:
     category: Category = Category.PERSONAL
     links: list[Link] = field(default_factory=list)
     notes: str = ""
+    todos: list[TodoItem] = field(default_factory=list)
     archived: bool = False
     origin: Origin = Origin.MANUAL
     thread_ids: list[str] = field(default_factory=list)
@@ -174,6 +186,8 @@ class Workstream:
                 d["archived_sessions"] = {sid: "" for sid in old}
         d.setdefault("archived_sessions", {})
         d.setdefault("last_user_activity", "")
+        d.setdefault("todos", [])
+        d["todos"] = [TodoItem(**t) if isinstance(t, dict) else t for t in d["todos"]]
         return cls(**d)
 
 

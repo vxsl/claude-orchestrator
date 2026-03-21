@@ -9,7 +9,7 @@ from enum import Enum
 from pathlib import Path
 
 from models import (
-    Category, Status, Workstream,
+    Category, Status, TodoItem, Workstream,
     STATUS_ICONS, STATUS_ORDER,
     _relative_time,
 )
@@ -252,4 +252,29 @@ def _render_session_option(
         f"      [{C_DIM}]{model} · {s.message_count} msgs · "
         f"[/{C_DIM}]{tokens}[{C_DIM}] tok · {s.age}[/{C_DIM}]"
     )
+    return f"{line1}\n{line2}"
+
+
+# ─── Todo rendering ────────────────────────────────────────────────
+
+TODO_UNDONE_ICON = "\u25cb"   # ○
+TODO_DONE_ICON = "\u25cf"     # ●
+TODO_ARCHIVED_ICON = "\u25cc"  # ◌
+
+
+def _render_todo_option(item: TodoItem, is_archived: bool = False) -> str:
+    """Render a todo item as a formatted OptionList entry."""
+    if is_archived:
+        icon = TODO_ARCHIVED_ICON
+        text_fmt = f"[{C_DIM}]{item.text}[/{C_DIM}]"
+    elif item.done:
+        icon = TODO_DONE_ICON
+        text_fmt = f"[{C_GREEN}]{item.text}[/{C_GREEN}]"
+    else:
+        icon = TODO_UNDONE_ICON
+        text_fmt = item.text
+    ctx_hint = f" [{C_DIM}]+ctx[/{C_DIM}]" if item.context else ""
+    age = _relative_time(item.created_at)
+    line1 = f" [{C_DIM if is_archived else C_LIGHT}]{icon}[/{C_DIM if is_archived else C_LIGHT}]  {text_fmt}{ctx_hint}"
+    line2 = f"      [{C_DIM}]{age}[/{C_DIM}]"
     return f"{line1}\n{line2}"

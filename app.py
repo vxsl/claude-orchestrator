@@ -62,7 +62,7 @@ from actions import (
 )
 from screens import (
     SessionsChanged,
-    HelpScreen, QuickNoteScreen, NotesScreen, LinksScreen,
+    HelpScreen, QuickNoteScreen, NotesScreen, TodoScreen, LinksScreen,
     AddScreen, DetailScreen, BrainDumpScreen, BrainPreviewScreen,
     AddLinkScreen, LinkSessionScreen, ThreadPickerScreen, ConfirmScreen,
 )
@@ -1007,9 +1007,9 @@ class OrchestratorApp(App):
         def on_note(text: str | None):
             if not text or not text.strip():
                 return
-            self.state.add_note(ws.id, text)
+            self.state.add_todo(ws.id, text)
             self._refresh_ws_table()
-            self.notify("Note added", timeout=1)
+            self.notify("Todo added", timeout=1)
 
         self.push_screen(QuickNoteScreen(ws), callback=on_note)
 
@@ -1022,9 +1022,9 @@ class OrchestratorApp(App):
         if text:
             ws = self._selected_ws()
             if ws:
-                self.state.add_note(ws.id, text)
+                self.state.add_todo(ws.id, text)
                 self._refresh_ws_table()
-                self.notify("Note added", timeout=1)
+                self.notify("Todo added", timeout=1)
 
     def action_rename(self):
         if self.state.view_mode != ViewMode.WORKSTREAMS:
@@ -1059,7 +1059,7 @@ class OrchestratorApp(App):
         ws = self._selected_ws()
         if ws:
             self.push_screen(
-                NotesScreen(ws, self.state.store),
+                TodoScreen(ws, self.state.store),
                 callback=lambda _: self._on_return_from_modal(),
             )
 

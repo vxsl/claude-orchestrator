@@ -11,7 +11,7 @@ import os
 from datetime import datetime
 
 from models import (
-    Category, Link, Origin, Status, Store, Workstream,
+    Category, Link, Origin, Status, Store, TodoItem, Workstream,
     STATUS_ICONS, _relative_time,
 )
 from sessions import ClaudeSession, get_live_session_ids, refresh_session_tail
@@ -225,6 +225,113 @@ class AppState:
         self.store.update(ws)
         return True
 
+    # ── Todo operations ───────────────────────────────────────────
+
+    def add_todo(self, ws_id: str, text: str, context: str = "") -> TodoItem | None:
+        """Add a todo item. Returns the item or None."""
+        ws = self.get_ws(ws_id)
+        if not ws or not text.strip():
+            return None
+        item = TodoItem(text=text.strip(), context=context.strip())
+        ws.todos.append(item)
+        self.store.update(ws)
+        return item
+
+    def toggle_todo(self, ws_id: str, todo_id: str) -> bool:
+        """Toggle done flag on a todo item."""
+        ws = self.get_ws(ws_id)
+        if not ws:
+            return False
+        for t in ws.todos:
+            if t.id == todo_id:
+                t.done = not t.done
+                self.store.update(ws)
+                return True
+        return False
+
+    def archive_todo(self, ws_id: str, todo_id: str) -> bool:
+        """Archive a todo item."""
+        ws = self.get_ws(ws_id)
+        if not ws:
+            return False
+        for t in ws.todos:
+            if t.id == todo_id:
+                t.archived = True
+                self.store.update(ws)
+                return True
+        return False
+
+    def unarchive_todo(self, ws_id: str, todo_id: str) -> bool:
+        """Unarchive a todo item."""
+        ws = self.get_ws(ws_id)
+        if not ws:
+            return False
+        for t in ws.todos:
+            if t.id == todo_id:
+                t.archived = False
+                self.store.update(ws)
+                return True
+        return False
+
+    def delete_todo(self, ws_id: str, todo_id: str) -> bool:
+        """Delete a todo item."""
+        ws = self.get_ws(ws_id)
+        if not ws:
+            return False
+        before = len(ws.todos)
+        ws.todos = [t for t in ws.todos if t.id != todo_id]
+        if len(ws.todos) < before:
+            self.store.update(ws)
+            return True
+        return False
+
+    def edit_todo(self, ws_id: str, todo_id: str, text: str | None = None, context: str | None = None) -> bool:
+        """Edit a todo item's text and/or context."""
+        ws = self.get_ws(ws_id)
+        if not ws:
+            return False
+        for t in ws.todos:
+            if t.id == todo_id:
+                if text is not None:
+                    t.text = text.strip()
+                if context is not None:
+                    t.context = context.strip()
+                self.store.update(ws)
+                return True
+        return False
+
+    def reorder_todo(self, ws_id: str, todo_id: str, direction: int) -> bool:
+        """Move a todo item up (-1) or down (+1) within the active list."""
+        ws = self.get_ws(ws_id)
+        if not ws:
+            return False
+        active = [t for t in ws.todos if not t.archived]
+        idx = next((i for i, t in enumerate(active) if t.id == todo_id), None)
+        if idx is None:
+            return False
+        new_idx = idx + direction
+        if new_idx < 0 or new_idx >= len(active):
+            return False
+        # Swap in the active list, then rebuild ws.todos preserving archived positions
+        active[idx], active[new_idx] = active[new_idx], active[idx]
+        archived = [t for t in ws.todos if t.archived]
+        ws.todos = active + archived
+        self.store.update(ws)
+        return True
+
+    @staticmethod
+    def active_todos(ws: Workstream) -> list[TodoItem]:
+        """Non-archived todos: undone first, then done, preserving insertion order."""
+        active = [t for t in ws.todos if not t.archived]
+        undone = [t for t in active if not t.done]
+        done = [t for t in active if t.done]
+        return undone + done
+
+    @staticmethod
+    def archived_todos(ws: Workstream) -> list[TodoItem]:
+        """Archived todo items."""
+        return [t for t in ws.todos if t.archived]
+
     def rename(self, ws_id: str, new_name: str) -> bool:
         """Rename a workstream. Returns True if successful."""
         ws = self.get_ws(ws_id)
@@ -379,12 +486,12 @@ class AppState:
             self.store.update(ws)
             return {"action": "refresh", "msg": f"Added {kind} link to {ws.name}"}
 
-        # Note
-        elif cmd in ("note", "n") and ws:
+        # Note → Todo
+        elif cmd in ("note", "n", "todo", "t") and ws:
             if not arg:
                 return {"action": "error", "msg": "Usage: note <text>"}
-            self.add_note(ws.id, arg)
-            return {"action": "notify", "msg": f"Note added to {ws.name}"}
+            self.add_todo(ws.id, arg)
+            return {"action": "notify", "msg": f"Todo added to {ws.name}"}
 
         # Archive
         elif cmd in ("archive", "a") and ws:

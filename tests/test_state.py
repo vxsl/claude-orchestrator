@@ -7,7 +7,7 @@ This is where the high-value regression protection lives.
 import pytest
 from datetime import datetime, timedelta
 
-from models import Category, Link, Status, Store, Workstream, Origin
+from models import Category, Link, Status, Store, TodoItem, Workstream, Origin
 from sessions import ClaudeSession
 from threads import Thread, ThreadActivity
 from state import AppState
@@ -290,6 +290,172 @@ class TestNotes:
         assert "second" in reloaded.notes
 
 
+# ─── Todos ──────────────────────────────────────────────────────────
+
+class TestTodo:
+    def test_add_todo(self, populated_state):
+        ws = populated_state.store.active[0]
+        item = populated_state.add_todo(ws.id, "fix login bug")
+        assert item is not None
+        assert item.text == "fix login bug"
+        assert not item.done
+        assert not item.archived
+        reloaded = populated_state.store.get(ws.id)
+        assert len(reloaded.todos) == 1
+        assert reloaded.todos[0].text == "fix login bug"
+
+    def test_add_todo_with_context(self, populated_state):
+        ws = populated_state.store.active[0]
+        item = populated_state.add_todo(ws.id, "deploy", context="use staging env")
+        assert item.context == "use staging env"
+
+    def test_add_todo_empty_fails(self, populated_state):
+        ws = populated_state.store.active[0]
+        assert populated_state.add_todo(ws.id, "") is None
+        assert populated_state.add_todo(ws.id, "   ") is None
+
+    def test_add_todo_nonexistent_fails(self, state):
+        assert state.add_todo("nonexistent", "note") is None
+
+    def test_toggle_todo(self, populated_state):
+        ws = populated_state.store.active[0]
+        item = populated_state.add_todo(ws.id, "task")
+        assert not item.done
+        assert populated_state.toggle_todo(ws.id, item.id)
+        reloaded = populated_state.store.get(ws.id)
+        assert reloaded.todos[0].done
+        # Toggle back
+        assert populated_state.toggle_todo(ws.id, item.id)
+        reloaded = populated_state.store.get(ws.id)
+        assert not reloaded.todos[0].done
+
+    def test_toggle_todo_nonexistent(self, populated_state):
+        ws = populated_state.store.active[0]
+        assert not populated_state.toggle_todo(ws.id, "fake")
+
+    def test_archive_todo(self, populated_state):
+        ws = populated_state.store.active[0]
+        item = populated_state.add_todo(ws.id, "task")
+        assert populated_state.archive_todo(ws.id, item.id)
+        reloaded = populated_state.store.get(ws.id)
+        assert reloaded.todos[0].archived
+
+    def test_unarchive_todo(self, populated_state):
+        ws = populated_state.store.active[0]
+        item = populated_state.add_todo(ws.id, "task")
+        populated_state.archive_todo(ws.id, item.id)
+        assert populated_state.unarchive_todo(ws.id, item.id)
+        reloaded = populated_state.store.get(ws.id)
+        assert not reloaded.todos[0].archived
+
+    def test_delete_todo(self, populated_state):
+        ws = populated_state.store.active[0]
+        item = populated_state.add_todo(ws.id, "task")
+        assert populated_state.delete_todo(ws.id, item.id)
+        reloaded = populated_state.store.get(ws.id)
+        assert len(reloaded.todos) == 0
+
+    def test_delete_todo_nonexistent(self, populated_state):
+        ws = populated_state.store.active[0]
+        assert not populated_state.delete_todo(ws.id, "fake")
+
+    def test_edit_todo_text(self, populated_state):
+        ws = populated_state.store.active[0]
+        item = populated_state.add_todo(ws.id, "old text")
+        assert populated_state.edit_todo(ws.id, item.id, text="new text")
+        reloaded = populated_state.store.get(ws.id)
+        assert reloaded.todos[0].text == "new text"
+
+    def test_edit_todo_context(self, populated_state):
+        ws = populated_state.store.active[0]
+        item = populated_state.add_todo(ws.id, "task")
+        assert populated_state.edit_todo(ws.id, item.id, context="extra info")
+        reloaded = populated_state.store.get(ws.id)
+        assert reloaded.todos[0].context == "extra info"
+
+    def test_edit_todo_nonexistent(self, populated_state):
+        ws = populated_state.store.active[0]
+        assert not populated_state.edit_todo(ws.id, "fake", text="x")
+
+    def test_reorder_todo_down(self, populated_state):
+        ws = populated_state.store.active[0]
+        a = populated_state.add_todo(ws.id, "first")
+        b = populated_state.add_todo(ws.id, "second")
+        assert populated_state.reorder_todo(ws.id, a.id, 1)
+        reloaded = populated_state.store.get(ws.id)
+        assert reloaded.todos[0].id == b.id
+        assert reloaded.todos[1].id == a.id
+
+    def test_reorder_todo_up(self, populated_state):
+        ws = populated_state.store.active[0]
+        a = populated_state.add_todo(ws.id, "first")
+        b = populated_state.add_todo(ws.id, "second")
+        assert populated_state.reorder_todo(ws.id, b.id, -1)
+        reloaded = populated_state.store.get(ws.id)
+        assert reloaded.todos[0].id == b.id
+        assert reloaded.todos[1].id == a.id
+
+    def test_reorder_todo_out_of_bounds(self, populated_state):
+        ws = populated_state.store.active[0]
+        a = populated_state.add_todo(ws.id, "only")
+        assert not populated_state.reorder_todo(ws.id, a.id, -1)
+        assert not populated_state.reorder_todo(ws.id, a.id, 1)
+
+    def test_active_todos_ordering(self, populated_state):
+        ws = populated_state.store.active[0]
+        a = populated_state.add_todo(ws.id, "undone1")
+        b = populated_state.add_todo(ws.id, "done1")
+        c = populated_state.add_todo(ws.id, "undone2")
+        populated_state.toggle_todo(ws.id, b.id)  # mark done
+        active = AppState.active_todos(populated_state.store.get(ws.id))
+        assert [t.id for t in active] == [a.id, c.id, b.id]
+
+    def test_active_todos_excludes_archived(self, populated_state):
+        ws = populated_state.store.active[0]
+        a = populated_state.add_todo(ws.id, "keep")
+        b = populated_state.add_todo(ws.id, "archive me")
+        populated_state.archive_todo(ws.id, b.id)
+        active = AppState.active_todos(populated_state.store.get(ws.id))
+        assert len(active) == 1
+        assert active[0].id == a.id
+
+    def test_archived_todos(self, populated_state):
+        ws = populated_state.store.active[0]
+        a = populated_state.add_todo(ws.id, "keep")
+        b = populated_state.add_todo(ws.id, "archive me")
+        populated_state.archive_todo(ws.id, b.id)
+        archived = AppState.archived_todos(populated_state.store.get(ws.id))
+        assert len(archived) == 1
+        assert archived[0].id == b.id
+
+    def test_todo_migration_from_dict(self):
+        """from_dict with no todos key defaults to empty list."""
+        d = {
+            "id": "test1", "name": "test", "description": "",
+            "status": "queued", "category": "personal",
+            "links": [], "notes": "", "archived": False,
+            "origin": "manual", "thread_ids": [], "archived_thread_ids": [],
+            "archived_sessions": {}, "last_user_activity": "",
+            "created_at": "2026-01-01T00:00:00", "updated_at": "2026-01-01T00:00:00",
+            "status_changed_at": "2026-01-01T00:00:00",
+        }
+        ws = Workstream.from_dict(d)
+        assert ws.todos == []
+
+    def test_todo_roundtrip(self, populated_state):
+        """Todos survive to_dict/from_dict roundtrip."""
+        ws = populated_state.store.active[0]
+        populated_state.add_todo(ws.id, "task1", context="ctx")
+        populated_state.add_todo(ws.id, "task2")
+        populated_state.toggle_todo(ws.id, ws.todos[0].id)
+        d = ws.to_dict()
+        restored = Workstream.from_dict(d)
+        assert len(restored.todos) == 2
+        assert restored.todos[0].done
+        assert restored.todos[0].context == "ctx"
+        assert not restored.todos[1].done
+
+
 # ─── Rename ──────────────────────────────────────────────────────────
 
 class TestRename:
@@ -502,7 +668,7 @@ class TestCommandExecution:
         result = populated_state.execute_command("note hello world", ws.id)
         assert result["action"] == "notify"
         reloaded = populated_state.store.get(ws.id)
-        assert "hello world" in reloaded.notes
+        assert any(t.text == "hello world" for t in reloaded.todos)
 
     def test_status_command(self, populated_state):
         ws = populated_state.store.active[0]
