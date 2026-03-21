@@ -490,7 +490,7 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         self._update_pane_labels()
 
     def action_focus_archived(self):
-        if not self.ws.archived_sessions:
+        if not self._archived_sessions:
             return
         self._active_pane = "archived"
         olist = self.query_one("#detail-archived", OptionList)
@@ -571,19 +571,19 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         arch_olist = self.query_one("#detail-archived", OptionList)
         no_arch = self.query_one("#detail-no-archived", Static)
         arch_pane = self.query_one("#detail-archived-pane")
+        arch_pane.display = True
         if self._archived_sessions:
-            arch_pane.display = True
             arch_olist.display = True
             no_arch.display = False
             self._build_archived_list()
             if arch_olist.option_count > 0 and arch_olist.highlighted is None:
                 arch_olist.highlighted = 0
-        elif self._active_pane == "archived":
-            self._active_pane = "sessions"
-            arch_pane.display = False
-            self.query_one("#detail-sessions", OptionList).focus()
         else:
-            arch_pane.display = False
+            arch_olist.display = False
+            no_arch.display = True
+            if self._active_pane == "archived":
+                self._active_pane = "sessions"
+                self.query_one("#detail-sessions", OptionList).focus()
 
         self._update_pane_labels()
 
