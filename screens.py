@@ -883,6 +883,17 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         self._animating_sessions: list[tuple[int, ThreadActivity]] = []
         self._animating_archived: list[tuple[int, ThreadActivity]] = []
 
+    def on_key(self, event) -> None:
+        log.debug("DetailScreen on_key: key=%r", event.key)
+        if event.key == "ctrl+j":
+            event.prevent_default()
+            event.stop()
+            self.action_next_panel()
+        elif event.key == "ctrl+k":
+            event.prevent_default()
+            event.stop()
+            self.action_prev_panel()
+
     def compose(self) -> ComposeResult:
         with Vertical(id="detail-container"):
             with Vertical(id="detail-header"):

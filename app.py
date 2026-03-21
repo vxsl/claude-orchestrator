@@ -196,6 +196,16 @@ class OrchestratorApp(App):
         self._throbber_timer = None
         self._session_watcher: SessionWatcher | None = None
 
+    def on_key(self, event) -> None:
+        if event.key == "ctrl+j":
+            event.prevent_default()
+            event.stop()
+            self.action_next_panel()
+        elif event.key == "ctrl+k":
+            event.prevent_default()
+            event.stop()
+            self.action_prev_panel()
+
     # ── Convenience accessors for backward compat ──
 
     @property
