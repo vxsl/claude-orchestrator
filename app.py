@@ -588,7 +588,7 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         Binding("e", "edit_notes", "Edit notes"),
         Binding("o", "open_links", "Open links"),
         Binding("x", "archive", "Archive"),
-        Binding("a", "archive_thread", "Archive/restore"),
+        Binding("space", "archive_thread", "Archive/restore"),
         Binding("h", "focus_sessions", show=False),
         Binding("l", "focus_archived", show=False),
     ] + _VimOptionListMixin.VIM_BINDINGS
@@ -724,7 +724,7 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
 
     def action_focus_archived(self):
         """Switch to the archived pane (l)."""
-        if not self.ws.archived_session_ids:
+        if not self.ws.archived_sessions:
             return
         self._active_pane = "archived"
         olist = self.query_one("#detail-archived", OptionList)
@@ -777,7 +777,19 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         app = self.app
         if hasattr(app, '_sessions_for_ws'):
             all_sessions = app._sessions_for_ws(self.ws, include_archived_threads=True)
-            hidden = set(self.ws.archived_session_ids)
+            archived = self.ws.archived_sessions  # {sid: archived_at}
+            # Auto-unarchive: if last_activity > archived_at, session got new messages
+            revived = set()
+            for s in all_sessions:
+                if s.session_id in archived:
+                    archived_at = archived[s.session_id]
+                    if (s.last_activity or "") > archived_at:
+                        revived.add(s.session_id)
+            if revived:
+                for sid in revived:
+                    del self.ws.archived_sessions[sid]
+                self.store.update(self.ws)
+            hidden = set(self.ws.archived_sessions)
             self._detail_sessions = [s for s in all_sessions if s.session_id not in hidden]
             self._archived_sessions = [s for s in all_sessions if s.session_id in hidden]
         else:
@@ -909,7 +921,7 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
             ("Enter", "resume"), ("s/S", "status"), ("c", "spawn"),
             ("n", "note"), ("e", "edit"),
             ("o", "open"), ("x", "archive ws"),
-            ("a", "archive/restore"), ("h/l", "panes"),
+            ("Space", "archive/restore"), ("h/l", "panes"),
             ("q", "back"),
         ]
         return "  ".join(f"[{C_YELLOW}]{k}[/{C_YELLOW}] {v}" for k, v in pairs)
@@ -976,16 +988,15 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
             if idx is None or idx >= len(self._archived_sessions):
                 return
             sid = self._archived_sessions[idx].session_id
-            if sid in self.ws.archived_session_ids:
-                self.ws.archived_session_ids.remove(sid)
-                self.store.update(self.ws)
+            self.ws.archived_sessions.pop(sid, None)
+            self.store.update(self.ws)
         else:
             # Archive from active
             if idx is None or idx >= len(self._detail_sessions):
                 return
             sid = self._detail_sessions[idx].session_id
-            if sid not in self.ws.archived_session_ids:
-                self.ws.archived_session_ids.append(sid)
+            if sid not in self.ws.archived_sessions:
+                self.ws.archived_sessions[sid] = datetime.now().isoformat()
                 self.store.update(self.ws)
         old_idx = idx
         self._refresh()
@@ -2115,7 +2126,7 @@ class OrchestratorApp(App):
             lines.append(f"  [{C_DIM}]Last active[/{C_DIM}] {last_active}")
             lines.append("")
 
-            archived_count = len(ws.archived_session_ids)
+            archived_count = len(ws.archived_sessions)
             if archived_count:
                 lines.append(f"[bold {C_BLUE}]Sessions[/bold {C_BLUE}]  [{C_DIM}]({archived_count} archived)[/{C_DIM}]")
             else:
@@ -2529,7 +2540,7 @@ class OrchestratorApp(App):
         By default, individually archived sessions (archived_session_ids) are excluded.
         Pass include_archived_threads=True to get everything.
         """
-        hidden_sids = set(ws.archived_session_ids) if not include_archived_threads else set()
+        hidden_sids = set(ws.archived_sessions) if not include_archived_threads else set()
 
         # Build effective thread list — use explicit thread_ids if available,
         # otherwise derive from directory-matched threads (manual workstreams).
