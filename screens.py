@@ -444,6 +444,8 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         self._throbber_frame: int = 0
         self._last_seen_cache: dict[str, str] = {}
         self._active_pane: str = "sessions"
+        self._animating_sessions: list[tuple[int, ThreadActivity]] = []
+        self._animating_archived: list[tuple[int, ThreadActivity]] = []
 
     def compose(self) -> ComposeResult:
         with Vertical(id="detail-container"):
@@ -513,24 +515,36 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         from actions import refresh_liveness
         refresh_liveness(self._detail_sessions)
         refresh_liveness(self._archived_sessions)
+        self._update_animating_cache()
 
     def on_sessions_changed(self, event: SessionsChanged):
-        self._load_detail_sessions()
         self._refresh()
+
+    def _update_animating_cache(self):
+        anim_types = (ThreadActivity.THINKING, ThreadActivity.AWAITING_INPUT)
+        self._animating_sessions = []
+        for i, s in enumerate(self._detail_sessions):
+            act = session_activity(s, self._last_seen_cache)
+            if act in anim_types:
+                self._animating_sessions.append((i, act))
+        self._animating_archived = []
+        for i, s in enumerate(self._archived_sessions):
+            act = session_activity(s, self._last_seen_cache)
+            if act in anim_types:
+                self._animating_archived.append((i, act))
 
     def _tick_throbber(self):
         self._throbber_frame += 1
+        # Only update options that are actually animating (cached from last build)
         olist = self.query_one("#detail-sessions", OptionList)
-        for i, s in enumerate(self._detail_sessions):
-            act = session_activity(s, self._last_seen_cache)
-            if act in (ThreadActivity.THINKING, ThreadActivity.AWAITING_INPUT):
-                prompt = _render_session_option(s, act, self._throbber_frame)
+        for i, act in self._animating_sessions:
+            if i < olist.option_count:
+                prompt = _render_session_option(self._detail_sessions[i], act, self._throbber_frame)
                 olist.replace_option_prompt_at_index(i, prompt)
         arch_olist = self.query_one("#detail-archived", OptionList)
-        for i, s in enumerate(self._archived_sessions):
-            act = session_activity(s, self._last_seen_cache)
-            if act in (ThreadActivity.THINKING, ThreadActivity.AWAITING_INPUT):
-                prompt = _render_session_option(s, act, self._throbber_frame)
+        for i, act in self._animating_archived:
+            if i < arch_olist.option_count:
+                prompt = _render_session_option(self._archived_sessions[i], act, self._throbber_frame)
                 arch_olist.replace_option_prompt_at_index(i, prompt)
 
     def _load_detail_sessions(self):
@@ -561,9 +575,10 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         if self._detail_sessions:
             olist.display = True
             no_sess.display = False
+            old_hi = olist.highlighted
             self._build_session_list()
-            if olist.option_count > 0 and olist.highlighted is None:
-                olist.highlighted = 0
+            if olist.option_count > 0:
+                olist.highlighted = min(old_hi, olist.option_count - 1) if old_hi is not None else 0
         else:
             olist.display = False
             no_sess.display = True
@@ -575,9 +590,10 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         if self._archived_sessions:
             arch_olist.display = True
             no_arch.display = False
+            old_hi = arch_olist.highlighted
             self._build_archived_list()
-            if arch_olist.option_count > 0 and arch_olist.highlighted is None:
-                arch_olist.highlighted = 0
+            if arch_olist.option_count > 0:
+                arch_olist.highlighted = min(old_hi, arch_olist.option_count - 1) if old_hi is not None else 0
         else:
             arch_olist.display = False
             no_arch.display = True
@@ -590,18 +606,26 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
     def _build_session_list(self):
         olist = self.query_one("#detail-sessions", OptionList)
         olist.clear_options()
+        animating = []
         for i, s in enumerate(self._detail_sessions):
             act = session_activity(s, self._last_seen_cache)
+            if act in (ThreadActivity.THINKING, ThreadActivity.AWAITING_INPUT):
+                animating.append((i, act))
             prompt = _render_session_option(s, act, self._throbber_frame)
             olist.add_option(Option(prompt, id=str(i)))
+        self._animating_sessions = animating
 
     def _build_archived_list(self):
         olist = self.query_one("#detail-archived", OptionList)
         olist.clear_options()
+        animating = []
         for i, s in enumerate(self._archived_sessions):
             act = session_activity(s, self._last_seen_cache)
+            if act in (ThreadActivity.THINKING, ThreadActivity.AWAITING_INPUT):
+                animating.append((i, act))
             prompt = _render_session_option(s, act, self._throbber_frame)
             olist.add_option(Option(prompt, id=f"a{i}"))
+        self._animating_archived = animating
 
     def on_option_list_option_selected(self, event: OptionList.OptionSelected):
         oid = event.option_id
@@ -739,12 +763,7 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
             if sid not in self.ws.archived_sessions:
                 self.ws.archived_sessions[sid] = datetime.now().isoformat()
                 self.store.update(self.ws)
-        old_idx = idx
         self._refresh()
-        olist = self._focused_olist()
-        items = self._archived_sessions if self._active_pane == "archived" else self._detail_sessions
-        if items and old_idx is not None:
-            olist.highlighted = min(old_idx, len(items) - 1)
 
     def action_spawn(self):
         ok, err = launch_orch_claude(self.ws, store=self.store)
