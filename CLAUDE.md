@@ -31,11 +31,19 @@ Multiple Claude agents frequently work in this repo at the same time. Follow the
 
 ## Project Structure
 
-- `app.py` — Main TUI application (Textual). This is the largest and most actively edited file.
+The TUI is split into focused modules to keep blast radius small:
+
+- `state.py` — **AppState class**: all business logic (filtering, sorting, status cycling, archiving, session matching, commands). Pure Python, no Textual dependency. **Add tests here for any new business logic.**
+- `rendering.py` — Color palette, Rich markup helpers, activity icons, session rendering. No Textual dependency.
+- `actions.py` — External process integration: tmux, Claude session launch/resume, link opening. No Textual dependency.
+- `screens.py` — All modal screen classes (DetailScreen, AddScreen, BrainDumpScreen, etc.).
+- `app.py` — Thin Textual shell: compose, bindings, event handlers. Delegates all logic to `state.py`.
+
+Supporting modules:
+- `models.py` — Workstream data model and persistence (Store).
 - `sessions.py` — Claude session discovery and JSONL parsing.
 - `threads.py` — Thread clustering and activity detection.
-- `models.py` — Workstream data model and persistence.
 - `workstream_synthesizer.py` — AI-driven thread-to-workstream grouping.
 - `thread_namer.py` — AI-driven thread naming.
-- `orch`, `orch-claude`, `orch-header` — Shell scripts for tmux integration.
 - `cli.py` — CLI interface (`orch` command).
+- `orch`, `orch-claude`, `orch-header` — Shell scripts for tmux integration.
