@@ -190,7 +190,6 @@ def resume_session_now(ws: Workstream, session: ClaudeSession, dirs: list[str], 
 
     existing_wid = find_tmux_window_for_session(session.session_id)
     if existing_wid and switch_to_tmux_window(existing_wid):
-        app.notify(f"Reattached: {session.display_name}", timeout=2)
         return
 
     cwd = session.project_path
