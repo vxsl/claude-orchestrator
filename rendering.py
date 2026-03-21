@@ -137,6 +137,14 @@ def _short_project(path: str) -> str:
     return Path(cleaned).name or cleaned
 
 
+def _repo_label(repo_path: str) -> str:
+    """Dim repo basename for display in workstream list. Returns Rich markup or empty."""
+    if not repo_path:
+        return ""
+    name = Path(repo_path).name
+    return f"[{C_DIM}]{name}[/{C_DIM}]"
+
+
 def _short_model(model: str) -> str:
     lower = model.lower()
     if "opus" in lower:

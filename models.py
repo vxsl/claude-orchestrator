@@ -114,6 +114,7 @@ class Workstream:
     thread_ids: list[str] = field(default_factory=list)
     archived_thread_ids: list[str] = field(default_factory=list)  # deprecated, kept for compat
     archived_sessions: dict[str, str] = field(default_factory=dict)  # session_id → archived_at ISO timestamp
+    repo_path: str = ""  # e.g. "/home/kyle/dev/claude-orchestrator"
     created_at: str = field(default_factory=lambda: datetime.now().isoformat())
     updated_at: str = field(default_factory=lambda: datetime.now().isoformat())
     last_user_activity: str = ""  # timestamp of last user message (for stable sorting)
@@ -186,6 +187,7 @@ class Workstream:
                 d["archived_sessions"] = {sid: "" for sid in old}
         d.setdefault("archived_sessions", {})
         d.setdefault("last_user_activity", "")
+        d.setdefault("repo_path", "")
         d.setdefault("todos", [])
         d["todos"] = [TodoItem(**t) if isinstance(t, dict) else t for t in d["todos"]]
         return cls(**d)

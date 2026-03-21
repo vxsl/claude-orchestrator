@@ -125,6 +125,10 @@ def ws_directories(ws: Workstream) -> list[str]:
 
 
 def ws_working_dir(ws: Workstream) -> str:
+    if ws.repo_path:
+        expanded = os.path.expanduser(ws.repo_path)
+        if os.path.isdir(expanded):
+            return expanded
     dirs = ws_directories(ws)
     return dirs[0] if dirs else os.getcwd()
 

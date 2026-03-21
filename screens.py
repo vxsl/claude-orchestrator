@@ -1558,6 +1558,144 @@ class ThreadPickerScreen(_VimOptionListMixin, ModalScreen[ClaudeSession | None])
         self.dismiss(None)
 
 
+# ─── Repo Picker Screen ──────────────────────────────────────────────
+
+class RepoPickerScreen(_VimOptionListMixin, ModalScreen[str | None]):
+    """Pick a repo from known project paths."""
+
+    _option_list_id = "repopick-list"
+    BINDINGS = [
+        Binding("escape,q", "cancel", "Cancel"),
+        Binding("enter", "confirm", "Select"),
+    ] + _VimOptionListMixin.VIM_BINDINGS
+
+    DEFAULT_CSS = f"""
+    RepoPickerScreen {{ align: center middle; }}
+    #repopick-container {{
+        width: 70; height: auto; max-height: 80%;
+        padding: 1 2; background: {BG_BASE}; border: round $primary 30%;
+    }}
+    #repopick-title {{ text-style: bold; color: {C_PURPLE}; padding-bottom: 1; }}
+    #repopick-list {{ height: auto; max-height: 20; }}
+    #repopick-list > .option-list--option-highlighted {{
+        background: $primary 15%;
+    }}
+    #repopick-hint {{ text-align: center; color: {C_DIM}; padding-top: 1; }}
+    """
+
+    def __init__(self, repos: list[str]):
+        super().__init__()
+        self.repos = repos
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="repopick-container"):
+            yield Label("Select repo:", id="repopick-title")
+            options = []
+            for repo in self.repos:
+                name = Path(repo).name
+                short = repo.replace(str(Path.home()), "~")
+                options.append(Option(
+                    f"[bold]{name}[/bold]  [{C_DIM}]{short}[/{C_DIM}]",
+                    id=repo,
+                ))
+            if not options:
+                options.append(Option("(no repos found)", id="none", disabled=True))
+            yield OptionList(*options, id="repopick-list")
+            yield Static(
+                f"[{C_DIM}]Enter[/{C_DIM}] select  [{C_DIM}]Esc[/{C_DIM}] cancel",
+                id="repopick-hint",
+            )
+
+    def action_confirm(self):
+        option_list = self.query_one("#repopick-list", OptionList)
+        idx = option_list.highlighted
+        if idx is not None and idx < len(self.repos):
+            self.dismiss(self.repos[idx])
+            return
+        self.app.notify("No repo selected", severity="error", timeout=2)
+
+    def action_cancel(self):
+        self.dismiss(None)
+
+
+# ─── Workstream Picker Screen (for repo-spawn) ──────────────────────
+
+_SENTINEL_NEW = "__new__"
+
+
+class WorkstreamPickerScreen(_VimOptionListMixin, ModalScreen[Workstream | str | None]):
+    """Pick a workstream for a repo, or create a new one.
+
+    Dismisses with:
+      - Workstream if an existing one was picked
+      - _SENTINEL_NEW string if "Create new" was picked
+      - None if cancelled
+    """
+
+    _option_list_id = "wspick-list"
+    BINDINGS = [
+        Binding("escape,q", "cancel", "Cancel"),
+        Binding("enter", "confirm", "Select"),
+    ] + _VimOptionListMixin.VIM_BINDINGS
+
+    DEFAULT_CSS = f"""
+    WorkstreamPickerScreen {{ align: center middle; }}
+    #wspick-container {{
+        width: 70; height: auto; max-height: 80%;
+        padding: 1 2; background: {BG_BASE}; border: round $primary 30%;
+    }}
+    #wspick-title {{ text-style: bold; color: {C_PURPLE}; padding-bottom: 1; }}
+    #wspick-list {{ height: auto; max-height: 20; }}
+    #wspick-list > .option-list--option-highlighted {{
+        background: $primary 15%;
+    }}
+    #wspick-hint {{ text-align: center; color: {C_DIM}; padding-top: 1; }}
+    """
+
+    def __init__(self, workstreams: list[Workstream], repo_path: str):
+        super().__init__()
+        self.workstreams = workstreams
+        self.repo_path = repo_path
+
+    def compose(self) -> ComposeResult:
+        repo_name = Path(self.repo_path).name
+        with Vertical(id="wspick-container"):
+            yield Label(f"Workstreams in {repo_name}:", id="wspick-title")
+            options = []
+            for ws in self.workstreams:
+                options.append(Option(
+                    f"{STATUS_ICONS[ws.status]} {ws.name}  [{C_DIM}]{ws.category.value}[/{C_DIM}]",
+                    id=ws.id,
+                ))
+            options.append(Option(
+                f"[{C_GREEN}]+ Create new workstream[/{C_GREEN}]",
+                id=_SENTINEL_NEW,
+            ))
+            yield OptionList(*options, id="wspick-list")
+            yield Static(
+                f"[{C_DIM}]Enter[/{C_DIM}] select  [{C_DIM}]Esc[/{C_DIM}] cancel",
+                id="wspick-hint",
+            )
+
+    def action_confirm(self):
+        option_list = self.query_one("#wspick-list", OptionList)
+        idx = option_list.highlighted
+        if idx is not None:
+            opt = option_list.get_option_at_index(idx)
+            opt_id = str(opt.id)
+            if opt_id == _SENTINEL_NEW:
+                self.dismiss(_SENTINEL_NEW)
+                return
+            for ws in self.workstreams:
+                if ws.id == opt_id:
+                    self.dismiss(ws)
+                    return
+        self.app.notify("No selection", severity="error", timeout=2)
+
+    def action_cancel(self):
+        self.dismiss(None)
+
+
 # ─── Confirm Screen ─────────────────────────────────────────────────
 
 class ConfirmScreen(ModalScreen[bool]):

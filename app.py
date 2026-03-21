@@ -49,7 +49,7 @@ from rendering import (
     ViewMode,
     _token_color, _token_color_markup, _colored_tokens,
     _status_markup, _category_markup, _link_icon,
-    _ws_indicators, _short_project, _short_model,
+    _ws_indicators, _short_project, _short_model, _repo_label,
     THROBBER_FRAMES, _ACTIVITY_PRIORITY,
     _activity_icon, _activity_badge, _best_activity,
     _render_session_option, _session_title,
@@ -65,6 +65,7 @@ from screens import (
     HelpScreen, QuickNoteScreen, TodoScreen, LinksScreen,
     AddScreen, DetailScreen, BrainDumpScreen, BrainPreviewScreen,
     AddLinkScreen, LinkSessionScreen, ThreadPickerScreen, ConfirmScreen,
+    RepoPickerScreen, WorkstreamPickerScreen, _SENTINEL_NEW,
 )
 
 
@@ -725,10 +726,13 @@ class OrchestratorApp(App):
                 indicators = _ws_indicators(ws, tmux_check=self.state.ws_has_tmux)
             thread_sessions = self.state.sessions_for_ws(ws)
 
+            repo = _repo_label(ws.repo_path)
             name_str = ws.name
+            if repo:
+                name_str += "  " + repo
             if indicators:
                 name_str += "  " + indicators
-            name_cell = Text(name_str)
+            name_cell = Text.from_markup(name_str)
 
             sess_count = len(thread_sessions) if thread_sessions else 0
             sess_cell = Text(str(sess_count) if sess_count else "", style=C_DIM)
@@ -1174,6 +1178,45 @@ class OrchestratorApp(App):
         ok, err = launch_orch_claude(ws, store=self.state.store)
         if ok:
             self.notify("Session spawned", timeout=2)
+        else:
+            self.notify(f"Spawn failed: {err}", severity="error", timeout=4)
+
+    def action_repo_spawn(self):
+        repos = self.state.known_repos()
+        if not repos:
+            self.notify("No repos found in session history", timeout=2)
+            return
+
+        def on_repo_picked(repo_path: str | None):
+            if not repo_path:
+                return
+            matches = self.state.workstreams_for_repo(repo_path)
+            if len(matches) == 0:
+                ws = self.state.create_ws_for_repo(repo_path)
+                self._spawn_in_ws(ws)
+            elif len(matches) == 1:
+                self._spawn_in_ws(matches[0])
+            else:
+                def on_ws_picked(result):
+                    if result is None:
+                        return
+                    if result == _SENTINEL_NEW:
+                        ws = self.state.create_ws_for_repo(repo_path)
+                        self._spawn_in_ws(ws)
+                    else:
+                        self._spawn_in_ws(result)
+                self.push_screen(
+                    WorkstreamPickerScreen(matches, repo_path),
+                    callback=on_ws_picked,
+                )
+
+        self.push_screen(RepoPickerScreen(repos), callback=on_repo_picked)
+
+    def _spawn_in_ws(self, ws: Workstream):
+        ok, err = launch_orch_claude(ws, store=self.state.store)
+        if ok:
+            self.notify(f"Spawned in {ws.name}", timeout=2)
+            self._refresh_ws_table()
         else:
             self.notify(f"Spawn failed: {err}", severity="error", timeout=4)
 

@@ -684,3 +684,120 @@ class TestExport:
         assert Path(output).exists()
         content = Path(output).read_text()
         assert "Active Workstreams" in content
+
+
+# ─── Repo Linking ──────────────────────────────────────────────────
+
+class TestRepoLinking:
+    def test_known_repos_from_sessions(self, state, tmp_path):
+        """known_repos returns unique sorted paths from sessions."""
+        d1 = tmp_path / "repo-a"
+        d2 = tmp_path / "repo-b"
+        d1.mkdir()
+        d2.mkdir()
+        state.sessions = [
+            _make_session("s1", project_path=str(d1)),
+            _make_session("s2", project_path=str(d2)),
+            _make_session("s3", project_path=str(d1)),  # duplicate
+        ]
+        repos = state.known_repos()
+        assert repos == [str(d1), str(d2)]
+
+    def test_known_repos_includes_ws_repo_path(self, state, tmp_path):
+        """Workstreams with repo_path contribute to known_repos."""
+        d = tmp_path / "ws-repo"
+        d.mkdir()
+        ws = Workstream(name="test", repo_path=str(d))
+        state.store.add(ws)
+        repos = state.known_repos()
+        assert str(d) in repos
+
+    def test_known_repos_excludes_nonexistent(self, state):
+        """Paths that don't exist on disk are filtered out."""
+        state.sessions = [
+            _make_session("s1", project_path="/nonexistent/path/1234"),
+        ]
+        repos = state.known_repos()
+        assert repos == []
+
+    def test_workstreams_for_repo_by_repo_path(self, state, tmp_path):
+        """Match workstreams by repo_path field."""
+        d = tmp_path / "myrepo"
+        d.mkdir()
+        ws = Workstream(name="matched", repo_path=str(d))
+        state.store.add(ws)
+        results = state.workstreams_for_repo(str(d))
+        assert len(results) == 1
+        assert results[0].name == "matched"
+
+    def test_workstreams_for_repo_by_link(self, state, tmp_path):
+        """Backward compat: match by worktree link even without repo_path."""
+        d = tmp_path / "linkrepo"
+        d.mkdir()
+        ws = Workstream(name="linked")
+        ws.add_link(kind="worktree", value=str(d), label="repo")
+        state.store.add(ws)
+        results = state.workstreams_for_repo(str(d))
+        assert len(results) == 1
+        assert results[0].name == "linked"
+
+    def test_workstreams_for_repo_no_match(self, state, tmp_path):
+        """No match returns empty list."""
+        d = tmp_path / "nope"
+        d.mkdir()
+        ws = Workstream(name="unrelated", repo_path="/other/path")
+        state.store.add(ws)
+        results = state.workstreams_for_repo(str(d))
+        assert results == []
+
+    def test_workstreams_for_repo_excludes_archived(self, state, tmp_path):
+        """Archived workstreams are excluded."""
+        d = tmp_path / "archrepo"
+        d.mkdir()
+        ws = Workstream(name="archived-ws", repo_path=str(d), archived=True)
+        state.store.add(ws)
+        results = state.workstreams_for_repo(str(d))
+        assert results == []
+
+    def test_create_ws_for_repo(self, state, tmp_path):
+        """Auto-create workstream from repo path."""
+        d = tmp_path / "new-project"
+        d.mkdir()
+        ws = state.create_ws_for_repo(str(d))
+        assert ws.name == "new-project"
+        assert ws.repo_path == str(d)
+        assert ws.status == Status.IN_PROGRESS
+        assert any(l.kind == "worktree" and l.value == str(d) for l in ws.links)
+        # Should be persisted
+        assert state.store.get(ws.id) is not None
+
+    def test_find_ws_for_session_uses_repo_path(self, state, tmp_path):
+        """Reverse lookup finds workstream by repo_path."""
+        d = tmp_path / "finder"
+        d.mkdir()
+        ws = Workstream(name="findme", repo_path=str(d))
+        state.store.add(ws)
+        session = _make_session("s1", project_path=str(d))
+        result = state.find_ws_for_session(session)
+        assert result is not None
+        assert result.name == "findme"
+
+    def test_ws_has_tmux_uses_repo_path(self, state, tmp_path):
+        """Tmux check uses repo_path."""
+        d = tmp_path / "tmuxrepo"
+        d.mkdir()
+        ws = Workstream(name="tmux-ws", repo_path=str(d))
+        state.tmux_paths = {str(d)}
+        assert state.ws_has_tmux(ws) is True
+
+    def test_ws_dirs_combines_repo_path_and_links(self, state, tmp_path):
+        """_ws_dirs returns both repo_path and link directories."""
+        d1 = tmp_path / "repo"
+        d2 = tmp_path / "worktree"
+        d1.mkdir()
+        d2.mkdir()
+        ws = Workstream(name="combo", repo_path=str(d1))
+        ws.add_link(kind="worktree", value=str(d2), label="wt")
+        dirs = state._ws_dirs(ws)
+        assert str(d1) in dirs
+        assert str(d2) in dirs

@@ -150,6 +150,30 @@ class TestWorkstreamSerialization:
         assert ws.status_changed_at == "2026-01-01T00:00:00"
         assert ws.archived is False
 
+    def test_from_dict_migration_no_repo_path(self):
+        """Old data without repo_path should still load with empty default."""
+        d = {
+            "id": "test5678",
+            "name": "Legacy ws",
+            "description": "",
+            "status": "queued",
+            "category": "personal",
+            "links": [],
+            "notes": "",
+            "created_at": "2026-01-01T00:00:00",
+            "updated_at": "2026-01-01T00:00:00",
+        }
+        ws = Workstream.from_dict(d)
+        assert ws.repo_path == ""
+
+    def test_repo_path_roundtrip(self):
+        """repo_path survives to_dict/from_dict."""
+        ws = Workstream(name="test", repo_path="/home/user/dev/myrepo")
+        d = ws.to_dict()
+        assert d["repo_path"] == "/home/user/dev/myrepo"
+        restored = Workstream.from_dict(d)
+        assert restored.repo_path == "/home/user/dev/myrepo"
+
 
 # ─── Store ──────────────────────────────────────────────────────────
 

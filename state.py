@@ -138,6 +138,63 @@ class AppState:
     def get_archived(self, ws_id: str) -> Workstream | None:
         return next((w for w in self.store.workstreams if w.id == ws_id), None)
 
+    # ── Repo linking ──
+
+    def _ws_dirs(self, ws: Workstream) -> set[str]:
+        """Collect all directory paths for a workstream (repo_path + links)."""
+        dirs = set()
+        if ws.repo_path:
+            expanded = os.path.expanduser(ws.repo_path).rstrip("/")
+            if os.path.isdir(expanded):
+                dirs.add(expanded)
+        for link in ws.links:
+            if link.kind in ("worktree", "file"):
+                expanded = os.path.expanduser(link.value).rstrip("/")
+                if os.path.isdir(expanded):
+                    dirs.add(expanded)
+        return dirs
+
+    def known_repos(self) -> list[str]:
+        """Unique repo paths from session history + workstream repo_path values."""
+        repos = set()
+        for s in self.sessions:
+            if s.project_path:
+                repos.add(s.project_path.rstrip("/"))
+        for ws in self.store.active:
+            if ws.repo_path:
+                repos.add(os.path.expanduser(ws.repo_path).rstrip("/"))
+        return sorted(p for p in repos if os.path.isdir(p))
+
+    def workstreams_for_repo(self, repo_path: str) -> list[Workstream]:
+        """Find non-archived workstreams linked to a repo path."""
+        normalized = os.path.expanduser(repo_path).rstrip("/")
+        results = []
+        for ws in self.store.active:
+            if ws.repo_path and os.path.expanduser(ws.repo_path).rstrip("/") == normalized:
+                results.append(ws)
+                continue
+            for link in ws.links:
+                if link.kind in ("worktree", "file"):
+                    expanded = os.path.expanduser(link.value).rstrip("/")
+                    if expanded == normalized:
+                        results.append(ws)
+                        break
+        return results
+
+    def create_ws_for_repo(self, repo_path: str) -> Workstream:
+        """Auto-create a workstream for a repo. Returns the new workstream."""
+        from pathlib import Path
+        name = Path(repo_path).name
+        ws = Workstream(
+            name=name,
+            repo_path=repo_path,
+            status=Status.IN_PROGRESS,
+            category=Category.PERSONAL,
+        )
+        ws.add_link(kind="worktree", value=repo_path, label="repo")
+        self.store.add(ws)
+        return ws
+
     # ── Session matching ──
 
     def sessions_for_ws(self, ws: Workstream, include_archived_threads: bool = False) -> list[ClaudeSession]:
@@ -148,12 +205,7 @@ class AppState:
 
         effective_tids = ws.thread_ids
         if not effective_tids and self.threads:
-            ws_dirs = set()
-            for link in ws.links:
-                if link.kind in ("worktree", "file"):
-                    expanded = os.path.expanduser(link.value).rstrip("/")
-                    if os.path.isdir(expanded):
-                        ws_dirs.add(expanded)
+            ws_dirs = self._ws_dirs(ws)
             explicit_sids = {link.value for link in ws.links if link.kind == "claude-session"}
             matched = set()
             for t in self.threads:
@@ -186,6 +238,7 @@ class AppState:
 
     def find_ws_for_session(self, session: ClaudeSession) -> Workstream | None:
         """Reverse-lookup: find a workstream that owns this session."""
+        sp = session.project_path.rstrip("/")
         for ws in self.store.active:
             for link in ws.links:
                 if link.kind == "claude-session" and (
@@ -193,10 +246,12 @@ class AppState:
                     session.session_id.startswith(link.value)
                 ):
                     return ws
+            if ws.repo_path and os.path.expanduser(ws.repo_path).rstrip("/") == sp:
+                return ws
             for link in ws.links:
                 if link.kind in ("worktree", "file"):
                     expanded = os.path.expanduser(link.value).rstrip("/")
-                    if os.path.isdir(expanded) and session.project_path.rstrip("/") == expanded:
+                    if os.path.isdir(expanded) and sp == expanded:
                         return ws
         return None
 
@@ -410,6 +465,11 @@ class AppState:
         return False
 
     def ws_has_tmux(self, ws: Workstream) -> bool:
+        if ws.repo_path:
+            rp = os.path.expanduser(ws.repo_path).rstrip("/")
+            for tmux_path in self.tmux_paths:
+                if tmux_path == rp or tmux_path.startswith(rp + "/"):
+                    return True
         for link in ws.links:
             if link.kind == "worktree":
                 expanded = os.path.expanduser(link.value).rstrip("/")

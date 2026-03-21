@@ -29,6 +29,7 @@ DEFAULT_KEYS: dict[str, tuple[str, str, bool, bool]] = {
     "cycle_status": ("s", "Status", True, False),
     "cycle_status_back": ("S", "Status←", False, False),
     "spawn": ("c", "Spawn", True, False),
+    "repo_spawn": ("C", "Repo", True, False),
     "resume": ("r", "Resume", True, False),
     "link_action": ("l", "Link", True, False),
     "quick_note": ("n", "", False, False),
