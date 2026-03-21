@@ -252,6 +252,15 @@ def _render_session_option(
         f"      [{C_DIM}]{model} · {s.message_count} msgs · "
         f"[/{C_DIM}]{tokens}[{C_DIM}] tok · {s.age}[/{C_DIM}]"
     )
+    # Third line: last message snippet
+    if s.last_message_text:
+        max_snippet = title_width + 10
+        snippet = s.last_message_text[:max_snippet]
+        if len(s.last_message_text) > max_snippet:
+            snippet += "…"
+        role_tag = "you" if s.last_message_role == "user" else "claude"
+        line3 = f"      [{C_DIM}]{role_tag}: {snippet}[/{C_DIM}]"
+        return f"{line1}\n{line2}\n{line3}"
     return f"{line1}\n{line2}"
 
 

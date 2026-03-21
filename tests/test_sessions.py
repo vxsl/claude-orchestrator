@@ -170,6 +170,107 @@ class TestParseSession:
         assert session.last_activity == "2026-03-20T10:03:00Z"
 
 
+# ─── Last Message Text ─────────────────────────────────────────────
+
+class TestExtractMessageText:
+    def test_user_string_content(self):
+        from sessions import _extract_message_text
+        data = {"type": "user", "message": {"content": "Hello world"}}
+        assert _extract_message_text(data) == "Hello world"
+
+    def test_user_list_content(self):
+        from sessions import _extract_message_text
+        data = {"type": "user", "message": {"content": [
+            {"type": "text", "text": "Fix the bug in main.py"}
+        ]}}
+        assert _extract_message_text(data) == "Fix the bug in main.py"
+
+    def test_assistant_list_content(self):
+        from sessions import _extract_message_text
+        data = {"type": "assistant", "message": {"content": [
+            {"type": "text", "text": "I'll fix that for you."},
+            {"type": "tool_use", "name": "edit"}
+        ]}}
+        assert _extract_message_text(data) == "I'll fix that for you."
+
+    def test_multiline_collapsed(self):
+        from sessions import _extract_message_text
+        data = {"type": "user", "message": {"content": "line1\n  line2\nline3"}}
+        assert _extract_message_text(data) == "line1 line2 line3"
+
+    def test_no_message_returns_empty(self):
+        from sessions import _extract_message_text
+        assert _extract_message_text({"type": "user"}) == ""
+
+    def test_skips_interrupted_messages(self):
+        from sessions import _extract_message_text
+        data = {"type": "user", "message": {"content": [
+            {"type": "text", "text": "[Request interrupted by user]"}
+        ]}}
+        assert _extract_message_text(data) == ""
+
+    def test_truncates_long_content(self):
+        from sessions import _extract_message_text
+        data = {"type": "user", "message": {"content": "x" * 300}}
+        assert len(_extract_message_text(data)) == 200
+
+
+class TestParseSessionLastMessage:
+    def test_tracks_last_message_text(self, tmp_path):
+        f = tmp_path / "projects" / "test" / "session.jsonl"
+        f.parent.mkdir(parents=True)
+        lines = [
+            json.dumps({"type": "user", "message": {"content": "first question"},
+                        "timestamp": "2026-03-20T10:00:00Z"}),
+            json.dumps({"type": "assistant", "message": {"model": "claude-opus-4-6",
+                        "content": [{"type": "text", "text": "here is my answer"}],
+                        "usage": {"input_tokens": 100, "output_tokens": 50}},
+                        "timestamp": "2026-03-20T10:01:00Z"}),
+            json.dumps({"type": "user", "message": {"content": "follow up"},
+                        "timestamp": "2026-03-20T10:02:00Z"}),
+        ]
+        f.write_text("\n".join(lines) + "\n")
+        session = parse_session(f)
+        assert session.last_message_text == "follow up"
+        assert session.last_message_role == "user"
+
+    def test_assistant_last_message(self, tmp_path):
+        f = tmp_path / "projects" / "test" / "session.jsonl"
+        f.parent.mkdir(parents=True)
+        lines = [
+            json.dumps({"type": "user", "message": {"content": "hello"},
+                        "timestamp": "2026-03-20T10:00:00Z"}),
+            json.dumps({"type": "assistant", "message": {"model": "claude-opus-4-6",
+                        "content": [{"type": "text", "text": "Done! I've fixed the issue."}],
+                        "usage": {"input_tokens": 100, "output_tokens": 50}},
+                        "timestamp": "2026-03-20T10:01:00Z"}),
+        ]
+        f.write_text("\n".join(lines) + "\n")
+        session = parse_session(f)
+        assert session.last_message_text == "Done! I've fixed the issue."
+        assert session.last_message_role == "assistant"
+
+
+class TestRefreshSessionTailLastMessage:
+    def _write_jsonl(self, path, lines):
+        path.write_text("\n".join(json.dumps(l) for l in lines) + "\n")
+
+    def test_updates_last_message_text(self, tmp_path):
+        f = tmp_path / "s.jsonl"
+        self._write_jsonl(f, [
+            {"type": "user", "message": {"content": "do the thing"},
+             "timestamp": "2026-03-20T10:00:00Z"},
+            {"type": "assistant", "message": {"content": [{"type": "text", "text": "Done."}],
+             "usage": {}}, "timestamp": "2026-03-20T10:01:00Z"},
+        ])
+        s = ClaudeSession(session_id="s", project_dir="d", project_path="/p",
+                          jsonl_path=str(f), last_message_role="",
+                          last_activity="")
+        refresh_session_tail(s)
+        assert s.last_message_text == "Done."
+        assert s.last_message_role == "assistant"
+
+
 # ─── Tail Refresh ──────────────────────────────────────────────────
 
 class TestRefreshSessionTail:

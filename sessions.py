@@ -14,6 +14,29 @@ CLAUDE_PROJECTS_DIR = Path.home() / ".claude" / "projects"
 CLAUDE_SESSIONS_DIR = Path.home() / ".claude" / "sessions"
 
 
+def _extract_message_text(data: dict) -> str:
+    """Extract a short text snippet from a user or assistant JSONL entry."""
+    msg = data.get("message", {})
+    if not msg:
+        return ""
+    content = msg.get("content", "")
+    if isinstance(content, str):
+        text = content
+    elif isinstance(content, list):
+        # Grab first text block
+        text = ""
+        for block in content:
+            if isinstance(block, dict) and block.get("type") == "text":
+                t = block.get("text", "")
+                if t and "[Request interrupted" not in t:
+                    text = t
+                    break
+    else:
+        return ""
+    # Collapse to single line, truncate
+    return " ".join(text.split())[:200]
+
+
 @dataclass
 class ClaudeSession:
     """A discovered Claude Code session."""
@@ -34,6 +57,7 @@ class ClaudeSession:
     last_stop_reason: str = ""   # "end_turn", "tool_use", etc. — from last assistant message
     turn_complete: bool = False  # True when system:turn_duration logged after last user/assistant
     all_session_ids: list[str] = field(default_factory=list)  # All sessionIds found in JSONL (for resume matching)
+    last_message_text: str = ""  # Snippet of last user or assistant message
 
     @property
     def cost_display(self) -> str:
@@ -214,6 +238,9 @@ def parse_session(jsonl_path: Path) -> Optional[ClaudeSession]:
                     session.turn_complete = False  # new message resets turn completion
                     if msg_type == "user" and ts:
                         session.last_user_message_at = ts
+                    snippet = _extract_message_text(data)
+                    if snippet:
+                        session.last_message_text = snippet
 
                 # Turn completion: turn_duration is the primary signal,
                 # but idle-only entries (last-prompt, custom-title,
@@ -290,6 +317,9 @@ def refresh_session_tail(session: ClaudeSession, tail_bytes: int = 8192) -> bool
                 session.turn_complete = False
                 if msg_type == "user" and ts:
                     session.last_user_message_at = ts
+                snippet = _extract_message_text(data)
+                if snippet:
+                    session.last_message_text = snippet
             if msg_type == "assistant" and "message" in data:
                 session.last_stop_reason = data["message"].get("stop_reason") or ""
             if (msg_type == "system" and data.get("subtype") in (
