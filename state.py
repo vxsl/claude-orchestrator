@@ -217,12 +217,14 @@ def search_session_content(
     session: ClaudeSession,
     max_hits: int = 5,
 ) -> SessionSearchResult | None:
-    """Search through a session's messages for query terms.
+    """Search through a session's messages and metadata for query terms.
 
-    All query words must appear in a single message (AND semantics).
-    Quoted phrases are matched literally.  Returns None if no match.
+    All query words must appear in a single message (AND semantics)
+    for message hits.  Title/metadata matching is scored separately
+    so sessions whose name matches always surface.
+    Returns None if no match at all.
     """
-    if not query.strip() or not messages:
+    if not query.strip():
         return None
 
     phrases, words = _parse_query(query)
@@ -231,8 +233,34 @@ def search_session_content(
         return None
 
     hits: list[SearchHit] = []
-    n_messages = len(messages)
+    title_score = 0.0
 
+    # --- Title / metadata matching ---
+    title_text = " ".join(filter(None, [
+        session.display_name, session.last_message_text,
+    ]))
+    if title_text:
+        title_lower = title_text.lower()
+        matched_terms = [t for t in all_terms if t in title_lower]
+        if matched_terms:
+            # Strong bonus: title is the most visible field
+            title_score = 50.0 * len(matched_terms) / len(all_terms)
+            # Extra bonus when ALL terms match in the title
+            if len(matched_terms) == len(all_terms):
+                title_score += 30.0
+            # Create a synthetic hit from the title so there's a snippet
+            snippet, match_ranges = extract_snippet(title_text, all_terms)
+            hits.append(SearchHit(
+                message_idx=-1,
+                role="title",
+                timestamp="",
+                snippet=snippet,
+                match_ranges=match_ranges,
+                score=title_score,
+            ))
+
+    # --- Message content matching ---
+    n_messages = len(messages)
     for i, msg in enumerate(messages):
         msg_lower = msg.text.lower()
 
