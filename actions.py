@@ -198,11 +198,8 @@ def launch_orch_claude(
         log.debug("launch_orch_claude: created window %s", window_id)
 
         # Link the window into the orch session so the user sees it
-        link_cmd = ["tmux", "link-window", "-s", window_id, "-t", f"{orch_session}:"]
-        if not switch_to:
-            link_cmd.insert(2, "-d")
         link_result = subprocess.run(
-            link_cmd,
+            ["tmux", "link-window", "-s", window_id, "-t", f"{orch_session}:"],
             capture_output=True, text=True, timeout=5,
         )
         log.debug("launch_orch_claude: link-window rc=%d stderr=%s",
@@ -213,6 +210,12 @@ def launch_orch_claude(
                 capture_output=True, text=True, timeout=5,
             )
             log.debug("launch_orch_claude: select-window rc=%d", sel_result.returncode)
+        else:
+            # link-window auto-selects the new window; switch back to orch
+            subprocess.run(
+                ["tmux", "select-window", "-t", f"{orch_session}:orch"],
+                capture_output=True, text=True, timeout=5,
+            )
 
         return True, ""
     except Exception as e:
