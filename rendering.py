@@ -252,14 +252,30 @@ def _render_session_option(
         f"      [{C_DIM}]{model} · {s.message_count} msgs · "
         f"[/{C_DIM}]{tokens}[{C_DIM}] tok · {s.age}[/{C_DIM}]"
     )
-    # Third line: last message snippet
+    # Third line: last message snippet — styled by activity state
     if s.last_message_text:
         max_snippet = title_width + 10
         snippet = s.last_message_text[:max_snippet]
         if len(s.last_message_text) > max_snippet:
             snippet += "…"
-        role_tag = "you" if s.last_message_role == "user" else "claude"
-        line3 = f"      [{C_DIM}]{role_tag}: {snippet}[/{C_DIM}]"
+        is_user = s.last_message_role == "user"
+        role_tag = "you" if is_user else "claude"
+        # Color the snippet to reflect what matters:
+        # - thinking: cyan (active) — show what claude is working on
+        # - awaiting input / fresh response: green — claude answered, your turn
+        # - response ready (stale unread): orange — been waiting for you
+        # - idle: dim — just context
+        if act == ThreadActivity.THINKING:
+            snip_color = C_CYAN
+        elif act in (ThreadActivity.AWAITING_INPUT, ThreadActivity.RESPONSE_FRESH):
+            snip_color = C_GREEN
+        elif act == ThreadActivity.RESPONSE_READY:
+            snip_color = C_ORANGE
+        else:
+            snip_color = C_DIM
+        role_style = f"[{C_DIM}]" if is_user else f"[italic {snip_color}]"
+        role_end = f"[/{C_DIM}]" if is_user else f"[/italic {snip_color}]"
+        line3 = f"      [{C_DIM}]{role_tag}:[/{C_DIM}] {role_style}{snippet}{role_end}"
         return f"{line1}\n{line2}\n{line3}"
     return f"{line1}\n{line2}"
 
