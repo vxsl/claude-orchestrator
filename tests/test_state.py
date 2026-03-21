@@ -836,3 +836,16 @@ class TestRepoLinking:
         count = state.infer_repo_paths()
         assert count == 0
         assert state.store.get(ws.id).repo_path == "/other/path"
+
+    def test_infer_repo_paths_from_sessions(self, state, tmp_path):
+        """Infer repo_path from matched sessions when no git links exist."""
+        d = tmp_path / "session-repo"
+        d.mkdir()
+        ws = Workstream(name="from-sessions")
+        ws.add_link(kind="file", value=str(d), label="dir")  # non-git link
+        state.store.add(ws)
+        # Add a session that matches this directory
+        state.sessions = [_make_session("s1", project_path=str(d))]
+        count = state.infer_repo_paths()
+        assert count == 1
+        assert state.store.get(ws.id).repo_path == str(d)

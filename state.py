@@ -142,15 +142,16 @@ class AppState:
     # ── Repo linking ──
 
     def infer_repo_paths(self) -> int:
-        """Backfill repo_path on workstreams that have directory links but no repo_path.
+        """Backfill repo_path on workstreams from links or matched sessions.
 
         Returns count of workstreams updated.
         """
         count = 0
-        for ws in self.store.workstreams:
+        all_ws = list(self.store.workstreams) + list(self.discovered_ws)
+        for ws in all_ws:
             if ws.repo_path:
                 continue
-            # Prefer worktree links, then file links pointing at git repos
+            # 1. Prefer worktree links, then file links pointing at git repos
             for kind in ("worktree", "file"):
                 for link in ws.links:
                     if link.kind != kind:
@@ -162,6 +163,21 @@ class AppState:
                         break
                 if ws.repo_path:
                     break
+            if ws.repo_path:
+                continue
+            # 2. Infer from matched sessions' project_path
+            sessions = self.sessions_for_ws(ws)
+            if sessions:
+                # Use the most common project_path
+                paths: dict[str, int] = {}
+                for s in sessions:
+                    p = s.project_path.rstrip("/")
+                    if p and os.path.isdir(p):
+                        paths[p] = paths.get(p, 0) + 1
+                if paths:
+                    best = max(paths, key=paths.get)
+                    ws.repo_path = best
+                    count += 1
         if count:
             self.store.save()
         return count
@@ -454,6 +470,7 @@ class AppState:
         self.sessions = sessions
         self.threads = threads
         self.discovered_ws = discovered
+        self.infer_repo_paths()
 
     def refresh_liveness(self) -> bool:
         """Update is_live flags and tail-read active sessions. Returns True if anything changed."""

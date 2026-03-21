@@ -49,7 +49,7 @@ from rendering import (
     ViewMode,
     _token_color, _token_color_markup, _colored_tokens,
     _status_markup, _category_markup, _link_icon,
-    _ws_indicators, _short_project, _short_model, _repo_label,
+    _ws_indicators, _short_project, _short_model,
     THROBBER_FRAMES, _ACTIVITY_PRIORITY,
     _activity_icon, _activity_badge, _best_activity,
     _render_session_option, _session_title,
@@ -132,9 +132,9 @@ class OrchestratorApp(App):
         height: 1; padding: 0 1; background: {BG_BASE}; color: {C_DIM}; dock: bottom;
     }}
     #main-content {{ height: 1fr; }}
-    DataTable {{ width: 1fr; }}
+    DataTable {{ width: 3fr; }}
     #preview-pane {{
-        width: 1fr; min-width: 40; border-left: blank;
+        width: 2fr; min-width: 36; border-left: blank;
         padding: 1 2; background: {BG_BASE};
     }}
     #preview-content {{ width: 100%; }}
@@ -276,7 +276,7 @@ class OrchestratorApp(App):
         ws_table = self.query_one("#ws-table", DataTable)
         ws_table.cursor_type = "row"
         ws_table.zebra_stripes = False
-        ws_table.add_columns("", "Name", "Sess", "Category", "Updated")
+        ws_table.add_columns("", "Name", "Repo", "Sess", "Category", "Updated")
 
         sessions_table = self.query_one("#sessions-table", DataTable)
         sessions_table.cursor_type = "row"
@@ -287,7 +287,7 @@ class OrchestratorApp(App):
         archived_table = self.query_one("#archived-table", DataTable)
         archived_table.cursor_type = "row"
         archived_table.zebra_stripes = False
-        archived_table.add_columns("", "Name", "Sess", "Category", "Updated")
+        archived_table.add_columns("", "Name", "Repo", "Sess", "Category", "Updated")
         archived_table.display = False
 
         self._refresh_ws_table()
@@ -726,13 +726,13 @@ class OrchestratorApp(App):
                 indicators = _ws_indicators(ws, tmux_check=self.state.ws_has_tmux)
             thread_sessions = self.state.sessions_for_ws(ws)
 
-            repo = _repo_label(ws.repo_path)
             name_str = ws.name
-            if repo:
-                name_str += "  " + repo
             if indicators:
                 name_str += "  " + indicators
             name_cell = Text.from_markup(name_str)
+
+            repo_name = Path(ws.repo_path).name if ws.repo_path else ""
+            repo_cell = Text(repo_name, style=C_DIM)
 
             sess_count = len(thread_sessions) if thread_sessions else 0
             sess_cell = Text(str(sess_count) if sess_count else "", style=C_DIM)
@@ -740,7 +740,7 @@ class OrchestratorApp(App):
             cat_cell = Text(ws.category.value, style=CATEGORY_THEME[ws.category])
             updated_cell = Text(_relative_time(ws.updated_at), style=C_DIM)
 
-            table.add_row(status_cell, name_cell, sess_cell, cat_cell, updated_cell, key=ws.id)
+            table.add_row(status_cell, name_cell, repo_cell, sess_cell, cat_cell, updated_cell, key=ws.id)
 
         self._restore_cursor(table, old_key)
         self._update_all_bars()
@@ -880,10 +880,12 @@ class OrchestratorApp(App):
         for ws in self.state.store.archived:
             status_cell = Text(STATUS_ICONS[ws.status], style=STATUS_THEME[ws.status])
             name_cell = Text(ws.name)
+            repo_name = Path(ws.repo_path).name if ws.repo_path else ""
+            repo_cell = Text(repo_name, style=C_DIM)
             sess_cell = Text("", style=C_DIM)
             cat_cell = Text(ws.category.value, style=CATEGORY_THEME[ws.category])
             updated_cell = Text(_relative_time(ws.updated_at), style=C_DIM)
-            table.add_row(status_cell, name_cell, sess_cell, cat_cell, updated_cell, key=ws.id)
+            table.add_row(status_cell, name_cell, repo_cell, sess_cell, cat_cell, updated_cell, key=ws.id)
 
         self._restore_cursor(table, old_key)
 
