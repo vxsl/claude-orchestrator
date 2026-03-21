@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 from datetime import datetime
+from pathlib import Path
 
 from models import (
     Category, Link, Origin, Status, Store, TodoItem, Workstream,
@@ -165,14 +166,15 @@ class AppState:
                     break
             if ws.repo_path:
                 continue
-            # 2. Infer from matched sessions' project_path
+            # 2. Infer from matched sessions' project_path (must be a git repo, not home dir)
+            home = str(Path.home())
             sessions = self.sessions_for_ws(ws)
             if sessions:
-                # Use the most common project_path
                 paths: dict[str, int] = {}
                 for s in sessions:
                     p = s.project_path.rstrip("/")
-                    if p and os.path.isdir(p):
+                    if (p and p != home and os.path.isdir(p)
+                            and os.path.isdir(os.path.join(p, ".git"))):
                         paths[p] = paths.get(p, 0) + 1
                 if paths:
                     best = max(paths, key=paths.get)
@@ -225,7 +227,6 @@ class AppState:
 
     def create_ws_for_repo(self, repo_path: str) -> Workstream:
         """Auto-create a workstream for a repo. Returns the new workstream."""
-        from pathlib import Path
         name = Path(repo_path).name
         ws = Workstream(
             name=name,

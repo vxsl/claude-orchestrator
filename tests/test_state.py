@@ -6,6 +6,7 @@ This is where the high-value regression protection lives.
 
 import pytest
 from datetime import datetime, timedelta
+from pathlib import Path
 
 from models import Category, Link, Status, Store, TodoItem, Workstream, Origin
 from sessions import ClaudeSession
@@ -841,11 +842,23 @@ class TestRepoLinking:
         """Infer repo_path from matched sessions when no git links exist."""
         d = tmp_path / "session-repo"
         d.mkdir()
+        (d / ".git").mkdir()  # must be a git repo
         ws = Workstream(name="from-sessions")
-        ws.add_link(kind="file", value=str(d), label="dir")  # non-git link
+        ws.add_link(kind="file", value=str(d), label="dir")  # non-git file link (no .git check on file links)
         state.store.add(ws)
         # Add a session that matches this directory
         state.sessions = [_make_session("s1", project_path=str(d))]
         count = state.infer_repo_paths()
         assert count == 1
         assert state.store.get(ws.id).repo_path == str(d)
+
+    def test_infer_repo_paths_skips_home_dir(self, state, tmp_path):
+        """Home directory should not be used as repo_path."""
+        import os
+        home = str(Path.home())
+        ws = Workstream(name="home-session")
+        state.store.add(ws)
+        state.sessions = [_make_session("s1", project_path=home)]
+        count = state.infer_repo_paths()
+        assert count == 0
+        assert state.store.get(ws.id).repo_path == ""
