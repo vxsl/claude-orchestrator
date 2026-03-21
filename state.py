@@ -112,6 +112,7 @@ class AppState:
             sessions = self.sessions_for_ws(ws)
             best = _best_activity(sessions, last_seen)
             return best in (
+                ThreadActivity.THINKING,
                 ThreadActivity.RESPONSE_FRESH,
                 ThreadActivity.RESPONSE_READY,
                 ThreadActivity.AWAITING_INPUT,

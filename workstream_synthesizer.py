@@ -309,8 +309,8 @@ def get_discovered_workstreams(threads: list[Thread]) -> list[Workstream]:
                 origin=Origin.DISCOVERED,
                 thread_ids=list(thread_ids),
                 created_at=ws_dict.get("created_at", ""),
-                updated_at=last_activity or ws_dict.get("updated_at", ""),
-                last_user_activity=last_user_act or last_activity or ws_dict.get("updated_at", ""),
+                updated_at=last_user_act or ws_dict.get("updated_at", ""),
+                last_user_activity=last_user_act or ws_dict.get("created_at", ""),
             )
             # Inject live status as a dynamic attribute
             ws._is_live = is_live

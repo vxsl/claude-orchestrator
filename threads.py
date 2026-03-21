@@ -189,7 +189,7 @@ class Thread:
         if not self.sessions:
             return ""
         vals = [s.last_user_message_at for s in self.sessions if s.last_user_message_at]
-        return max(vals) if vals else self.last_activity
+        return max(vals) if vals else self.started_at
 
     @property
     def started_at(self) -> str:
