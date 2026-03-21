@@ -584,12 +584,13 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         Binding("c", "spawn", "Spawn"),
         Binding("r", "resume", "Resume"),
         Binding("n", "quick_note", "Note"),
-        Binding("l", "add_link", "Link+"),
+        Binding("L", "add_link", "Link+"),
         Binding("e", "edit_notes", "Edit notes"),
         Binding("o", "open_links", "Open links"),
         Binding("x", "archive", "Archive"),
-        Binding("a", "archive_thread", "Archive thread"),
-        Binding("A", "toggle_archived_threads", "Show archived"),
+        Binding("a", "archive_thread", "Archive/restore"),
+        Binding("h", "focus_sessions", show=False),
+        Binding("l", "focus_archived", show=False),
     ] + _VimOptionListMixin.VIM_BINDINGS
 
     DEFAULT_CSS = f"""
@@ -609,24 +610,34 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
     #detail-meta {{ color: {C_DIM}; }}
     #detail-desc {{ padding-top: 1; }}
 
-    /* Session list */
-    #detail-sessions-label {{
+    /* Session lists side-by-side */
+    #detail-lists {{
+        height: auto; max-height: 50%;
+    }}
+    .detail-list-pane {{
+        width: 1fr;
+    }}
+    .detail-list-label {{
         padding: 0 3;
         color: {C_BLUE};
         text-style: bold;
     }}
-    #detail-sessions {{
-        height: auto; max-height: 50%;
+    #detail-sessions, #detail-archived {{
+        height: auto;
         margin: 0 1; padding: 0;
         border: none;
         background: {BG_BASE};
     }}
-    #detail-sessions > .option-list--option-highlighted {{
+    #detail-sessions > .option-list--option-highlighted,
+    #detail-archived > .option-list--option-highlighted {{
         background: #252525;
     }}
-    #detail-no-sessions {{
+    #detail-no-sessions, #detail-no-archived {{
         padding: 1 3;
         color: {C_DIM};
+    }}
+    #detail-archived-pane {{
+        display: none;
     }}
 
     /* Body */
@@ -655,9 +666,10 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         self.ws = ws
         self.store = store
         self._detail_sessions: list[ClaudeSession] = []
+        self._archived_sessions: list[ClaudeSession] = []
         self._throbber_frame: int = 0
         self._last_seen_cache: dict[str, str] = {}
-        self._show_archived_threads: bool = False
+        self._active_pane: str = "sessions"  # "sessions" or "archived"
 
     def compose(self) -> ComposeResult:
         with Vertical(id="detail-container"):
@@ -668,10 +680,16 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
                 if self.ws.description:
                     yield Static(self.ws.description, id="detail-desc")
 
-            # Session list
-            yield Static(f"[bold {C_BLUE}]Sessions[/bold {C_BLUE}]", id="detail-sessions-label")
-            yield OptionList(id="detail-sessions")
-            yield Static(f"[{C_DIM}]No sessions discovered[/{C_DIM}]", id="detail-no-sessions")
+            # Session lists side-by-side
+            with Horizontal(id="detail-lists"):
+                with Vertical(id="detail-sessions-pane", classes="detail-list-pane"):
+                    yield Static(f"[bold {C_BLUE}]Sessions[/bold {C_BLUE}]", id="detail-sessions-label", classes="detail-list-label")
+                    yield OptionList(id="detail-sessions")
+                    yield Static(f"[{C_DIM}]No sessions[/{C_DIM}]", id="detail-no-sessions")
+                with Vertical(id="detail-archived-pane", classes="detail-list-pane"):
+                    yield Static(f"[{C_DIM}]Archived[/{C_DIM}]", id="detail-archived-label", classes="detail-list-label")
+                    yield OptionList(id="detail-archived")
+                    yield Static(f"[{C_DIM}]Empty[/{C_DIM}]", id="detail-no-archived")
 
             # Scrollable body (context, notes, timeline)
             with VerticalScroll(id="detail-scroll"):
@@ -687,8 +705,48 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         self._throbber_timer = self.set_interval(0.08, self._tick_throbber)
         self.set_interval(3, self._refresh_session_liveness)
 
+    def _focused_olist(self) -> OptionList:
+        """Return the currently active pane's OptionList."""
+        if self._active_pane == "archived":
+            return self.query_one("#detail-archived", OptionList)
+        return self.query_one("#detail-sessions", OptionList)
+
+    def _olist(self) -> OptionList:
+        """Override mixin to route vim keys to the active pane."""
+        return self._focused_olist()
+
+    def action_focus_sessions(self):
+        """Switch to the sessions pane (h)."""
+        self._active_pane = "sessions"
+        olist = self.query_one("#detail-sessions", OptionList)
+        olist.focus()
+        self._update_pane_labels()
+
+    def action_focus_archived(self):
+        """Switch to the archived pane (l)."""
+        if not self.ws.archived_session_ids:
+            return
+        self._active_pane = "archived"
+        olist = self.query_one("#detail-archived", OptionList)
+        olist.focus()
+        self._update_pane_labels()
+
+    def _update_pane_labels(self):
+        """Highlight the active pane's label."""
+        sess_label = self.query_one("#detail-sessions-label", Static)
+        arch_label = self.query_one("#detail-archived-label", Static)
+        n_active = len(self._detail_sessions)
+        n_archived = len(self._archived_sessions)
+        if self._active_pane == "sessions":
+            sess_label.update(f"[bold {C_BLUE}]Sessions[/bold {C_BLUE}] [{C_DIM}]({n_active})[/{C_DIM}]")
+            arch_label.update(f"[{C_DIM}]Archived ({n_archived})[/{C_DIM}]")
+        else:
+            sess_label.update(f"[{C_DIM}]Sessions ({n_active})[/{C_DIM}]")
+            arch_label.update(f"[bold {C_BLUE}]Archived[/bold {C_BLUE}] [{C_DIM}]({n_archived})[/{C_DIM}]")
+
     def _refresh_session_liveness(self):
         _refresh_liveness(self._detail_sessions)
+        _refresh_liveness(self._archived_sessions)
 
     def on_sessions_changed(self, event: SessionsChanged):
         """React to real-time session updates from the file watcher."""
@@ -706,47 +764,63 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
             if act in (ThreadActivity.THINKING, ThreadActivity.AWAITING_INPUT):
                 prompt = _render_session_option(s, act, self._throbber_frame)
                 olist.replace_option_prompt_at_index(i, prompt)
+        arch_olist = self.query_one("#detail-archived", OptionList)
+        for i, s in enumerate(self._archived_sessions):
+            act = session_activity(s, self._last_seen_cache)
+            if act in (ThreadActivity.THINKING, ThreadActivity.AWAITING_INPUT):
+                prompt = _render_session_option(s, act, self._throbber_frame)
+                arch_olist.replace_option_prompt_at_index(i, prompt)
 
     # -- Session list --
 
     def _load_detail_sessions(self):
         app = self.app
         if hasattr(app, '_sessions_for_ws'):
-            # Fetch ALL sessions, then partition by archived_session_ids.
             all_sessions = app._sessions_for_ws(self.ws, include_archived_threads=True)
             hidden = set(self.ws.archived_session_ids)
-            if self._show_archived_threads:
-                self._detail_sessions = [s for s in all_sessions if s.session_id in hidden]
-            else:
-                self._detail_sessions = [s for s in all_sessions if s.session_id not in hidden]
+            self._detail_sessions = [s for s in all_sessions if s.session_id not in hidden]
+            self._archived_sessions = [s for s in all_sessions if s.session_id in hidden]
         else:
             self._detail_sessions = _find_sessions_for_ws(self.ws, getattr(app, 'sessions', []))
+            self._archived_sessions = []
+
+        # Active sessions pane
         olist = self.query_one("#detail-sessions", OptionList)
         no_sess = self.query_one("#detail-no-sessions", Static)
-
-        # Update label to show archived count
-        label = self.query_one("#detail-sessions-label", Static)
-        archived_count = len(self.ws.archived_session_ids)
-        if self._show_archived_threads and archived_count:
-            label.update(f"[bold {C_BLUE}]Archived Sessions[/bold {C_BLUE}]")
-        elif archived_count:
-            label.update(f"[bold {C_BLUE}]Sessions[/bold {C_BLUE}]  [{C_DIM}]({archived_count} archived)[/{C_DIM}]")
-        else:
-            label.update(f"[bold {C_BLUE}]Sessions[/bold {C_BLUE}]")
-
         if self._detail_sessions:
             olist.display = True
             no_sess.display = False
             self._build_session_list()
-            if olist.option_count > 0:
+            if olist.option_count > 0 and olist.highlighted is None:
                 olist.highlighted = 0
         else:
             olist.display = False
             no_sess.display = True
 
+        # Archived sessions pane
+        arch_olist = self.query_one("#detail-archived", OptionList)
+        no_arch = self.query_one("#detail-no-archived", Static)
+        arch_pane = self.query_one("#detail-archived-pane")
+        if self._archived_sessions:
+            arch_pane.display = True
+            arch_olist.display = True
+            no_arch.display = False
+            self._build_archived_list()
+            if arch_olist.option_count > 0 and arch_olist.highlighted is None:
+                arch_olist.highlighted = 0
+        elif self._active_pane == "archived":
+            # Was viewing archived but it's now empty — switch back
+            self._active_pane = "sessions"
+            arch_pane.display = False
+            self.query_one("#detail-sessions", OptionList).focus()
+        else:
+            arch_pane.display = False
+
+        self._update_pane_labels()
+
 
     def _build_session_list(self):
-        """Full rebuild of the session OptionList."""
+        """Full rebuild of the active session OptionList."""
         olist = self.query_one("#detail-sessions", OptionList)
         olist.clear_options()
         for i, s in enumerate(self._detail_sessions):
@@ -754,13 +828,31 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
             prompt = _render_session_option(s, act, self._throbber_frame)
             olist.add_option(Option(prompt, id=str(i)))
 
+    def _build_archived_list(self):
+        """Full rebuild of the archived session OptionList."""
+        olist = self.query_one("#detail-archived", OptionList)
+        olist.clear_options()
+        for i, s in enumerate(self._archived_sessions):
+            act = session_activity(s, self._last_seen_cache)
+            prompt = _render_session_option(s, act, self._throbber_frame)
+            olist.add_option(Option(prompt, id=f"a{i}"))
+
     def on_option_list_option_selected(self, event: OptionList.OptionSelected):
-        idx = int(event.option_id)
-        if idx < len(self._detail_sessions):
-            session = self._detail_sessions[idx]
-            mark_thread_seen(session.session_id)
-            dirs = _ws_directories(self.ws)
-            _resume_session_now(self.ws, session, dirs, self.app)
+        oid = event.option_id
+        if oid.startswith("a"):
+            idx = int(oid[1:])
+            if idx < len(self._archived_sessions):
+                session = self._archived_sessions[idx]
+                mark_thread_seen(session.session_id)
+                dirs = _ws_directories(self.ws)
+                _resume_session_now(self.ws, session, dirs, self.app)
+        else:
+            idx = int(oid)
+            if idx < len(self._detail_sessions):
+                session = self._detail_sessions[idx]
+                mark_thread_seen(session.session_id)
+                dirs = _ws_directories(self.ws)
+                _resume_session_now(self.ws, session, dirs, self.app)
 
     # -- Render helpers --
 
@@ -815,9 +907,9 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
     def _render_help(self) -> str:
         pairs = [
             ("Enter", "resume"), ("s/S", "status"), ("c", "spawn"),
-            ("n", "note"), ("e", "edit"), ("l", "link+"),
+            ("n", "note"), ("e", "edit"),
             ("o", "open"), ("x", "archive ws"),
-            ("a", "archive thread"), ("A", "show archived"),
+            ("a", "archive/restore"), ("h/l", "panes"),
             ("q", "back"),
         ]
         return "  ".join(f"[{C_YELLOW}]{k}[/{C_YELLOW}] {v}" for k, v in pairs)
@@ -875,45 +967,32 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         self.app.notify(f"Archived: {self.ws.name}", timeout=2)
         self.dismiss()
 
-    def _thread_for_session(self, session: ClaudeSession) -> str | None:
-        """Find the thread_id that contains this session."""
-        app = self.app
-        if not hasattr(app, 'threads'):
-            return None
-        for t in app.threads:
-            if any(s.session_id == session.session_id for s in t.sessions):
-                return t.thread_id
-        return None
-
     def action_archive_thread(self):
-        """Archive/unarchive the currently selected session."""
-        olist = self.query_one("#detail-sessions", OptionList)
+        """Archive or restore the selected session depending on active pane."""
+        olist = self._focused_olist()
         idx = olist.highlighted
-        if idx is None or idx >= len(self._detail_sessions):
-            return
-        session = self._detail_sessions[idx]
-        sid = session.session_id
-        old_idx = olist.highlighted
-        if self._show_archived_threads and sid in self.ws.archived_session_ids:
-            self.ws.archived_session_ids.remove(sid)
-            self.store.update(self.ws)
-            self.app.notify("Session restored", timeout=2)
-        elif sid not in self.ws.archived_session_ids:
-            self.ws.archived_session_ids.append(sid)
-            self.store.update(self.ws)
-            self.app.notify("Session archived", timeout=2)
+        if self._active_pane == "archived":
+            # Restore from archived
+            if idx is None or idx >= len(self._archived_sessions):
+                return
+            sid = self._archived_sessions[idx].session_id
+            if sid in self.ws.archived_session_ids:
+                self.ws.archived_session_ids.remove(sid)
+                self.store.update(self.ws)
+        else:
+            # Archive from active
+            if idx is None or idx >= len(self._detail_sessions):
+                return
+            sid = self._detail_sessions[idx].session_id
+            if sid not in self.ws.archived_session_ids:
+                self.ws.archived_session_ids.append(sid)
+                self.store.update(self.ws)
+        old_idx = idx
         self._refresh()
-        olist = self.query_one("#detail-sessions", OptionList)
-        if self._detail_sessions and old_idx is not None:
-            olist.highlighted = min(old_idx, len(self._detail_sessions) - 1)
-
-    def action_toggle_archived_threads(self):
-        """Toggle showing archived sessions in the session list."""
-        if not self.ws.archived_session_ids:
-            self.app.notify("No archived sessions", timeout=2)
-            return
-        self._show_archived_threads = not self._show_archived_threads
-        self._refresh()
+        olist = self._focused_olist()
+        items = self._archived_sessions if self._active_pane == "archived" else self._detail_sessions
+        if items and old_idx is not None:
+            olist.highlighted = min(old_idx, len(items) - 1)
 
     def action_spawn(self):
         ok, err = _launch_orch_claude(self.ws, store=self.store)
