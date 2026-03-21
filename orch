@@ -9,6 +9,7 @@ SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
 if [ -n "$TMUX" ]; then
     tmux unbind -n C-j 2>/dev/null
     tmux unbind -n C-k 2>/dev/null
+    tmux unbind -n C-l 2>/dev/null
     # C-h from any Claude session window jumps back to the orch TUI (window 0)
     tmux bind -n C-h select-window -t orch:0 2>/dev/null
 fi
