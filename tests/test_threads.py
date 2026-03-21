@@ -319,9 +319,10 @@ class TestSessionActivity:
         s = self._make_session(is_live=True, last_message_role="user")
         assert session_activity(s) == ThreadActivity.THINKING
 
-    def test_thinking_when_live_and_no_role(self):
+    def test_awaiting_input_when_live_and_no_role(self):
+        """No messages yet → user hasn't typed, Claude is idle at prompt."""
         s = self._make_session(is_live=True, last_message_role="")
-        assert session_activity(s) == ThreadActivity.THINKING
+        assert session_activity(s) == ThreadActivity.AWAITING_INPUT
 
     def test_awaiting_input_when_turn_complete(self):
         """turn_complete flag (from system:turn_duration) is the primary signal."""

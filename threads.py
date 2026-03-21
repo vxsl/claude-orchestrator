@@ -62,6 +62,10 @@ def mark_thread_seen(thread_id: str) -> None:
 def session_activity(session: ClaudeSession, last_seen: dict[str, str] | None = None) -> ThreadActivity:
     """Compute activity state for a single session."""
     if session.is_live:
+        # No messages yet → user hasn't sent anything, Claude is idle at prompt
+        if not session.last_message_role:
+            return ThreadActivity.AWAITING_INPUT
+
         # system:turn_duration is the definitive "turn finished" signal
         if session.turn_complete:
             return ThreadActivity.AWAITING_INPUT
