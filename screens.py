@@ -71,7 +71,7 @@ class SessionsChanged(Message):
 class HelpScreen(ModalScreen[None]):
     BINDINGS = [
         Binding("question_mark,escape", "dismiss", "Close"),
-        Binding("alt+h", "go_back", "M-h back"),
+        Binding("backspace", "go_back", "^H back"),
     ]
 
     def action_go_back(self):
@@ -103,8 +103,8 @@ class HelpScreen(ModalScreen[None]):
   [{C_YELLOW}]k / \u2191 / Ctrl+P[/{C_YELLOW}]   Move up
   [{C_YELLOW}]Ctrl+D / Ctrl+U[/{C_YELLOW}]  Half-page down / up
   [{C_YELLOW}]g / G[/{C_YELLOW}]            Jump to top / bottom
-  [{C_YELLOW}]Alt+L[/{C_YELLOW}]            Drill in / resume session
-  [{C_YELLOW}]Alt+H[/{C_YELLOW}]            Back / close
+  [{C_YELLOW}]Ctrl+L[/{C_YELLOW}]           Drill in / resume session
+  [{C_YELLOW}]Ctrl+H[/{C_YELLOW}]           Back / close
   [{C_YELLOW}]Enter[/{C_YELLOW}]            Confirm / resume session
   [{C_YELLOW}]Tab[/{C_YELLOW}]              Cycle views
 
@@ -157,7 +157,10 @@ class HelpScreen(ModalScreen[None]):
 # ─── Quick Note Screen ───────────────────────────────────────────────
 
 class QuickNoteScreen(ModalScreen[str | None]):
-    BINDINGS = [Binding("alt+h", "go_back", "M-h back")]
+    BINDINGS = [
+        Binding("backspace", "go_back", "^H back"),
+        Binding("escape", "go_back", "Esc back", priority=True),
+    ]
 
     def action_go_back(self):
         self.dismiss(None)
@@ -181,7 +184,7 @@ class QuickNoteScreen(ModalScreen[str | None]):
         with Vertical(id="qnote-container"):
             yield Label(f"Note: {self.ws.name}", id="qnote-title")
             yield Input(placeholder="type a note...", id="qnote-input")
-            yield Static(f"[{C_DIM}]Enter[/{C_DIM}] save  [{C_DIM}]M-h[/{C_DIM}] back", id="qnote-hint")
+            yield Static(f"[{C_DIM}]Enter[/{C_DIM}] save  [{C_DIM}]^H[/{C_DIM}] back", id="qnote-hint")
 
     def on_mount(self):
         self.query_one("#qnote-input", Input).focus()
@@ -246,7 +249,7 @@ class TodoScreen(_VimOptionListMixin, ModalScreen[None]):
 
     BINDINGS = [
         Binding("escape", "dismiss", "Back"),
-        Binding("alt+h", "go_back", "M-h back"),
+        Binding("backspace", "go_back", "^H back"),
         Binding("a", "add_todo", "Add"),
         Binding("enter,space", "toggle_done", "Toggle done", priority=True),
         Binding("e", "edit_todo", "Edit"),
@@ -600,7 +603,10 @@ class TodoScreen(_VimOptionListMixin, ModalScreen[None]):
 
 class _TodoEditScreen(ModalScreen[str | None]):
     """Single-line input pre-filled with existing text."""
-    BINDINGS = [Binding("alt+h", "go_back", "M-h back")]
+    BINDINGS = [
+        Binding("backspace", "go_back", "^H back"),
+        Binding("escape", "go_back", "Esc back", priority=True),
+    ]
 
     def action_go_back(self):
         self.dismiss(None)
@@ -624,7 +630,7 @@ class _TodoEditScreen(ModalScreen[str | None]):
         with Vertical(id="todo-edit-container"):
             yield Label("Edit Todo", id="todo-edit-title")
             yield Input(value=self._initial, id="todo-edit-input")
-            yield Static(f"[{C_DIM}]Enter[/{C_DIM}] save  [{C_DIM}]M-h[/{C_DIM}] back", id="todo-edit-hint")
+            yield Static(f"[{C_DIM}]Enter[/{C_DIM}] save  [{C_DIM}]^H[/{C_DIM}] back", id="todo-edit-hint")
 
     def on_mount(self):
         self.query_one("#todo-edit-input", Input).focus()
@@ -639,7 +645,10 @@ class _TodoEditScreen(ModalScreen[str | None]):
 
 class _TodoContextScreen(ModalScreen[None]):
     """TextArea editor for a todo item's context field."""
-    BINDINGS = [Binding("alt+h", "go_back", "M-h back")]
+    BINDINGS = [
+        Binding("backspace", "go_back", "^H back"),
+        Binding("escape", "go_back", "Esc back", priority=True),
+    ]
 
     def action_go_back(self):
         self.action_save_and_close()
@@ -668,7 +677,7 @@ class _TodoContextScreen(ModalScreen[None]):
         with Vertical(id="todo-ctx-container"):
             yield Label(f"Context: {label}", id="todo-ctx-title")
             yield TextArea(text, id="todo-ctx-editor")
-            yield Static(f"[{C_DIM}]M-h[/{C_DIM}] save & back", id="todo-ctx-hint")
+            yield Static(f"[{C_DIM}]^H[/{C_DIM}] save & back", id="todo-ctx-hint")
 
     def action_save_and_close(self):
         if self._item:
@@ -686,7 +695,7 @@ class LinksScreen(_VimOptionListMixin, ModalScreen[None]):
     _option_list_id = "links-list"
     BINDINGS = [
         Binding("escape", "dismiss", "Back"),
-        Binding("alt+h", "go_back", "M-h back"),
+        Binding("backspace", "go_back", "^H back"),
         Binding("enter", "open_link", "Open"),
     ] + _VimOptionListMixin.VIM_BINDINGS
 
@@ -719,7 +728,7 @@ class LinksScreen(_VimOptionListMixin, ModalScreen[None]):
             if not options:
                 options.append(Option("(no links)", id="none", disabled=True))
             yield OptionList(*options, id="links-list")
-            yield Static(f"[{C_DIM}]Enter[/{C_DIM}] open  [{C_DIM}]M-h[/{C_DIM}] back", id="links-hint")
+            yield Static(f"[{C_DIM}]Enter[/{C_DIM}] open  [{C_DIM}]^H[/{C_DIM}] back", id="links-hint")
 
     def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
         self.action_open_link()
@@ -736,7 +745,10 @@ class LinksScreen(_VimOptionListMixin, ModalScreen[None]):
 # ─── Add Screen ─────────────────────────────────────────────────────
 
 class AddScreen(ModalScreen[Workstream | None]):
-    BINDINGS = [Binding("alt+h", "go_back", "M-h back")]
+    BINDINGS = [
+        Binding("backspace", "go_back", "^H back"),
+        Binding("escape", "go_back", "Esc back"),
+    ]
 
     def action_go_back(self):
         self.dismiss(None)
@@ -763,7 +775,7 @@ class AddScreen(ModalScreen[Workstream | None]):
                 value=Category.PERSONAL,
                 id="add-category",
             )
-            yield Static(f"[{C_DIM}]Enter[/{C_DIM}] create  [{C_DIM}]M-h[/{C_DIM}] back", id="add-hint")
+            yield Static(f"[{C_DIM}]Enter[/{C_DIM}] create  [{C_DIM}]^H[/{C_DIM}] back", id="add-hint")
 
     def on_mount(self):
         self.query_one("#add-name", Input).focus()
@@ -793,8 +805,8 @@ class AddScreen(ModalScreen[Workstream | None]):
 
 class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
     BINDINGS = [
-        Binding("alt+h", "go_back", "M-h back"),
-        Binding("alt+l", "go_forward", "M-l resume"),
+        Binding("backspace", "go_back", "^H back"),
+        Binding("ctrl+l", "go_forward", "^L resume"),
         Binding("s", "cycle_status", "Status"),
         Binding("S", "cycle_status_back", "Status\u2190"),
         Binding("c", "spawn", "Spawn"),
@@ -1478,12 +1490,12 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
 
     def _render_help(self) -> str:
         pairs = [
-            ("M-l", "resume"), ("s/S", "status"), ("c", "spawn"),
+            ("^L", "resume"), ("s/S", "status"), ("c", "spawn"),
             ("n", "+todo"), ("e", "todos"),
             ("o", "open"), ("x", "archive ws"),
             ("a", "archive/restore"),
             ("^j/^k", "panels"), ("/", "search"),
-            ("M-h", "back"),
+            ("^H", "back"),
         ]
         return "  ".join(f"[{C_YELLOW}]{k}[/{C_YELLOW}] {v}" for k, v in pairs)
 
@@ -1520,8 +1532,8 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         if search_input.has_class("visible") and not search_input.has_focus:
             # Viewing search results — show navigation hints
             pairs = [
-                ("j/k", "navigate"), ("M-l", "resume"),
-                ("/", "refine"), ("M-h", "clear/back"),
+                ("j/k", "navigate"), ("^L", "resume"),
+                ("/", "refine"), ("^H", "clear/back"),
             ]
             help_bar.update("  ".join(f"[{C_YELLOW}]{k}[/{C_YELLOW}] {v}" for k, v in pairs))
         else:
@@ -1844,7 +1856,8 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
 class BrainDumpScreen(ModalScreen[str | None]):
     BINDINGS = [
         Binding("ctrl+s", "submit", "Submit", priority=True),
-        Binding("alt+h", "go_back", "M-h back"),
+        Binding("backspace", "go_back", "^H back"),
+        Binding("escape", "go_back", "Esc back", priority=True),
     ]
 
     def action_go_back(self):
@@ -1871,7 +1884,7 @@ class BrainDumpScreen(ModalScreen[str | None]):
                 id="brain-desc",
             )
             yield TextArea("", id="brain-editor")
-            yield Static(f"[{C_DIM}]Ctrl+S[/{C_DIM}] submit  [{C_DIM}]M-h[/{C_DIM}] back", id="brain-hint")
+            yield Static(f"[{C_DIM}]Ctrl+S[/{C_DIM}] submit  [{C_DIM}]^H[/{C_DIM}] back", id="brain-hint")
 
     def on_mount(self):
         self.query_one("#brain-editor", TextArea).focus()
@@ -1893,7 +1906,7 @@ class BrainPreviewScreen(ModalScreen[bool]):
     BINDINGS = [
         Binding("enter,y", "confirm", "Add all"),
         Binding("escape,n", "cancel", "Cancel"),
-        Binding("alt+h", "go_back", "M-h back"),
+        Binding("backspace", "go_back", "^H back"),
     ]
 
     def action_go_back(self):
@@ -1928,7 +1941,7 @@ class BrainPreviewScreen(ModalScreen[bool]):
                 body_lines.append("")
             yield Static("\n".join(body_lines), id="brain-preview-body")
             yield Rule()
-            yield Static(f"[{C_DIM}]Enter/y[/{C_DIM}] add all  [{C_DIM}]Esc/n[/{C_DIM}] cancel  [{C_DIM}]M-h[/{C_DIM}] back", id="brain-preview-hint")
+            yield Static(f"[{C_DIM}]Enter/y[/{C_DIM}] add all  [{C_DIM}]Esc/n[/{C_DIM}] cancel  [{C_DIM}]^H[/{C_DIM}] back", id="brain-preview-hint")
 
     def action_confirm(self):
         self.dismiss(True)
@@ -1940,7 +1953,10 @@ class BrainPreviewScreen(ModalScreen[bool]):
 # ─── Add Link Screen ────────────────────────────────────────────────
 
 class AddLinkScreen(ModalScreen[Link | None]):
-    BINDINGS = [Binding("alt+h", "go_back", "M-h back")]
+    BINDINGS = [
+        Binding("backspace", "go_back", "^H back"),
+        Binding("escape", "go_back", "Esc back"),
+    ]
 
     def action_go_back(self):
         self.dismiss(None)
@@ -1967,7 +1983,7 @@ class AddLinkScreen(ModalScreen[Link | None]):
             yield Select([(k, k) for k in LINK_KINDS], value="url", id="addlink-kind")
             yield Input(placeholder="Value (URL, path, ticket ID, session ID...)", id="addlink-value")
             yield Input(placeholder="Label (optional, defaults to kind)", id="addlink-label")
-            yield Static(f"[{C_DIM}]Enter[/{C_DIM}] add  [{C_DIM}]M-h[/{C_DIM}] back", id="addlink-hint")
+            yield Static(f"[{C_DIM}]Enter[/{C_DIM}] add  [{C_DIM}]^H[/{C_DIM}] back", id="addlink-hint")
 
     def on_mount(self):
         self.query_one("#addlink-value", Input).focus()
@@ -2003,7 +2019,7 @@ class LinkSessionScreen(_VimOptionListMixin, ModalScreen[Workstream | None]):
     _option_list_id = "linksession-list"
     BINDINGS = [
         Binding("escape", "cancel", "Cancel"),
-        Binding("alt+h", "go_back", "M-h back"),
+        Binding("backspace", "go_back", "^H back"),
         Binding("enter", "confirm", "Link"),
     ] + _VimOptionListMixin.VIM_BINDINGS
 
@@ -2039,7 +2055,7 @@ class LinkSessionScreen(_VimOptionListMixin, ModalScreen[Workstream | None]):
             if not options:
                 options.append(Option("(no workstreams)", id="none", disabled=True))
             yield OptionList(*options, id="linksession-list")
-            yield Static(f"[{C_DIM}]Enter[/{C_DIM}] link  [{C_DIM}]M-h[/{C_DIM}] back", id="linksession-hint")
+            yield Static(f"[{C_DIM}]Enter[/{C_DIM}] link  [{C_DIM}]^H[/{C_DIM}] back", id="linksession-hint")
 
     def action_confirm(self):
         option_list = self.query_one("#linksession-list", OptionList)
@@ -2064,7 +2080,7 @@ class SessionPickerScreen(_VimOptionListMixin, ModalScreen[ClaudeSession | None]
     _option_list_id = "threadpick-list"
     BINDINGS = [
         Binding("escape", "cancel", "Cancel"),
-        Binding("alt+h", "go_back", "M-h back"),
+        Binding("backspace", "go_back", "^H back"),
         Binding("enter", "confirm", "Resume"),
     ] + _VimOptionListMixin.VIM_BINDINGS
 
@@ -2097,7 +2113,7 @@ class SessionPickerScreen(_VimOptionListMixin, ModalScreen[ClaudeSession | None]
             yield Label(f"Resume: {self.ws.name}", id="threadpick-title")
             yield OptionList(*self._build_options(), id="threadpick-list")
             yield Static(
-                f"[{C_DIM}]Enter[/{C_DIM}] resume  [{C_DIM}]M-h[/{C_DIM}] back",
+                f"[{C_DIM}]Enter[/{C_DIM}] resume  [{C_DIM}]^H[/{C_DIM}] back",
                 id="threadpick-hint",
             )
 
@@ -2169,7 +2185,7 @@ class RepoPickerScreen(_VimOptionListMixin, ModalScreen[str | None]):
     _option_list_id = "repopick-list"
     BINDINGS = [
         Binding("escape", "cancel", "Cancel"),
-        Binding("alt+h", "go_back", "M-h back"),
+        Binding("backspace", "go_back", "^H back"),
         Binding("enter", "confirm", "Select"),
     ] + _VimOptionListMixin.VIM_BINDINGS
 
@@ -2209,7 +2225,7 @@ class RepoPickerScreen(_VimOptionListMixin, ModalScreen[str | None]):
                 options.append(Option("(no repos found)", id="none", disabled=True))
             yield OptionList(*options, id="repopick-list")
             yield Static(
-                f"[{C_DIM}]Enter[/{C_DIM}] select  [{C_DIM}]M-h[/{C_DIM}] back",
+                f"[{C_DIM}]Enter[/{C_DIM}] select  [{C_DIM}]^H[/{C_DIM}] back",
                 id="repopick-hint",
             )
 
@@ -2242,7 +2258,7 @@ class WorkstreamPickerScreen(_VimOptionListMixin, ModalScreen[Workstream | str |
     _option_list_id = "wspick-list"
     BINDINGS = [
         Binding("escape", "cancel", "Cancel"),
-        Binding("alt+h", "go_back", "M-h back"),
+        Binding("backspace", "go_back", "^H back"),
         Binding("enter", "confirm", "Select"),
     ] + _VimOptionListMixin.VIM_BINDINGS
 
@@ -2284,7 +2300,7 @@ class WorkstreamPickerScreen(_VimOptionListMixin, ModalScreen[Workstream | str |
             ))
             yield OptionList(*options, id="wspick-list")
             yield Static(
-                f"[{C_DIM}]Enter[/{C_DIM}] select  [{C_DIM}]M-h[/{C_DIM}] back",
+                f"[{C_DIM}]Enter[/{C_DIM}] select  [{C_DIM}]^H[/{C_DIM}] back",
                 id="wspick-hint",
             )
 
@@ -2313,7 +2329,7 @@ class ConfirmScreen(ModalScreen[bool]):
     BINDINGS = [
         Binding("y", "confirm", "Yes"),
         Binding("n,escape", "deny", "No"),
-        Binding("alt+h", "go_back", "M-h back"),
+        Binding("backspace", "go_back", "^H back"),
     ]
 
     def action_go_back(self):
@@ -2336,7 +2352,7 @@ class ConfirmScreen(ModalScreen[bool]):
     def compose(self) -> ComposeResult:
         with Vertical(id="confirm-container"):
             yield Static(self.message, id="confirm-msg")
-            yield Static(f"[{C_DIM}]y[/{C_DIM}] yes  [{C_DIM}]n[/{C_DIM}] no  [{C_DIM}]M-h[/{C_DIM}] back", id="confirm-hint")
+            yield Static(f"[{C_DIM}]y[/{C_DIM}] yes  [{C_DIM}]n[/{C_DIM}] no  [{C_DIM}]^H[/{C_DIM}] back", id="confirm-hint")
 
     def action_confirm(self):
         self.dismiss(True)
