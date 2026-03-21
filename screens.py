@@ -882,8 +882,18 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
 
     def _refresh_session_liveness(self):
         from actions import refresh_liveness
+        from sessions import refresh_session_tail
         refresh_liveness(self._detail_sessions)
         refresh_liveness(self._archived_sessions)
+        # Tail-read live/recently-live sessions to pick up new messages
+        for s in self._detail_sessions:
+            if s.is_live:
+                refresh_session_tail(s)
+        for s in self._archived_sessions:
+            if s.is_live:
+                refresh_session_tail(s)
+        # Rebuild all options so non-animating sessions also update
+        self._rebuild_all_options()
         self._update_animating_cache()
 
     def on_sessions_changed(self, event: SessionsChanged):
@@ -901,6 +911,21 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
             act = session_activity(s, self._last_seen_cache)
             if act in anim_types:
                 self._animating_archived.append((i, act))
+
+    def _rebuild_all_options(self):
+        """Re-render every session option in place (preserves highlight)."""
+        olist = self.query_one("#detail-sessions", OptionList)
+        for i, s in enumerate(self._detail_sessions):
+            if i < olist.option_count:
+                act = session_activity(s, self._last_seen_cache)
+                prompt = _render_session_option(s, act, self._throbber_frame)
+                olist.replace_option_prompt_at_index(i, prompt)
+        arch_olist = self.query_one("#detail-archived", OptionList)
+        for i, s in enumerate(self._archived_sessions):
+            if i < arch_olist.option_count:
+                act = session_activity(s, self._last_seen_cache)
+                prompt = _render_session_option(s, act, self._throbber_frame)
+                arch_olist.replace_option_prompt_at_index(i, prompt)
 
     def _tick_throbber(self):
         self._throbber_frame += 1
