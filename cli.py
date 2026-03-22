@@ -442,7 +442,7 @@ def cmd_resume(args):
 
     if os.environ.get("TMUX"):
         subprocess.run(
-            ["tmux", "new-window", "-n", f"claude:{ws.name[:20]}",
+            ["tmux", "new-window", "-n", ws.name[:20],
              "claude", "--resume", session_id],
         )
     else:
