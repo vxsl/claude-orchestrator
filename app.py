@@ -336,7 +336,6 @@ class OrchestratorApp(App):
         self._session_watcher.start()
         self.set_interval(30, self._poll_sessions)
 
-        self._throbber_timer = self.set_interval(0.5, self._tick_throbber)
         self.set_interval(10, self._refresh_session_liveness)
 
         ws_table.focus()
@@ -475,15 +474,6 @@ class OrchestratorApp(App):
         self._refresh_ws_table_debounced()
         if self.state.view_mode == ViewMode.SESSIONS:
             self._refresh_sessions_table()
-
-    def _tick_throbber(self):
-        self.state.throbber_frame += 1
-        olist = self.query_one("#preview-sessions", OptionList)
-        for i, s in enumerate(self.state.preview_sessions):
-            act = session_activity(s, self.state.last_seen_cache)
-            if act in (ThreadActivity.THINKING, ThreadActivity.AWAITING_INPUT):
-                prompt = _render_session_option(s, act, self.state.throbber_frame, title_width=35)
-                olist.replace_option_prompt_at_index(i, prompt)
 
     def _update_preview(self):
         if not self.state.preview_visible:

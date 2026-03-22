@@ -250,10 +250,9 @@ _ACTIVITY_PRIORITY = {
 
 
 def _activity_icon(activity: ThreadActivity, throbber_frame: int = 0) -> str:
-    """Return a Rich-markup activity indicator. Animated for THINKING."""
+    """Return a Rich-markup activity indicator."""
     if activity == ThreadActivity.THINKING:
-        frame = THROBBER_FRAMES[throbber_frame % len(THROBBER_FRAMES)]
-        return f"[bold {C_CYAN}]{frame}[/bold {C_CYAN}]"
+        return f"[bold {C_CYAN}]◉[/bold {C_CYAN}]"
     if activity == ThreadActivity.AWAITING_INPUT:
         return f"[{C_YELLOW}]◉[/{C_YELLOW}]"
     if activity == ThreadActivity.RESPONSE_FRESH:

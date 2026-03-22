@@ -55,6 +55,7 @@ from rendering import (
 )
 from actions import (
     launch_orch_claude, ws_directories, resume_session_now, open_link,
+    switch_to_tmux_window,
 )
 from notifications import Notification, dismiss_notification, dismiss_all_for_dirs
 from state import fuzzy_match, content_search, SessionSearchResult
@@ -980,7 +981,6 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         self._all_sessions: list[ClaudeSession] = []
         self._all_archived: list[ClaudeSession] = []
         self._peek_mode: bool = False
-        self._spawn_draft: str = ""  # persists prompt draft across open/close
 
     def compose(self) -> ComposeResult:
         with Vertical(id="detail-container"):
@@ -1017,7 +1017,6 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         self._load_feed()
         self.query_one("#detail-sessions", OptionList).focus()
         self._update_pane_labels()
-        self._throbber_timer = self.set_interval(0.5, self._tick_throbber)
         self.set_interval(10, self._schedule_liveness_refresh)
         self.set_interval(10, self._poll_feed)
 
@@ -1142,24 +1141,6 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
                 prompt = _render_session_option(s, act, self._throbber_frame, ws_repo_path=self.ws.repo_path)
                 arch_olist.replace_option_prompt_at_index(i, prompt)
 
-    def _tick_throbber(self):
-        self._throbber_frame += 1
-        if self._content_search_active or self._peek_mode:
-            return  # Don't overwrite search results or peek content
-        # Only update options that are actually animating (cached from last build)
-        # Recompute activity fresh so snippet styling stays in sync with state
-        olist = self.query_one("#detail-sessions", OptionList)
-        for i, _cached_act in self._animating_sessions:
-            if i < olist.option_count and i < len(self._detail_sessions):
-                act = session_activity(self._detail_sessions[i], self._last_seen_cache)
-                prompt = _render_session_option(self._detail_sessions[i], act, self._throbber_frame, ws_repo_path=self.ws.repo_path)
-                olist.replace_option_prompt_at_index(i, prompt)
-        arch_olist = self.query_one("#detail-archived", OptionList)
-        for i, _cached_act in self._animating_archived:
-            if i < arch_olist.option_count and i < len(self._archived_sessions):
-                act = session_activity(self._archived_sessions[i], self._last_seen_cache)
-                prompt = _render_session_option(self._archived_sessions[i], act, self._throbber_frame, ws_repo_path=self.ws.repo_path)
-                arch_olist.replace_option_prompt_at_index(i, prompt)
 
     @staticmethod
     def _parse_ts(ts: str) -> datetime:
@@ -1929,28 +1910,35 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         self._refresh()
 
     def action_spawn(self):
-        def on_result(result: tuple[str, str] | None):
-            if result is None:
-                return
-            action, text = result
-            self._spawn_draft = text if action == "cancel" else ""
-            if action == "spawn":
-                prompt = text.strip() or None
-                ok, err = launch_orch_claude(self.ws, store=self.store, prompt=prompt)
-                if ok:
-                    self.app.notify("Session spawned", timeout=2)
-                    self._add_spawning_placeholder()
-                else:
-                    self.app.notify(f"Spawn failed: {err}", severity="error", timeout=4)
-        self.app.push_screen(SpawnPromptScreen(self.ws, self._spawn_draft), callback=on_result)
+        # If there's a live tmux window for this ws whose session hasn't
+        # appeared in our session list yet (still composing first prompt),
+        # switch to it instead of spawning a fresh one.
+        wid = self._find_composing_window()
+        if wid and switch_to_tmux_window(wid):
+            return
+        ok, err = launch_orch_claude(self.ws, store=self.store)
+        if ok:
+            self.app.notify("Session spawned", timeout=2)
+            self._add_spawning_placeholder()
+        else:
+            self.app.notify(f"Spawn failed: {err}", severity="error", timeout=4)
+
+    def _find_composing_window(self) -> str | None:
+        """Find a tmux window for this ws where the user hasn't submitted yet."""
+        from actions import find_tmux_windows_for_ws
+        known_sids = {s.session_id for s in self._detail_sessions}
+        known_sids |= {sid for s in self._detail_sessions for sid in s.all_session_ids}
+        for sid, wid in find_tmux_windows_for_ws(self.ws.name):
+            if sid not in known_sids:
+                return wid
+        return None
 
     def _add_spawning_placeholder(self):
         olist = self.query_one("#detail-sessions", OptionList)
         no_sess = self.query_one("#detail-no-sessions", Static)
         olist.display = True
         no_sess.display = False
-        frame = THROBBER_FRAMES[self._throbber_frame % len(THROBBER_FRAMES)]
-        line1 = f" [bold {C_CYAN}]{frame}[/bold {C_CYAN}]  [bold]Starting session…[/bold]"
+        line1 = f" [bold {C_CYAN}]◉[/bold {C_CYAN}]  [bold]Starting session…[/bold]"
         line2 = f"      [{C_DIM}]waiting for Claude to initialize[/{C_DIM}]"
         olist.add_option(Option(f"{line1}\n{line2}", id="spawning"))
         self._refresh()
@@ -1976,62 +1964,6 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
                 self._refresh()
                 self.app.notify(f"Added {link.kind} link", timeout=2)
         self.app.push_screen(AddLinkScreen(self.ws.name), callback=on_link)
-
-
-# ─── Spawn Prompt Screen ────────────────────────────────────────────
-
-class SpawnPromptScreen(ModalScreen[tuple[str, str] | None]):
-    """Compose a prompt before spawning a Claude session.
-
-    Dismisses with ("spawn", text) on submit, ("cancel", text) on back
-    so the caller can preserve the draft.
-    """
-
-    BINDINGS = [
-        Binding("ctrl+s", "submit", "Spawn", priority=True),
-        Binding("backspace,ctrl+h", "go_back", "^H back"),
-        Binding("escape", "go_back", "Esc back", priority=True),
-    ]
-
-    DEFAULT_CSS = f"""
-    SpawnPromptScreen {{ align: center middle; }}
-    #spawn-container {{
-        width: 80; height: auto; max-height: 85%;
-        padding: 1 2; background: {BG_BASE}; border: round $primary 30%;
-    }}
-    #spawn-title {{ text-style: bold; color: {C_CYAN}; padding-bottom: 1; }}
-    #spawn-editor {{ height: 10; margin: 0 0 1 0; }}
-    #spawn-hint {{ text-align: center; color: {C_DIM}; }}
-    """
-
-    def __init__(self, ws: Workstream, draft: str = ""):
-        super().__init__()
-        self.ws = ws
-        self._draft = draft
-
-    def compose(self) -> ComposeResult:
-        with Vertical(id="spawn-container"):
-            yield Label(f"Spawn: {self.ws.name}", id="spawn-title")
-            yield TextArea(self._draft, id="spawn-editor")
-            yield Static(
-                f"[{C_DIM}]Ctrl+S[/{C_DIM}] spawn  [{C_DIM}]^H[/{C_DIM}] back (draft saved)",
-                id="spawn-hint",
-            )
-
-    def on_mount(self):
-        editor = self.query_one("#spawn-editor", TextArea)
-        editor.focus()
-        # Move cursor to end of draft
-        if self._draft:
-            editor.move_cursor(editor.document.end)
-
-    def action_submit(self):
-        text = self.query_one("#spawn-editor", TextArea).text
-        self.dismiss(("spawn", text))
-
-    def action_go_back(self):
-        text = self.query_one("#spawn-editor", TextArea).text
-        self.dismiss(("cancel", text))
 
 
 
@@ -2305,7 +2237,6 @@ class SessionPickerScreen(_VimOptionListMixin, ModalScreen[ClaudeSession | None]
         self._last_seen_cache = load_last_seen()
         self._generate_titles()
         self._rebuild_options()
-        self._throbber_timer = self.set_interval(0.5, self._tick_throbber)
         self.set_interval(10, self._schedule_picker_liveness)
 
     def _schedule_picker_liveness(self):
@@ -2316,15 +2247,6 @@ class SessionPickerScreen(_VimOptionListMixin, ModalScreen[ClaudeSession | None]
         from actions import refresh_liveness
         refresh_liveness(self.picker_sessions)
         self.app.call_from_thread(self._rebuild_options)
-
-    def _tick_throbber(self):
-        self._throbber_frame += 1
-        olist = self.query_one("#threadpick-list", OptionList)
-        for i, s in enumerate(self.picker_sessions):
-            act = session_activity(s, self._last_seen_cache)
-            if act in (ThreadActivity.THINKING, ThreadActivity.AWAITING_INPUT):
-                prompt = _render_session_option(s, act, self._throbber_frame, ws_repo_path=self.ws.repo_path)
-                olist.replace_option_prompt_at_index(i, prompt)
 
     @work(thread=True)
     def _generate_titles(self):
