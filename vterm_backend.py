@@ -143,6 +143,7 @@ class VTermBackend:
         # Init tracking state before callbacks can fire
         self.dirty_rows: set[int] = set()
         self.scrollback: list[tuple[int, bytes]] = []
+        self.new_scrollback_lines = 0  # lines pushed since last check
 
         self._vt = _vterm_new(rows, cols)
         self._screen = _vterm_obtain_screen(self._vt)
@@ -213,6 +214,7 @@ class VTermBackend:
         nbytes = cols * _CELL_SIZE
         raw = ctypes.string_at(cells_ptr, nbytes)
         self.scrollback.append((cols, raw))
+        self.new_scrollback_lines += 1
         if len(self.scrollback) > self.MAX_SCROLLBACK:
             del self.scrollback[0]
         return 1

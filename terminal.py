@@ -500,6 +500,12 @@ class TerminalWidget(Widget, can_focus=True):
             except OSError:
                 pass
         self._mouse_tracking = self._backend.mouse_tracking
+        # Compensate scroll offset for new scrollback lines
+        if self._scroll_offset > 0 and self._backend.new_scrollback_lines:
+            self._scroll_offset += self._backend.new_scrollback_lines
+            max_offset = len(self._backend.scrollback)
+            self._scroll_offset = min(self._scroll_offset, max_offset)
+        self._backend.new_scrollback_lines = 0
 
     # ── Rendering ──────────────────────────────────────────────────
 
