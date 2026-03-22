@@ -44,7 +44,6 @@ LINE+="  ${C_DIM}│${C_RESET}${C_BG}"
 LINE+="  ${C_GOLD}C-e${C_RESET}${C_BG} ${C_DIM}extract todo${C_RESET}${C_BG}"
 LINE+="  ${C_DIM}C-h${C_RESET}${C_BG} ${C_DIM}orch${C_RESET}${C_BG}"
 LINE+="  ${C_DIM}C-\\\\${C_RESET}${C_BG} ${C_DIM}last window${C_RESET}${C_BG}"
-LINE+="  ${C_DIM}C-d${C_RESET}${C_BG} ${C_DIM}exit${C_RESET}${C_BG}"
 
 printf '\033[2K%s' "$LINE"
 
