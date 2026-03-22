@@ -122,6 +122,7 @@ COMMAND_REGISTRY: list[CommandDef] = [
     CommandDef("delete", ["del"], "Delete a workstream"),
     CommandDef("link", ["ln"], "Add a link to the workstream", requires_ws=True),
     CommandDef("open", ["o"], "Open workstream links", requires_ws=True),
+    CommandDef("close", [], "Close the current tab"),
     CommandDef("help", ["?"], "Keyboard reference"),
     CommandDef("refresh", [], "Reload data and sessions"),
     CommandDef("export", [], "Export workstreams to markdown"),
@@ -744,6 +745,8 @@ class AppState:
             )
             ws.add_link(kind="worktree", value=path, label=Path(path).name)
             ws.ticket_key = ticket_key
+            if ticket_key:
+                ws.add_link(kind="ticket", value=ticket_key, label=ticket_key)
             self._infer_category_from_remote(ws)
             self.store.add(ws)
             ws_by_path[path] = ws
@@ -1306,6 +1309,10 @@ class AppState:
         # Brain
         elif cmd == "brain":
             return {"action": "brain", "text": arg}
+
+        # Close tab
+        elif cmd == "close":
+            return {"action": "close"}
 
         # Help
         elif cmd == "help":

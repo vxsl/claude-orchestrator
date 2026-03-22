@@ -25,9 +25,9 @@ The app uses a tabbed interface — each opened workstream gets its own persiste
 
 | Key | Action |
 |-----|--------|
-| `Tab` / `Shift+Tab` | Cycle through open tabs |
+| `Ctrl+Tab` / `Ctrl+Shift+Tab` | Cycle through open tabs |
 | `Enter` / `Ctrl+L` | Open workstream in new tab |
-| `Ctrl+W` | Close current tab |
+| `x` | Close current tab |
 | `Ctrl+H` / `Backspace` | Back / dismiss |
 
 The **Home tab** (always present) shows the workstream list with:

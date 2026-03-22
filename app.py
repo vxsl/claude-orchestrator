@@ -347,6 +347,12 @@ class OrchestratorApp(App):
         if self.tabs.prev_tab():
             self._apply_tab_switch()
 
+    def action_close_tab(self):
+        """Close the active tab (cannot close Home)."""
+        closed = self.tabs.close_active_tab()
+        if closed:
+            self._apply_tab_switch()
+
     def _apply_tab_switch(self):
         """Handle tab switch — open DetailScreen or return to Home."""
         tab = self.tabs.active_tab
@@ -690,8 +696,14 @@ class OrchestratorApp(App):
                 f"[{C_DIM}]1[/{C_DIM}] back to all  "
                 f"[{C_DIM}]?[/{C_DIM}] help"
             )
+        # Count active ticket-solve jobs across all workstreams
+        solving = sum(
+            1 for ws in self.state.store.active
+            if getattr(ws, "ticket_solve_status", "").lower() in ("running", "active")
+        )
+        solve_part = f"  [{C_YELLOW}]{solving} solving[/{C_YELLOW}]" if solving else ""
         return (
-            f"  {count} workstreams  "
+            f"  {count} workstreams{solve_part}  "
             f"[{C_DIM}]\u2502[/{C_DIM}]  "
             f"[{C_DIM}]r[/{C_DIM}] resume  "
             f"[{C_DIM}]c[/{C_DIM}] new session  "
@@ -1345,6 +1357,8 @@ class OrchestratorApp(App):
                 self._do_brain(text)
             else:
                 self.action_brain_dump()
+        elif action == "close":
+            self.action_close_tab()
         elif action == "help":
             self.push_screen(HelpScreen())
         elif action == "delete":
