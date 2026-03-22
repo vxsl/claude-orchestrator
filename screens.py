@@ -2581,16 +2581,8 @@ class RepoPickerScreen(ModalScreen[str | None]):
     """fzf-style fuzzy repo picker with full home-dir scanning."""
 
     BINDINGS = [
-        Binding("escape", "cancel", "Cancel"),
-        Binding("backspace,ctrl+h", "go_back", "^H back"),
-        Binding("enter", "confirm", "Select"),
+        Binding("escape", "cancel", "Cancel", priority=True),
     ]
-
-    def action_go_back(self):
-        inp = self.query_one("#repopick-input", Input)
-        if inp.value:
-            return  # let Input handle backspace normally
-        self.dismiss(None)
 
     DEFAULT_CSS = f"""
     RepoPickerScreen {{ align: center middle; }}
@@ -2683,6 +2675,10 @@ class RepoPickerScreen(ModalScreen[str | None]):
     def _on_filter_changed(self, event: Input.Changed) -> None:
         self._rebuild_list(event.value)
 
+    @on(Input.Submitted, "#repopick-input")
+    def _on_input_submitted(self, event: Input.Submitted) -> None:
+        self.action_confirm()
+
     def _ensure_highlighted(self, ol: OptionList) -> bool:
         """Ensure the option list has a highlighted item. Returns False if empty."""
         if ol.option_count == 0:
@@ -2691,7 +2687,7 @@ class RepoPickerScreen(ModalScreen[str | None]):
             ol.highlighted = 0
         return True
 
-    def _on_key(self, event) -> None:
+    def on_key(self, event) -> None:
         """Route navigation keys to the option list while input stays focused."""
         ol = self.query_one("#repopick-list", OptionList)
         key = event.key
@@ -2713,6 +2709,10 @@ class RepoPickerScreen(ModalScreen[str | None]):
         elif key == "ctrl+u":
             if self._ensure_highlighted(ol):
                 ol.action_page_up()
+            event.prevent_default()
+            event.stop()
+        elif key == "backspace" and not self.query_one("#repopick-input", Input).value:
+            self.dismiss(None)
             event.prevent_default()
             event.stop()
 
