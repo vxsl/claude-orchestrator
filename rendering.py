@@ -8,6 +8,8 @@ from __future__ import annotations
 from enum import Enum
 from pathlib import Path
 
+from rich.markup import escape as _rich_escape
+
 from models import (
     Category, Status, TodoItem, Workstream,
     STATUS_ICONS, STATUS_ORDER,
@@ -309,7 +311,7 @@ def _render_session_option(
     icon = _activity_icon(act, throbber_frame)
     badge = _activity_badge(act)
     model = _short_model(s.model)
-    title = _session_title(s)[:title_width]
+    title = _rich_escape(_session_title(s)[:title_width])
     tokens = _colored_tokens(s)
 
     if act == ThreadActivity.IDLE:
@@ -333,7 +335,7 @@ def _render_session_option(
     # Third line: last message snippet — styled by activity state
     if s.last_message_text:
         max_snippet = title_width + 10
-        snippet = s.last_message_text[:max_snippet]
+        snippet = _rich_escape(s.last_message_text[:max_snippet])
         if len(s.last_message_text) > max_snippet:
             snippet += "…"
         is_user = s.last_message_role == "user"
