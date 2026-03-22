@@ -34,18 +34,18 @@ from textual.widgets import (
 from textual.widgets.option_list import Option
 
 from models import (
-    Category, Link, Status, Store, TodoItem, Workstream,
-    STATUS_ICONS, _relative_time,
+    Category, Link, Store, TodoItem, Workstream,
+    _relative_time,
 )
 from sessions import ClaudeSession
 from threads import Thread, ThreadActivity, session_activity, load_last_seen, mark_thread_seen
 from rendering import (
     C_BLUE, C_CYAN, C_DIM, C_GOLD, C_GREEN, C_LIGHT, C_ORANGE, C_PURPLE, C_RED, C_YELLOW,
     BG_BASE, BG_RAISED, BG_SURFACE,
-    STATUS_THEME, CATEGORY_THEME,
+    CATEGORY_THEME,
     LINK_TYPE_ICONS, LINK_ORDER, LINK_KINDS,
     THROBBER_FRAMES,
-    _status_markup, _category_markup, _link_icon,
+    _category_markup, _link_icon,
     _activity_icon, _activity_badge, _is_session_seen, _parse_iso,
     _colored_tokens, _token_color_markup,
     _short_model, _short_project,
@@ -1006,6 +1006,8 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         self._all_sessions: list[ClaudeSession] = []
         self._all_archived: list[ClaudeSession] = []
         self._peek_mode: bool = False
+        self._loading_frame: int = 0
+        self._loading_timer = None
 
     def compose(self) -> ComposeResult:
         with Vertical(id="detail-container"):
@@ -1048,6 +1050,8 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         self.query_one("#detail-sessions", OptionList).focus()
         self._update_pane_labels()
         self.set_interval(10, self._periodic_refresh)
+        if self._sessions_loading():
+            self._loading_timer = self.set_interval(0.12, self._tick_loading)
 
     def _mark_all_seen(self):
         """Mark all sessions in this workstream as seen right now — batched."""
@@ -1152,6 +1156,20 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         app = self.app
         return hasattr(app, 'state') and not app.state.sessions_loaded
 
+    def _tick_loading(self):
+        """Animate the loading spinner while sessions are being discovered."""
+        if not self._sessions_loading():
+            if self._loading_timer:
+                self._loading_timer.stop()
+                self._loading_timer = None
+            return
+        self._loading_frame += 1
+        from rendering import THROBBER_FRAMES
+        frame = THROBBER_FRAMES[self._loading_frame % len(THROBBER_FRAMES)]
+        no_sess = self.query_one("#detail-no-sessions", Static)
+        no_sess.update(f"[{C_CYAN}]{frame}[/{C_CYAN}] [{C_DIM}]Discovering sessions...[/{C_DIM}]")
+        self._update_pane_labels()
+
     def _update_pane_labels(self):
         sess_label = self.query_one("#detail-sessions-label", Static)
         arch_label = self.query_one("#detail-archived-label", Static)
@@ -1161,12 +1179,18 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
 
         legend = tool_bar_legend()
         notif_badge = f" [{C_GREEN}]({n_notified} new)[/{C_GREEN}]" if n_notified else ""
-        loading = self._sessions_loading()
-        count_str = "..." if loading and n_active == 0 else str(n_active)
-        if self._active_pane == "sessions":
-            left = f"[bold {C_BLUE}]Sessions[/bold {C_BLUE}] [{C_DIM}]({count_str})[/{C_DIM}]{notif_badge}"
+        loading = self._sessions_loading() and n_active == 0
+        if loading:
+            from rendering import THROBBER_FRAMES
+            frame = THROBBER_FRAMES[self._loading_frame % len(THROBBER_FRAMES)]
+            spinner = f" [{C_CYAN}]{frame}[/{C_CYAN}]"
         else:
-            left = f"[{C_DIM}]Sessions ({count_str})[/{C_DIM}]{notif_badge}"
+            spinner = ""
+        count_str = f"({n_active})" if not loading else ""
+        if self._active_pane == "sessions":
+            left = f"[bold {C_BLUE}]Sessions[/bold {C_BLUE}]{spinner} [{C_DIM}]{count_str}[/{C_DIM}]{notif_badge}"
+        else:
+            left = f"[{C_DIM}]Sessions {count_str}[/{C_DIM}]{spinner}{notif_badge}"
         sess_label.update(_label_with_legend(left, legend))
 
         if self._active_pane == "archived":
@@ -1188,6 +1212,9 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
     # _refresh_session_liveness replaced by _schedule_liveness_refresh + _do_liveness_refresh above
 
     def on_sessions_changed(self, event: SessionsChanged):
+        if self._loading_timer and not self._sessions_loading():
+            self._loading_timer.stop()
+            self._loading_timer = None
         # Debounce: coalesce rapid-fire SessionsChanged into one refresh
         if hasattr(self, '_sessions_changed_timer') and self._sessions_changed_timer:
             self._sessions_changed_timer.stop()
@@ -1371,7 +1398,9 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
             olist.display = False
             no_sess.display = True
             if self._sessions_loading():
-                no_sess.update(f"[{C_DIM}]Loading sessions...[/{C_DIM}]")
+                from rendering import THROBBER_FRAMES
+                frame = THROBBER_FRAMES[self._loading_frame % len(THROBBER_FRAMES)]
+                no_sess.update(f"[{C_CYAN}]{frame}[/{C_CYAN}] [{C_DIM}]Discovering sessions...[/{C_DIM}]")
             else:
                 no_sess.update(f"[{C_DIM}]No sessions[/{C_DIM}]")
 
@@ -2441,7 +2470,7 @@ class BrainPreviewScreen(ModalScreen[str]):
             body_lines = []
             for i, task in enumerate(self.tasks, 1):
                 body_lines.append(f"  [bold]{i}.[/bold] {task.name}")
-                body_lines.append(f"     {_status_markup(task.status)}  {_category_markup(task.category)}")
+                body_lines.append(f"     {_category_markup(task.category)}")
                 if task.raw_text != task.name:
                     raw = task.raw_text[:80]
                     body_lines.append(f"     [{C_DIM}]{raw}[/{C_DIM}]")
@@ -2530,7 +2559,7 @@ class LinkSessionScreen(FuzzyPickerScreen):
     def _get_items(self) -> list[tuple[str, str]]:
         items = []
         for ws in self._store.active:
-            label = f"{STATUS_ICONS[ws.status]} {_rich_escape(ws.name)}  [{C_DIM}]{ws.category.value}[/{C_DIM}]"
+            label = f"\u25cf {_rich_escape(ws.name)}  [{C_DIM}]{ws.category.value}[/{C_DIM}]"
             items.append((ws.id, label))
         return items
 
@@ -2713,7 +2742,7 @@ class WorkstreamPickerScreen(FuzzyPickerScreen):
     def _get_items(self) -> list[tuple[str, str]]:
         items = []
         for ws in self.workstreams:
-            label = f"{STATUS_ICONS[ws.status]} {_rich_escape(ws.name)}  [{C_DIM}]{ws.category.value}[/{C_DIM}]"
+            label = f"\u25cf {_rich_escape(ws.name)}  [{C_DIM}]{ws.category.value}[/{C_DIM}]"
             items.append((ws.id, label))
         items.append((_SENTINEL_NEW, f"[{C_GREEN}]+ Create new workstream[/{C_GREEN}]"))
         return items

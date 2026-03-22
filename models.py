@@ -12,48 +12,16 @@ from pathlib import Path
 from typing import Optional
 
 
-class Status(str, Enum):
-    QUEUED = "queued"
-    IN_PROGRESS = "in-progress"
-    AWAITING_REVIEW = "awaiting-review"
-    DONE = "done"
-    BLOCKED = "blocked"
-
-
 class Category(str, Enum):
     WORK = "work"
     PERSONAL = "personal"
     META = "meta"
 
 
-STATUS_ICONS = {
-    Status.QUEUED: "\u25cb",
-    Status.IN_PROGRESS: "\u25cf",
-    Status.AWAITING_REVIEW: "\u25c9",
-    Status.DONE: "\u2713",
-    Status.BLOCKED: "\u2717",
-}
-
-STATUS_COLORS = {
-    Status.QUEUED: "dim",
-    Status.IN_PROGRESS: "yellow",
-    Status.AWAITING_REVIEW: "cyan",
-    Status.DONE: "green",
-    Status.BLOCKED: "red",
-}
-
 CATEGORY_COLORS = {
     Category.WORK: "dodger_blue1",
     Category.PERSONAL: "medium_purple",
     Category.META: "dim",
-}
-
-STATUS_ORDER = {
-    Status.IN_PROGRESS: 0,
-    Status.BLOCKED: 1,
-    Status.AWAITING_REVIEW: 2,
-    Status.QUEUED: 3,
-    Status.DONE: 4,
 }
 
 
@@ -99,7 +67,6 @@ class Workstream:
     id: str = field(default_factory=lambda: str(uuid.uuid4())[:8])
     name: str = ""
     description: str = ""
-    status: Status = Status.QUEUED
     category: Category = Category.PERSONAL
     links: list[Link] = field(default_factory=list)
     notes: str = ""
@@ -112,7 +79,6 @@ class Workstream:
     created_at: str = field(default_factory=lambda: datetime.now().isoformat())
     updated_at: str = field(default_factory=lambda: datetime.now().isoformat())
     last_user_activity: str = ""  # timestamp of last user message (for stable sorting)
-    status_changed_at: str = field(default_factory=lambda: datetime.now().isoformat())
 
     def __post_init__(self):
         # Sanitize name: strip whitespace, fix "UB-XXXX: UB-XXXX" redundancy
@@ -136,12 +102,6 @@ class Workstream:
     def touch(self):
         self.updated_at = datetime.now().isoformat()
 
-    def set_status(self, new_status: Status):
-        if new_status != self.status:
-            self.status = new_status
-            self.status_changed_at = datetime.now().isoformat()
-            self.touch()
-
     @property
     def age(self) -> str:
         """Human-readable age since creation."""
@@ -163,7 +123,7 @@ class Workstream:
 
     @property
     def is_active(self) -> bool:
-        return self.status in (Status.IN_PROGRESS, Status.AWAITING_REVIEW)
+        return not self.archived
 
     def add_link(self, kind: str, value: str, label: str = "") -> Link:
         if not label:
@@ -181,7 +141,6 @@ class Workstream:
 
     def to_dict(self) -> dict:
         d = asdict(self)
-        d["status"] = self.status.value
         d["category"] = self.category.value
         for k in self._TRANSIENT_FIELDS:
             d.pop(k, None)
@@ -190,12 +149,12 @@ class Workstream:
     @classmethod
     def from_dict(cls, d: dict) -> Workstream:
         d = dict(d)
-        d["status"] = Status(d["status"])
         d["category"] = Category(d["category"])
         d["links"] = [Link(**lnk) for lnk in d.get("links", [])]
         # Migration: add fields that may not exist in old data
         d.setdefault("archived", False)
-        d.setdefault("status_changed_at", d.get("updated_at", d.get("created_at", "")))
+        d.pop("status", None)  # removed field — ignore from old data
+        d.pop("status_changed_at", None)  # removed field
         d.pop("origin", None)
         # Strip transient enrichment fields if somehow present in saved data
         for k in cls._TRANSIENT_FIELDS:
@@ -360,9 +319,6 @@ class Store:
     def by_category(self, cat: Category) -> list[Workstream]:
         return [w for w in self.workstreams if w.category == cat]
 
-    def by_status(self, status: Status) -> list[Workstream]:
-        return [w for w in self.workstreams if w.status == status]
-
     # --- New query methods ---
 
     @property
@@ -395,8 +351,6 @@ class Store:
     def filtered(
         self,
         category: Optional[Category] = None,
-        status: Optional[Status] = None,
-        active_only: bool = False,
         stale_only: bool = False,
         search: str = "",
         include_archived: bool = False,
@@ -405,10 +359,6 @@ class Store:
         streams = self.workstreams if include_archived else self.active
         if category:
             streams = [w for w in streams if w.category == category]
-        if status:
-            streams = [w for w in streams if w.status == status]
-        if active_only:
-            streams = [w for w in streams if w.is_active]
         if stale_only:
             streams = [w for w in streams if w.is_stale]
         if search:
@@ -419,17 +369,15 @@ class Store:
     def sorted(
         self,
         streams: list[Workstream],
-        sort_by: str = "status",
+        sort_by: str = "updated",
     ) -> list[Workstream]:
         """Sort workstreams."""
-        if sort_by == "status":
-            return sorted(streams, key=lambda w: (STATUS_ORDER.get(w.status, 99), w.updated_at))
-        elif sort_by == "updated":
+        if sort_by == "updated":
             return sorted(streams, key=lambda w: w.updated_at, reverse=True)
         elif sort_by == "created":
             return sorted(streams, key=lambda w: w.created_at, reverse=True)
         elif sort_by == "category":
-            return sorted(streams, key=lambda w: (w.category.value, STATUS_ORDER.get(w.status, 99)))
+            return sorted(streams, key=lambda w: (w.category.value, w.updated_at), reverse=True)
         elif sort_by == "name":
             return sorted(streams, key=lambda w: w.name.lower())
         elif sort_by == "activity":
@@ -452,13 +400,3 @@ class Store:
             return True
         return False
 
-    def archive_done(self) -> int:
-        """Archive all done workstreams. Returns count."""
-        count = 0
-        for ws in self.workstreams:
-            if ws.status == Status.DONE and not ws.archived:
-                ws.archived = True
-                count += 1
-        if count:
-            self.save()
-        return count

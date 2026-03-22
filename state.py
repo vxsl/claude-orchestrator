@@ -88,8 +88,8 @@ import re
 from dataclasses import dataclass, field
 
 from models import (
-    Category, Link, Status, Store, TodoItem, Workstream,
-    STATUS_ICONS, _relative_time,
+    Category, Link, Store, TodoItem, Workstream,
+    _relative_time,
 )
 from sessions import ClaudeSession, SessionMessage, extract_session_content, get_live_session_ids, refresh_session_tail
 from actions import (
@@ -486,6 +486,7 @@ class AppState:
         self._last_seen_valid: bool = False
         self._session_mtimes: dict[str, float] = {}  # session_id -> last known mtime
         self.git_status_cache: dict[str, object] = {}  # path -> WorktreeStatus
+        self.sessions_loaded: bool = False  # True after first session discovery completes
         self.infer_repo_paths()
 
     # ── Filtering & sorting ──
@@ -740,7 +741,6 @@ class AppState:
             ws = Workstream(
                 name=name,
                 repo_path=path,
-                status=Status.IN_PROGRESS,
                 category=Category.PERSONAL,
             )
             ws.add_link(kind="worktree", value=path, label=Path(path).name)
@@ -889,7 +889,6 @@ class AppState:
         ws = Workstream(
             name=name,
             repo_path=repo_path,
-            status=Status.IN_PROGRESS,
             category=Category.PERSONAL,
         )
         ws.add_link(kind="worktree", value=repo_path, label="repo")
@@ -966,14 +965,12 @@ class AppState:
     # ── Mutations ──
 
     def cycle_status(self, ws_id: str, forward: bool = True) -> Workstream | None:
-        """Cycle a workstream's status. Returns the workstream if found."""
+        """Toggle archived status (status concept removed)."""
         ws = self.get_ws(ws_id)
         if not ws:
             return None
-        statuses = list(Status)
-        idx = statuses.index(ws.status)
-        direction = 1 if forward else -1
-        ws.set_status(statuses[(idx + direction) % len(statuses)])
+        ws.archived = not ws.archived
+        ws.touch()
         self.store.update(ws)
         return ws
 
@@ -1147,6 +1144,7 @@ class AppState:
         self.sessions = sessions
         self.threads = threads
         self.discovered_ws = discovered
+        self.sessions_loaded = True
         self.invalidate_caches()
         self.infer_repo_paths()
 
@@ -1379,8 +1377,6 @@ class AppState:
 
     def do_export(self, path: str = "") -> tuple[str, int]:
         """Export active workstreams to markdown. Returns (output_path, count)."""
-        from rendering import _status_markup
-
         streams = self.store.active
         output = path or os.path.expanduser("~/workstreams/active.md")
 
@@ -1395,11 +1391,10 @@ class AppState:
                 continue
             lines.append(f"## {cat.value.title()}")
             lines.append("")
-            cat_streams = self.store.sorted(cat_streams, "status")
+            cat_streams = self.store.sorted(cat_streams, "updated")
             for ws in cat_streams:
-                ws_icon = STATUS_ICONS[ws.status]
-                lines.append(f"### {ws_icon} {ws.name}")
-                lines.append(f"**Status:** {ws.status.value} | **Updated:** {_relative_time(ws.updated_at)}")
+                lines.append(f"### {ws.name}")
+                lines.append(f"**Updated:** {_relative_time(ws.updated_at)}")
                 if ws.description:
                     lines.append(f"\n{ws.description}")
                 if ws.links:

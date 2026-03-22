@@ -44,8 +44,8 @@ OptionList.action_cursor_down = _option_list_cursor_down
 
 from config import build_app_bindings
 from models import (
-    Category, Link, Status, Store, Workstream,
-    STATUS_ICONS, _relative_time,
+    Category, Link, Store, Workstream,
+    _relative_time,
 )
 from sessions import ClaudeSession
 from threads import Thread, session_activity, mark_thread_seen, discover_threads
@@ -60,7 +60,7 @@ from rendering import (
     C_BLUE, C_CYAN, C_DIM, C_GREEN, C_PURPLE, C_RED, C_YELLOW,
     BG_BASE,
     _token_color, _token_color_markup,
-    _status_markup, _category_markup,
+    _category_markup,
     _is_session_seen,
     _render_session_option, _render_ws_option, _session_title,
     _rich_escape,
@@ -776,7 +776,7 @@ class OrchestratorApp(App):
             for s in ws_sessions[:8]  # cap to avoid huge tuples
         )
         git_fp = (git_st.branch, git_st.is_dirty, git_st.ahead) if git_st else None
-        return (ws.id, ws.name, ws.status, ws.category, len(ws_sessions),
+        return (ws.id, ws.name, ws.archived, ws.category, len(ws_sessions),
                 sess_fp, has_tmux, git_fp, lw)
 
     def _do_refresh_ws_table(self):
@@ -1038,8 +1038,7 @@ class OrchestratorApp(App):
 
         Used by thought-to-thread flows (brain dump launch, ticket pick, etc.)
         """
-        icon = STATUS_ICONS.get(ws.status, "")
-        self.tabs.open_tab(ws.id, ws.name, icon)
+        self.tabs.open_tab(ws.id, ws.name, "\u25cf")
         self._sync_tab_bar()
         self._detail_screen_active = True
         self.push_screen(
@@ -1193,7 +1192,6 @@ class OrchestratorApp(App):
                     name=task.name,
                     description=task.raw_text,
                     category=task.category,
-                    status=task.status,
                 )
                 self.state.store.add(ws)
                 created.append(ws)

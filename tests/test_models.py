@@ -6,8 +6,8 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from models import (
-    Category, Link, Status, Store, Workstream,
-    STATUS_ICONS, STATUS_ORDER, _relative_time,
+    Category, Link, Store, Workstream,
+    _relative_time,
 )
 
 
@@ -18,10 +18,6 @@ class TestWorkstreamDefaults:
         ws = Workstream(name="test")
         assert len(ws.id) == 8
 
-    def test_default_status(self):
-        ws = Workstream(name="test")
-        assert ws.status == Status.QUEUED
-
     def test_default_category(self):
         ws = Workstream(name="test")
         assert ws.category == Category.PERSONAL
@@ -30,7 +26,6 @@ class TestWorkstreamDefaults:
         ws = Workstream(name="test")
         assert ws.created_at
         assert ws.updated_at
-        assert ws.status_changed_at
 
     def test_empty_links_and_notes(self):
         ws = Workstream(name="test")
@@ -39,38 +34,13 @@ class TestWorkstreamDefaults:
         assert ws.archived is False
 
 
-class TestWorkstreamStatus:
-    def test_set_status_changes_value(self, sample_ws):
-        sample_ws.set_status(Status.DONE)
-        assert sample_ws.status == Status.DONE
-
-    def test_set_status_updates_timestamp(self, sample_ws):
-        old_ts = sample_ws.status_changed_at
-        sample_ws.set_status(Status.BLOCKED)
-        assert sample_ws.status_changed_at >= old_ts
-
-    def test_set_status_touches_updated(self, sample_ws):
-        old_updated = sample_ws.updated_at
-        sample_ws.set_status(Status.DONE)
-        assert sample_ws.updated_at >= old_updated
-
-    def test_set_same_status_no_change(self, sample_ws):
-        old_ts = sample_ws.status_changed_at
-        sample_ws.set_status(Status.IN_PROGRESS)  # same as current
-        assert sample_ws.status_changed_at == old_ts
-
-
 class TestWorkstreamProperties:
-    def test_is_active_in_progress(self):
-        ws = Workstream(name="test", status=Status.IN_PROGRESS)
+    def test_is_active_not_archived(self):
+        ws = Workstream(name="test")
         assert ws.is_active is True
 
-    def test_is_active_review(self):
-        ws = Workstream(name="test", status=Status.AWAITING_REVIEW)
-        assert ws.is_active is True
-
-    def test_is_active_queued(self):
-        ws = Workstream(name="test", status=Status.QUEUED)
+    def test_is_active_archived(self):
+        ws = Workstream(name="test", archived=True)
         assert ws.is_active is False
 
     def test_is_stale_fresh(self):
@@ -124,17 +94,15 @@ class TestWorkstreamSerialization:
         d = ws_with_links.to_dict()
         restored = Workstream.from_dict(d)
         assert restored.name == ws_with_links.name
-        assert restored.status == ws_with_links.status
         assert restored.category == ws_with_links.category
         assert len(restored.links) == len(ws_with_links.links)
 
     def test_to_dict_serializes_enums(self, sample_ws):
         d = sample_ws.to_dict()
-        assert d["status"] == "in-progress"
         assert d["category"] == "work"
 
     def test_from_dict_migration(self):
-        """Old data without status_changed_at should still load."""
+        """Old data with status field should still load (status is ignored)."""
         d = {
             "id": "test1234",
             "name": "Old workstream",
@@ -147,7 +115,6 @@ class TestWorkstreamSerialization:
             "updated_at": "2026-01-01T00:00:00",
         }
         ws = Workstream.from_dict(d)
-        assert ws.status_changed_at == "2026-01-01T00:00:00"
         assert ws.archived is False
 
     def test_from_dict_migration_no_repo_path(self):
@@ -228,11 +195,6 @@ class TestStoreFiltering:
         work = populated_store.by_category(Category.WORK)
         assert all(w.category == Category.WORK for w in work)
 
-    def test_by_status(self, populated_store):
-        blocked = populated_store.by_status(Status.BLOCKED)
-        assert all(w.status == Status.BLOCKED for w in blocked)
-        assert len(blocked) == 1
-
     def test_search(self, populated_store):
         results = populated_store.search("blocked")
         assert len(results) == 1
@@ -250,19 +212,11 @@ class TestStoreFiltering:
     def test_filtered_combined(self, populated_store):
         results = populated_store.filtered(
             category=Category.WORK,
-            active_only=True,
         )
         assert all(w.category == Category.WORK for w in results)
-        assert all(w.is_active for w in results)
 
 
 class TestStoreSorting:
-    def test_sort_by_status(self, populated_store):
-        streams = populated_store.active
-        sorted_streams = populated_store.sorted(streams, "status")
-        status_order = [STATUS_ORDER.get(w.status, 99) for w in sorted_streams]
-        assert status_order == sorted(status_order)
-
     def test_sort_by_name(self, populated_store):
         streams = populated_store.active
         sorted_streams = populated_store.sorted(streams, "name")
@@ -287,11 +241,6 @@ class TestStoreArchival:
         populated_store.archive(ws.id)
         populated_store.unarchive(ws.id)
         assert ws.id in [w.id for w in populated_store.active]
-
-    def test_archive_done(self, populated_store):
-        count = populated_store.archive_done()
-        assert count >= 1
-        assert all(w.status != Status.DONE for w in populated_store.active)
 
     def test_archived_property(self, populated_store):
         ws = populated_store.active[0]
@@ -344,24 +293,9 @@ class TestRelativeTime:
         assert _relative_time("") == "unknown"
 
 
-# ─── Status/Category Constants ──────────────────────────────────────
+# ─── Category Constants ──────────────────────────────────────────────
 
 class TestConstants:
-    def test_all_statuses_have_icons(self):
-        for status in Status:
-            assert status in STATUS_ICONS
-
-    def test_all_statuses_have_order(self):
-        for status in Status:
-            assert status in STATUS_ORDER
-
-    def test_status_enum_values(self):
-        assert Status.QUEUED.value == "queued"
-        assert Status.IN_PROGRESS.value == "in-progress"
-        assert Status.AWAITING_REVIEW.value == "awaiting-review"
-        assert Status.DONE.value == "done"
-        assert Status.BLOCKED.value == "blocked"
-
     def test_category_enum_values(self):
         assert Category.WORK.value == "work"
         assert Category.PERSONAL.value == "personal"

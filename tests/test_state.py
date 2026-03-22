@@ -10,7 +10,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
 
-from models import Category, Link, Status, Store, TodoItem, Workstream
+from models import Category, Link, Store, TodoItem, Workstream
 from sessions import ClaudeSession
 from threads import Thread, ThreadActivity
 from state import (
@@ -37,17 +37,17 @@ def populated_state(tmp_path):
     st = AppState(store)
 
     ws1 = Workstream(name="Active work item", description="Doing work",
-                     category=Category.WORK, status=Status.IN_PROGRESS)
+                     category=Category.WORK)
     ws2 = Workstream(name="Blocked task", description="Stuck on something",
-                     category=Category.WORK, status=Status.BLOCKED)
+                     category=Category.WORK)
     ws3 = Workstream(name="Personal project", description="Fun stuff",
-                     category=Category.PERSONAL, status=Status.QUEUED)
+                     category=Category.PERSONAL)
     ws4 = Workstream(name="Done item", description="Completed",
-                     category=Category.WORK, status=Status.DONE)
+                     category=Category.WORK)
     ws5 = Workstream(name="Meta tooling", description="Orchestrator improvements",
-                     category=Category.META, status=Status.IN_PROGRESS)
+                     category=Category.META)
     ws6 = Workstream(name="Review needed", description="PR open",
-                     category=Category.WORK, status=Status.AWAITING_REVIEW)
+                     category=Category.WORK)
 
     # Make ws3 stale
     old_time = (datetime.now() - timedelta(hours=48)).isoformat()
@@ -198,43 +198,33 @@ class TestWorkstreamLookup:
         assert state.get_session("nonexistent") is None
 
 
-# ─── Status Cycling ──────────────────────────────────────────────────
+# ─── Archive Toggle (was Status Cycling) ─────────────────────────────
 
-class TestStatusCycling:
-    def test_cycle_forward(self, populated_state):
+class TestArchiveToggle:
+    def test_toggle_archives(self, populated_state):
         ws = populated_state.store.active[0]
-        old_status = ws.status
+        assert not ws.archived
         result = populated_state.cycle_status(ws.id)
         assert result is not None
-        assert result.status != old_status
+        assert result.archived is True
 
-    def test_cycle_backward(self, populated_state):
+    def test_toggle_unarchives(self, populated_state):
         ws = populated_state.store.active[0]
-        old_status = ws.status
-        result = populated_state.cycle_status(ws.id, forward=False)
+        populated_state.cycle_status(ws.id)  # archive
+        result = populated_state.cycle_status(ws.id)  # unarchive
         assert result is not None
-        assert result.status != old_status
+        assert result.archived is False
 
-    def test_cycle_wraps_around(self, state):
-        ws = Workstream(name="test", status=Status.BLOCKED)
-        state.store.add(ws)
-        statuses_seen = set()
-        current = ws
-        for _ in range(len(Status)):
-            current = state.cycle_status(ws.id)
-            statuses_seen.add(current.status)
-        assert len(statuses_seen) == len(Status)
-
-    def test_cycle_nonexistent_returns_none(self, state):
+    def test_toggle_nonexistent_returns_none(self, state):
         assert state.cycle_status("nonexistent") is None
 
-    def test_cycle_persists(self, populated_state):
+    def test_toggle_persists(self, populated_state):
         ws = populated_state.store.active[0]
         populated_state.cycle_status(ws.id)
         # Reload
         populated_state.store.load()
         reloaded = populated_state.store.get(ws.id)
-        assert reloaded.status != Status.IN_PROGRESS or ws.status != Status.IN_PROGRESS
+        assert reloaded.archived is True
 
 
 # ─── Notes ───────────────────────────────────────────────────────────
@@ -488,7 +478,7 @@ class TestSessionManagement:
         assert len(state.threads) == 0
 
     def test_find_ws_for_session_by_link(self, state):
-        ws = Workstream(name="test", status=Status.IN_PROGRESS)
+        ws = Workstream(name="test")
         ws.add_link("claude-session", "abc123", "session")
         state.store.add(ws)
 
@@ -501,7 +491,7 @@ class TestSessionManagement:
         project_dir = tmp_path / "project"
         project_dir.mkdir()
 
-        ws = Workstream(name="test", status=Status.IN_PROGRESS)
+        ws = Workstream(name="test")
         ws.add_link("worktree", str(project_dir), "project")
         state.store.add(ws)
 
@@ -511,7 +501,7 @@ class TestSessionManagement:
         assert found.id == ws.id
 
     def test_find_ws_for_session_not_found(self, state):
-        ws = Workstream(name="test", status=Status.IN_PROGRESS)
+        ws = Workstream(name="test")
         state.store.add(ws)
         session = _make_session(project_path="/some/other/path")
         assert state.find_ws_for_session(session) is None
@@ -776,7 +766,6 @@ class TestRepoLinking:
         ws = state.create_ws_for_repo(str(d))
         assert ws.name == "new-project"
         assert ws.repo_path == str(d)
-        assert ws.status == Status.IN_PROGRESS
         assert any(l.kind == "worktree" and l.value == str(d) for l in ws.links)
         # Should be persisted
         assert state.store.get(ws.id) is not None

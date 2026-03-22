@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from unittest.mock import patch
 
-from models import Category, Status, Store, Workstream
+from models import Category, Store, Workstream
 from sessions import ClaudeSession
 from description_refresher import (
     _ws_context_hash,

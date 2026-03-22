@@ -2,13 +2,13 @@
 
 import pytest
 from datetime import datetime, timedelta, timezone
-from models import Category, Status, Workstream
+from models import Category, Workstream
 from sessions import ClaudeSession
 from threads import ThreadActivity
 from notifications import Notification
 from rendering import (
     _token_color, _colored_tokens, _token_color_markup,
-    _status_markup, _category_markup,
+    _category_markup,
     _ws_indicators, _short_project, _short_model,
     _activity_icon, _activity_badge, _best_activity,
     _render_notification_option,

@@ -9,9 +9,8 @@ from brain import (
     _clean_fragment,
     _extract_name,
     _detect_category,
-    _detect_status,
 )
-from models import Category, Status
+from models import Category
 
 
 # ─── Text Splitting ─────────────────────────────────────────────────
@@ -56,41 +55,6 @@ class TestSplitText:
     def test_dont_forget(self):
         parts = _split_text("fix the bug, don't forget to update docs")
         assert len(parts) >= 2
-
-
-# ─── Status Detection ───────────────────────────────────────────────
-
-class TestDetectStatus:
-    def test_blocked(self):
-        assert _detect_status("blocked on migration") == Status.BLOCKED
-
-    def test_waiting_on(self):
-        assert _detect_status("waiting on Logan's approval") == Status.BLOCKED
-
-    def test_stuck(self):
-        assert _detect_status("stuck on the config issue") == Status.BLOCKED
-
-    def test_review(self):
-        assert _detect_status("review Logan's MR") == Status.AWAITING_REVIEW
-
-    def test_pr(self):
-        # "PR" alone triggers review, but brain uses word boundary \bPR\b
-        assert _detect_status("check the PR review") == Status.AWAITING_REVIEW
-
-    def test_in_progress(self):
-        assert _detect_status("working on the API endpoint") == Status.IN_PROGRESS
-
-    def test_continue(self):
-        assert _detect_status("continue the migration work") == Status.IN_PROGRESS
-
-    def test_done(self):
-        assert _detect_status("auth fix is done") == Status.DONE
-
-    def test_finished(self):
-        assert _detect_status("finished the migration") == Status.DONE
-
-    def test_default_queued(self):
-        assert _detect_status("write some tests") == Status.QUEUED
 
 
 # ─── Category Detection ─────────────────────────────────────────────
@@ -148,12 +112,6 @@ class TestParseBrainDump:
     def test_simple_comma_list(self):
         tasks = parse_brain_dump("fix auth bug, also review Logan's MR, deploy staging")
         assert len(tasks) >= 2
-
-    def test_status_inference(self):
-        tasks = parse_brain_dump("deploy is blocked on migration, working on auth fix")
-        statuses = {t.status for t in tasks}
-        assert Status.BLOCKED in statuses
-        assert Status.IN_PROGRESS in statuses
 
     def test_category_inference(self):
         tasks = parse_brain_dump("deploy the staging pipeline, also update my dotfiles config")

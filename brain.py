@@ -9,7 +9,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-from models import Category, Status, Workstream
+from models import Category, Workstream
 
 
 # Patterns that suggest splitting points
@@ -71,7 +71,6 @@ class ParsedTask:
     raw_text: str
     name: str
     category: Category
-    status: Status
 
 
 def _clean_fragment(text: str) -> str:
@@ -127,19 +126,6 @@ def _detect_category(text: str) -> Category:
     return Category.PERSONAL
 
 
-def _detect_status(text: str) -> Status:
-    """Detect the most likely status from text content."""
-    text_lower = text.lower()
-
-    if any(re.search(pat, text_lower) for pat in DONE_KEYWORDS):
-        return Status.DONE
-    if any(re.search(pat, text_lower) for pat in BLOCKED_KEYWORDS):
-        return Status.BLOCKED
-    if any(re.search(pat, text_lower) for pat in REVIEW_KEYWORDS):
-        return Status.AWAITING_REVIEW
-    if any(re.search(pat, text_lower) for pat in PROGRESS_KEYWORDS):
-        return Status.IN_PROGRESS
-    return Status.QUEUED
 
 
 def _split_text(text: str) -> list[str]:
@@ -220,13 +206,11 @@ def parse_brain_dump(text: str) -> list[ParsedTask]:
 
         name = _extract_name(fragment)
         category = _detect_category(fragment)
-        status = _detect_status(fragment)
 
         tasks.append(ParsedTask(
             raw_text=fragment.strip(),
             name=name,
             category=category,
-            status=status,
         ))
 
     return tasks
@@ -242,7 +226,6 @@ def brain_dump_to_workstreams(text: str) -> list[Workstream]:
             name=task.name,
             description=task.raw_text,
             category=task.category,
-            status=task.status,
         )
         workstreams.append(ws)
 

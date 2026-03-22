@@ -29,7 +29,7 @@ from rendering import (
     BG_RAISED, BG_BASE, BG_SURFACE,
     C_BLUE, C_CYAN, C_DIM, C_FAINT, C_MID, C_ORANGE,
     C_PURPLE, C_YELLOW,
-    STATUS_THEME, CATEGORY_THEME,
+    CATEGORY_THEME,
 )
 from sessions import ClaudeSession, parse_session
 from terminal import TerminalWidget
@@ -117,13 +117,9 @@ class SessionHeaderWidget(Static):
         self._jsonl_path = jsonl_path
         self._initial_title = initial_title
         self._start_time = time.time()
-        # Resolve status/category colors once
+        # Resolve category color once (status removed)
         self._sc = C_DIM
         self._cc = C_DIM
-        for k, v in STATUS_THEME.items():
-            if k and k.value == ws_status:
-                self._sc = v
-                break
         for k, v in CATEGORY_THEME.items():
             if k and k.value == ws_category:
                 self._cc = v
@@ -376,8 +372,6 @@ class ClaudeSessionScreen(Screen):
         parts = [f'You are working on the brain workstream: "{ws.name}"']
         if ws.description:
             parts.append(f"Description: {ws.description}")
-        if ws.status:
-            parts.append(f"Status: {ws.status.value}")
         if ws.category:
             parts.append(f"Category: {ws.category.value}")
         if ws.notes:
@@ -507,7 +501,7 @@ set status-view-show-untracked-dirs = no
             with Vertical(id="cs-main-col"):
                 yield SessionHeaderWidget(
                     ws_name=self._ws.name,
-                    ws_status=self._ws.status.value if self._ws.status else "",
+                    ws_status="archived" if self._ws.archived else "active",
                     ws_category=self._ws.category.value if self._ws.category else "",
                     session_id=self._session_id,
                     jsonl_path=self._jsonl,

@@ -3,7 +3,7 @@
 import pytest
 from unittest.mock import patch, MagicMock
 
-from models import Category, Status, Workstream
+from models import Category, Workstream
 from sessions import ClaudeSession
 from actions import (
     ws_directories, ws_working_dir,

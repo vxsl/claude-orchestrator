@@ -5,7 +5,7 @@ import pytest
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from models import Category, Link, Status, Store, Workstream
+from models import Category, Link, Store, Workstream
 
 
 @pytest.fixture
@@ -21,7 +21,6 @@ def sample_ws():
         name="Test workstream",
         description="A test description",
         category=Category.WORK,
-        status=Status.IN_PROGRESS,
     )
 
 
@@ -31,17 +30,17 @@ def populated_store(tmp_path):
     store = Store(path=tmp_path / "test_data.json")
 
     ws1 = Workstream(name="Active work item", description="Doing work",
-                     category=Category.WORK, status=Status.IN_PROGRESS)
+                     category=Category.WORK)
     ws2 = Workstream(name="Blocked task", description="Stuck on something",
-                     category=Category.WORK, status=Status.BLOCKED)
+                     category=Category.WORK)
     ws3 = Workstream(name="Personal project", description="Fun stuff",
-                     category=Category.PERSONAL, status=Status.QUEUED)
+                     category=Category.PERSONAL)
     ws4 = Workstream(name="Done item", description="Completed",
-                     category=Category.WORK, status=Status.DONE)
+                     category=Category.WORK)
     ws5 = Workstream(name="Meta tooling", description="Orchestrator improvements",
-                     category=Category.META, status=Status.IN_PROGRESS)
+                     category=Category.META)
     ws6 = Workstream(name="Review needed", description="PR open",
-                     category=Category.WORK, status=Status.AWAITING_REVIEW)
+                     category=Category.WORK)
 
     # Make ws3 stale (updated >24h ago)
     old_time = (datetime.now() - timedelta(hours=48)).isoformat()
@@ -56,7 +55,7 @@ def populated_store(tmp_path):
 @pytest.fixture
 def ws_with_links():
     """Workstream with various link types."""
-    ws = Workstream(name="Linked workstream", category=Category.WORK, status=Status.IN_PROGRESS)
+    ws = Workstream(name="Linked workstream", category=Category.WORK)
     ws.add_link("worktree", "~/work/repos/project", "project")
     ws.add_link("ticket", "UB-1234", "UB-1234")
     ws.add_link("file", "~/workstreams/notes.md", "notes")

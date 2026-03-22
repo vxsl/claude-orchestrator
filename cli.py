@@ -11,8 +11,8 @@ from datetime import datetime
 from pathlib import Path
 
 from models import (
-    Category, Link, Status, Store, TodoItem, Workstream,
-    STATUS_ICONS, STATUS_COLORS, CATEGORY_COLORS, STATUS_ORDER,
+    Category, Link, Store, TodoItem, Workstream,
+    CATEGORY_COLORS,
     _relative_time,
 )
 
@@ -34,13 +34,6 @@ ANSI = {
     "gray": "\033[90m",
 }
 
-STATUS_ANSI = {
-    Status.QUEUED: ANSI["gray"],
-    Status.IN_PROGRESS: ANSI["yellow"],
-    Status.AWAITING_REVIEW: ANSI["cyan"],
-    Status.DONE: ANSI["green"],
-    Status.BLOCKED: ANSI["red"],
-}
 
 CATEGORY_ANSI = {
     Category.WORK: ANSI["blue"],
@@ -62,12 +55,6 @@ def _c(color: str, text: str) -> str:
     return f"{ANSI.get(color, '')}{text}{ANSI['reset']}"
 
 
-def _status_str(status: Status) -> str:
-    icon = STATUS_ICONS[status]
-    color = STATUS_ANSI[status]
-    return f"{color}{icon} {status.value}{ANSI['reset']}"
-
-
 def _cat_str(cat: Category) -> str:
     color = CATEGORY_ANSI[cat]
     return f"{color}{cat.value}{ANSI['reset']}"
@@ -75,8 +62,9 @@ def _cat_str(cat: Category) -> str:
 
 def _ws_line(ws: Workstream, show_age: bool = True) -> str:
     """Format a workstream as a single line."""
+    icon = "\U0001f4e6" if ws.archived else "\u25cf"
     parts = [
-        f"  {_status_str(ws.status)}",
+        f"  {icon}",
         f"{_c('dim', '[')}{ws.id[:8]}{_c('dim', ']')}",
         f"{_c('bold', ws.name)}",
         f"({_cat_str(ws.category)})",
@@ -85,7 +73,7 @@ def _ws_line(ws: Workstream, show_age: bool = True) -> str:
         parts.append(_c("dim", _relative_time(ws.updated_at)))
     if ws.links:
         parts.append(_c("dim", f"\U0001f517{len(ws.links)}"))
-    if ws.is_stale and ws.status != Status.DONE:
+    if ws.is_stale:
         parts.append(_c("yellow", "\u23f0"))
     return " ".join(parts)
 
@@ -107,7 +95,6 @@ def cmd_add(args):
         name=args.name,
         description=args.description or "",
         category=Category(args.category),
-        status=Status(args.status) if args.status else Status.QUEUED,
     )
     if args.link:
         for link_str in args.link:
@@ -128,13 +115,11 @@ def cmd_list(args):
 
     if args.category:
         streams = [w for w in streams if w.category.value == args.category]
-    if args.status:
-        streams = [w for w in streams if w.status.value == args.status]
     if args.search:
         q = args.search.lower()
         streams = [w for w in streams if q in w.name.lower() or q in w.description.lower()]
 
-    sort_by = getattr(args, "sort", "status") or "status"
+    sort_by = getattr(args, "sort", "updated") or "updated"
     streams = store.sorted(streams, sort_by)
 
     if not streams:
@@ -161,12 +146,11 @@ def cmd_show(args):
     ws = _resolve_ws(store, args.id)
 
     print(f"\n  {_c('bold', ws.name)}")
-    print(f"  {_status_str(ws.status)}  {_cat_str(ws.category)}")
+    print(f"  {_cat_str(ws.category)}")
     print(f"  {_c('dim', 'ID:')} {ws.id}")
     print()
     print(f"  {_c('dim', 'Created:')}   {ws.created_at[:19]}  ({_relative_time(ws.created_at)})")
     print(f"  {_c('dim', 'Updated:')}   {ws.updated_at[:19]}  ({_relative_time(ws.updated_at)})")
-    print(f"  {_c('dim', 'Status \u0394:')}  {ws.status_changed_at[:19]}  ({_relative_time(ws.status_changed_at)})")
     if ws.archived:
         print(f"  {_c('dim', 'Archived')}")
     print()
@@ -193,13 +177,12 @@ def cmd_show(args):
     print()
 
 
-def cmd_status(args):
+def cmd_archive_id(args):
+    """Archive a specific workstream by ID."""
     store = Store()
     ws = _resolve_ws(store, args.id)
-    old_status = ws.status
-    ws.set_status(Status(args.new_status))
-    store.update(ws)
-    print(f"  {_status_str(old_status)} \u2192 {_status_str(ws.status)}  {_c('bold', ws.name)}")
+    store.archive(ws.id)
+    print(f"  {_c('green', '\u2713')} Archived: {_c('bold', ws.name)}")
 
 
 def cmd_tui(args):
@@ -229,36 +212,36 @@ def cmd_seed(args):
     store.workstreams = []
 
     tonight = [
-        ("xmonad cleanup", "Clean WIP commits, remove PII, organize", Category.PERSONAL, Status.DONE,
+        ("xmonad cleanup", "Clean WIP commits, remove PII, organize", Category.PERSONAL, True,
          [Link("file", "sandbox", "~/cleanup/xmonad/")]),
-        ("bin cleanup", "Clean WIP commits, organize 17+ files, remove PII", Category.PERSONAL, Status.DONE,
+        ("bin cleanup", "Clean WIP commits, organize 17+ files, remove PII", Category.PERSONAL, True,
          [Link("file", "sandbox", "~/cleanup/bin/")]),
-        (".dotfiles cleanup", "Clean WIP commits, remove PII, organize configs", Category.PERSONAL, Status.DONE,
+        (".dotfiles cleanup", "Clean WIP commits, remove PII, organize configs", Category.PERSONAL, True,
          [Link("file", "sandbox", "~/cleanup/dotfiles/")]),
-        ("dev-workflow-tools cleanup", "Clean 5+ WIP commits, fix bash/zsh compat (PR #1)", Category.PERSONAL, Status.DONE,
+        ("dev-workflow-tools cleanup", "Clean 5+ WIP commits, fix bash/zsh compat (PR #1)", Category.PERSONAL, True,
          [Link("file", "sandbox", "~/cleanup/dev-workflow-tools/"),
           Link("url", "PR #1", "https://github.com/vxsl/dev-workflow-tools/pull/1")]),
-        ("FE testing deep dive", "Vitest DX + browser testing + coverage badge for Dove", Category.WORK, Status.IN_PROGRESS,
+        ("FE testing deep dive", "Vitest DX + browser testing + coverage badge for Dove", Category.WORK, False,
          [Link("worktree", "ul main", "~/work/repos/ul"),
           Link("file", "prompt", "~/workstreams/01-fe-testing.md")]),
-        ("CLAUDE.md", "FE-focused CLAUDE.md for work repo", Category.WORK, Status.IN_PROGRESS,
+        ("CLAUDE.md", "FE-focused CLAUDE.md for work repo", Category.WORK, False,
          [Link("worktree", "ul main", "~/work/repos/ul"),
           Link("file", "prompt", "~/workstreams/02-claude-md.md")]),
-        ("UB-6732 + UB-6730", "Complete calendar periods + expression-aware time ranges", Category.WORK, Status.IN_PROGRESS,
+        ("UB-6732 + UB-6730", "Complete calendar periods + expression-aware time ranges", Category.WORK, False,
          [Link("worktree", "UB-6668", "~/work/repos/ul.UB-6668-implement-new-metric-centric-time-handli"),
           Link("ticket", "UB-6732", "UB-6732"), Link("ticket", "UB-6730", "UB-6730"),
           Link("file", "prompt", "~/workstreams/05-ub-tickets.md")]),
-        ("AI Show & Tell presentation", "Worktrees + AI workflow slides + speaker notes", Category.WORK, Status.IN_PROGRESS,
+        ("AI Show & Tell presentation", "Worktrees + AI workflow slides + speaker notes", Category.WORK, False,
          [Link("file", "prompt", "~/workstreams/04-presentation.md")]),
-        ("Claude orchestrator v1", "TUI dashboard for managing parallel AI workstreams", Category.META, Status.IN_PROGRESS,
+        ("Claude orchestrator v1", "TUI dashboard for managing parallel AI workstreams", Category.META, False,
          [Link("file", "source", "~/dev/claude-orchestrator/")]),
-        ("hud-daemon Claude usage", "Add Claude usage at-a-glance to eww HUD", Category.PERSONAL, Status.IN_PROGRESS,
+        ("hud-daemon Claude usage", "Add Claude usage at-a-glance to eww HUD", Category.PERSONAL, False,
          [Link("file", "sandbox", "~/cleanup/bin/hud-daemon"),
           Link("file", "prompt", "~/workstreams/06-hud-daemon.md")]),
     ]
 
-    for name, desc, cat, status, links in tonight:
-        ws = Workstream(name=name, description=desc, category=cat, status=status, links=links)
+    for name, desc, cat, archived, links in tonight:
+        ws = Workstream(name=name, description=desc, category=cat, archived=archived, links=links)
         store.add(ws)
 
     print(f"  {_c('green', '\u2713')} Seeded {len(tonight)} workstreams.")
@@ -278,7 +261,7 @@ def cmd_brain(args):
     print(f"\n  {_c('bold', f'Parsed {len(tasks)} tasks:')}\n")
     for i, task in enumerate(tasks, 1):
         print(f"  {_c('dim', str(i) + '.')} {_c('bold', task.name)}")
-        print(f"     {_status_str(task.status)}  {_cat_str(task.category)}")
+        print(f"     {_cat_str(task.category)}")
         if task.raw_text != task.name:
             print(f"     {_c('dim', task.raw_text[:80])}")
         print()
@@ -302,7 +285,6 @@ def cmd_brain(args):
             name=task.name,
             description=task.raw_text,
             category=task.category,
-            status=task.status,
         )
         store.add(ws)
     print(f"\n  {_c('green', '\u2713')} Added {len(tasks)} workstreams.")
@@ -351,11 +333,7 @@ def cmd_archive(args):
         store.archive(ws.id)
         print(f"  {_c('green', '\u2713')} Archived: {_c('bold', ws.name)}")
     else:
-        count = store.archive_done()
-        if count:
-            print(f"  {_c('green', '\u2713')} Archived {count} completed workstreams.")
-        else:
-            print(_c("dim", "  No completed workstreams to archive."))
+        print(_c("dim", "  Specify a workstream ID to archive."))
 
 
 def cmd_unarchive(args):
@@ -573,9 +551,8 @@ def cmd_export(args):
 
         cat_streams = store.sorted(cat_streams, "status")
         for ws in cat_streams:
-            icon = STATUS_ICONS[ws.status]
-            lines.append(f"### {icon} {ws.name}")
-            lines.append(f"**Status:** {ws.status.value} | **Updated:** {_relative_time(ws.updated_at)}")
+            lines.append(f"### {ws.name}")
+            lines.append(f"**Updated:** {_relative_time(ws.updated_at)}")
             if ws.description:
                 lines.append(f"\n{ws.description}")
             if ws.links:
@@ -649,14 +626,8 @@ def cmd_import(args):
         if not current_ws:
             continue
 
-        # Status line: **Status:** in-progress | **Updated:** 3h ago
-        if stripped.startswith("**Status:**"):
-            status_match = re.search(r"\*\*Status:\*\*\s*(\S+)", stripped)
-            if status_match:
-                try:
-                    current_ws.status = Status(status_match.group(1))
-                except ValueError:
-                    pass
+        # Legacy status line or updated line — skip
+        if stripped.startswith("**Status:**") or stripped.startswith("**Updated:**"):
             continue
 
         # Notes section
@@ -753,7 +724,7 @@ _orch_completions() {
     cur="${COMP_WORDS[COMP_CWORD]}"
     prev="${COMP_WORDS[COMP_CWORD-1]}"
 
-    commands="tui dash add list ls show status brain link note archive unarchive history sessions resume watch spawn export import seed completions"
+    commands="tui dash add list ls show brain link note archive unarchive history sessions resume watch spawn export import seed completions"
 
     case "$prev" in
         orch)
@@ -764,19 +735,15 @@ _orch_completions() {
             COMPREPLY=( $(compgen -W "work personal meta" -- "$cur") )
             return 0
             ;;
-        -s|--status)
-            COMPREPLY=( $(compgen -W "queued in-progress awaiting-review done blocked" -- "$cur") )
-            return 0
-            ;;
         -S|--sort)
-            COMPREPLY=( $(compgen -W "status updated created category name" -- "$cur") )
+            COMPREPLY=( $(compgen -W "updated created category name" -- "$cur") )
             return 0
             ;;
         --shell)
             COMPREPLY=( $(compgen -W "bash zsh" -- "$cur") )
             return 0
             ;;
-        show|status|link|note|archive|unarchive|resume|watch|spawn)
+        show|link|note|archive|unarchive|resume|watch|spawn)
             # Complete with workstream IDs
             local ids
             ids=$(orch list 2>/dev/null | grep -oP '\\[\\K[a-f0-9]{8}' | sort -u)
@@ -788,8 +755,8 @@ _orch_completions() {
     if [[ "$cur" == -* ]]; then
         local opts="-h --help"
         case "${COMP_WORDS[1]}" in
-            add)  opts="-h -d --description -c --category -s --status -l --link" ;;
-            list|ls)  opts="-h -c --category -s --status -S --sort --search --archived" ;;
+            add)  opts="-h -d --description -c --category -l --link --archived" ;;
+            list|ls)  opts="-h -c --category -S --sort --search --archived" ;;
             link) opts="-h -l --label" ;;
             sessions) opts="-h -p --project -n --limit" ;;
             export) opts="-h -o --output" ;;
@@ -819,7 +786,6 @@ _orch() {
         'list:List workstreams'
         'ls:List workstreams (alias)'
         'show:Show full details of a workstream'
-        'status:Update status of a workstream'
         'brain:Parse stream-of-consciousness text into workstreams'
         'link:Add a link to a workstream'
         'note:Add a note to a workstream'
@@ -835,9 +801,8 @@ _orch() {
         'seed:Seed with sample workstreams'
         'completions:Generate shell completion script'
     )
-    statuses=(queued in-progress awaiting-review done blocked)
     categories=(work personal meta)
-    sorts=(status updated created category name)
+    sorts=(updated created category name)
     shells=(bash zsh)
 
     _arguments -C \\
@@ -855,18 +820,17 @@ _orch() {
                         '1:name:' \\
                         '-d[Description]:description:' \\
                         '-c[Category]:category:($categories)' \\
-                        '-s[Status]:status:($statuses)' \\
+                        '--archived[Create as archived]' \\
                         '*-l[Link]:link:'
                     ;;
                 list|ls)
                     _arguments \\
                         '-c[Category]:category:($categories)' \\
-                        '-s[Status]:status:($statuses)' \\
                         '-S[Sort]:sort:($sorts)' \\
                         '--search[Search]:query:' \\
                         '--archived[Show archived]'
                     ;;
-                show|status|link|note|archive|unarchive|resume|watch|spawn)
+                show|link|note|archive|unarchive|resume|watch|spawn)
                     _arguments '1:id:'
                     ;;
                 brain)
@@ -927,7 +891,7 @@ use 'orch <command> --help' for detailed help on each command.
         epilog="""\
 examples:
   orch add "fix login bug"
-  orch add "deploy v2.1" -c work -s in-progress
+  orch add "deploy v2.1" -c work
   orch add "review PR" -c work -l url:https://github.com/org/repo/pull/42
   orch add "update docs" -d "API docs are out of date" -l file:~/docs/api.md
 """)
@@ -935,8 +899,8 @@ examples:
     p_add.add_argument("-d", "--description", default="", help="Description")
     p_add.add_argument("-c", "--category", choices=[c.value for c in Category], default="personal",
                        help="Category (default: personal)")
-    p_add.add_argument("-s", "--status", choices=[s.value for s in Status], default=None,
-                       help="Initial status (default: queued)")
+    p_add.add_argument("--archived", action="store_true", default=False,
+                       help="Create as archived")
     p_add.add_argument("-l", "--link", action="append",
                        help="Link as kind:value (e.g. ticket:UB-1234)")
 
@@ -947,7 +911,6 @@ examples:
 examples:
   orch list                            All active workstreams
   orch list -c work                    Only work items
-  orch list -s blocked                 Only blocked items
   orch list -S updated                 Sort by last updated
   orch list --search "auth"            Search by name/description
   orch list --archived                 Show archived items
@@ -955,10 +918,8 @@ examples:
 """)
     p_list.add_argument("-c", "--category", choices=[c.value for c in Category],
                        help="Filter by category")
-    p_list.add_argument("-s", "--status", choices=[s.value for s in Status],
-                       help="Filter by status")
-    p_list.add_argument("-S", "--sort", choices=["status", "updated", "created", "category", "name"],
-                       default="status", help="Sort order (default: status)")
+    p_list.add_argument("-S", "--sort", choices=["updated", "created", "category", "name"],
+                       default="updated", help="Sort order (default: updated)")
     p_list.add_argument("--search", help="Search by name/description")
     p_list.add_argument("--archived", action="store_true", help="Show archived items instead")
 
@@ -971,21 +932,6 @@ examples:
   orch show ef7d                       Show by ID prefix (if unambiguous)
 """)
     p_show.add_argument("id", help="Workstream ID (or unique prefix)")
-
-    # status
-    p_status = sub.add_parser("status", help="Update status of a workstream",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""\
-examples:
-  orch status ef7d in-progress         Set to in-progress
-  orch status ef7d done                Mark as done
-  orch status ef7d blocked             Mark as blocked
-
-statuses: queued, in-progress, awaiting-review, done, blocked
-""")
-    p_status.add_argument("id", help="Workstream ID (or prefix)")
-    p_status.add_argument("new_status", choices=[s.value for s in Status],
-                         help="New status")
 
     # brain
     p_brain = sub.add_parser("brain", help="Parse stream-of-consciousness text into workstreams",
@@ -1173,7 +1119,6 @@ examples:
         "list": cmd_list,
         "ls": cmd_list,
         "show": cmd_show,
-        "status": cmd_status,
         "brain": cmd_brain,
         "link": cmd_link,
         "note": cmd_note,

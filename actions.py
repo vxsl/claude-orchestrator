@@ -228,7 +228,6 @@ def launch_orch_claude(
         "--ws-id", ws.id,
         "--ws-name", ws.name,
         "--ws-desc", ws.description or "",
-        "--ws-status", ws.status.value,
         "--ws-category", ws.category.value,
         "--cwd", cwd,
     ]

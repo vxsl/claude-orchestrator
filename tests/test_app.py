@@ -5,14 +5,13 @@ import pytest
 from unittest.mock import patch, MagicMock
 from pathlib import Path
 
-from models import Category, Link, Status, Store, Workstream
+from models import Category, Link, Store, Workstream
 from app import OrchestratorApp
 from screens import SessionPickerScreen
 from rendering import (
     _ws_indicators,
     _short_project,
     _short_model,
-    _status_markup,
     _category_markup,
 )
 from actions import (
@@ -27,14 +26,6 @@ from sessions import ClaudeSession
 # ─── Helper Function Tests ──────────────────────────────────────────
 
 class TestMarkupHelpers:
-    def test_status_markup_contains_icon(self):
-        result = _status_markup(Status.IN_PROGRESS)
-        assert "\u25cf" in result  # ● icon
-
-    def test_status_markup_contains_value(self):
-        result = _status_markup(Status.BLOCKED)
-        assert "blocked" in result
-
     def test_category_markup_contains_value(self):
         result = _category_markup(Category.WORK)
         assert "work" in result
@@ -42,27 +33,19 @@ class TestMarkupHelpers:
 
 class TestWsIndicators:
     def test_no_indicators(self):
-        ws = Workstream(name="test", status=Status.IN_PROGRESS)
+        ws = Workstream(name="test")
         result = _ws_indicators(ws)
         assert result == ""
 
     def test_stale_indicator(self):
-        ws = Workstream(name="test", status=Status.IN_PROGRESS)
+        ws = Workstream(name="test")
         from datetime import datetime, timedelta
         ws.updated_at = (datetime.now() - timedelta(hours=48)).isoformat()
         result = _ws_indicators(ws)
         assert "\u23f0" in result  # ⏰
 
-    def test_done_not_stale(self):
-        """Done workstreams don't show stale indicator even if old."""
-        ws = Workstream(name="test", status=Status.DONE)
-        from datetime import datetime, timedelta
-        ws.updated_at = (datetime.now() - timedelta(hours=48)).isoformat()
-        result = _ws_indicators(ws)
-        assert "\u23f0" not in result
-
     def test_link_indicators(self):
-        ws = Workstream(name="test", status=Status.IN_PROGRESS)
+        ws = Workstream(name="test")
         ws.add_link("worktree", "~/work/project", "project")
         ws.add_link("ticket", "UB-1234", "ticket")
         result = _ws_indicators(ws)
@@ -70,7 +53,7 @@ class TestWsIndicators:
         assert "\U0001f3ab" in result  # 🎫
 
     def test_tmux_indicator(self):
-        ws = Workstream(name="test", status=Status.IN_PROGRESS)
+        ws = Workstream(name="test")
         result = _ws_indicators(ws, tmux_check=lambda _: True)
         assert "\u26a1" in result  # ⚡
 
@@ -96,7 +79,7 @@ class TestSessionAutoDiscovery:
         project_dir = tmp_path / "project"
         project_dir.mkdir()
 
-        ws = Workstream(name="test", status=Status.IN_PROGRESS)
+        ws = Workstream(name="test")
         ws.add_link("worktree", str(project_dir), "project")
 
         session = self._make_session(project_path=str(project_dir))
@@ -109,7 +92,7 @@ class TestSessionAutoDiscovery:
         project_dir = tmp_path / "project"
         project_dir.mkdir()
 
-        ws = Workstream(name="test", status=Status.IN_PROGRESS)
+        ws = Workstream(name="test")
         ws.add_link("file", str(project_dir), "source")
 
         session = self._make_session(project_path=str(project_dir))
@@ -117,7 +100,7 @@ class TestSessionAutoDiscovery:
         assert len(found) == 1
 
     def test_match_explicit_session_link(self):
-        ws = Workstream(name="test", status=Status.IN_PROGRESS)
+        ws = Workstream(name="test")
         ws.add_link("claude-session", "abc123", "session")
 
         session = self._make_session(session_id="abc123")
@@ -129,7 +112,7 @@ class TestSessionAutoDiscovery:
         project_dir = tmp_path / "project"
         project_dir.mkdir()
 
-        ws = Workstream(name="test", status=Status.IN_PROGRESS)
+        ws = Workstream(name="test")
         ws.add_link("claude-session", "abc123", "session")
         ws.add_link("worktree", str(project_dir), "project")
 
@@ -138,7 +121,7 @@ class TestSessionAutoDiscovery:
         assert len(found) == 1
 
     def test_no_match(self):
-        ws = Workstream(name="test", status=Status.IN_PROGRESS)
+        ws = Workstream(name="test")
         session = self._make_session(project_path="/some/other/path")
         found = _find_sessions_for_ws(ws, [session])
         assert len(found) == 0
@@ -147,7 +130,7 @@ class TestSessionAutoDiscovery:
         project_dir = tmp_path / "project"
         project_dir.mkdir()
 
-        ws = Workstream(name="test", status=Status.IN_PROGRESS)
+        ws = Workstream(name="test")
         ws.add_link("worktree", str(project_dir), "project")
 
         s1 = self._make_session(session_id="old", project_path=str(project_dir),
@@ -228,7 +211,7 @@ class TestLaunchOrchClaude:
 
     def test_builds_resume_command(self, tmp_path):
         """Verify the wrapper is called with correct args for resume."""
-        ws = Workstream(name="Test thread", description="A test", category=Category.WORK, status=Status.IN_PROGRESS)
+        ws = Workstream(name="Test thread", description="A test", category=Category.WORK)
         ws.add_link("worktree", str(tmp_path), "project")
 
         import unittest.mock as mock
@@ -243,7 +226,7 @@ class TestLaunchOrchClaude:
 
     def test_builds_spawn_command(self, tmp_path):
         """Verify the wrapper is called with correct args for new session."""
-        ws = Workstream(name="Test", description="", category=Category.PERSONAL, status=Status.QUEUED)
+        ws = Workstream(name="Test", description="", category=Category.PERSONAL)
 
         import unittest.mock as mock
         with mock.patch("actions.subprocess.run", side_effect=_mock_tmux_run) as mock_run:
@@ -255,7 +238,7 @@ class TestLaunchOrchClaude:
             assert "--resume" not in cmd
 
     def test_includes_notes_truncated(self):
-        ws = Workstream(name="Test", status=Status.IN_PROGRESS)
+        ws = Workstream(name="Test")
         ws.notes = "x" * 1000
 
         import unittest.mock as mock
@@ -267,7 +250,7 @@ class TestLaunchOrchClaude:
             assert len(notes_val) <= 500
 
     def test_no_notes_when_empty(self):
-        ws = Workstream(name="Test", status=Status.IN_PROGRESS)
+        ws = Workstream(name="Test")
 
         import unittest.mock as mock
         with mock.patch("actions.subprocess.run", side_effect=_mock_tmux_run) as mock_run:
@@ -277,7 +260,7 @@ class TestLaunchOrchClaude:
 
     def test_creates_window_in_worker_session(self):
         """Claude windows are created in orch-workers, then linked into orch."""
-        ws = Workstream(name="Test", status=Status.IN_PROGRESS)
+        ws = Workstream(name="Test")
 
         import unittest.mock as mock
         with mock.patch("actions.subprocess.run", side_effect=_mock_tmux_run) as mock_run:
@@ -305,9 +288,9 @@ def app_with_store(tmp_path):
 
     # Pre-populate with test data
     store = Store(path=store_path)
-    ws1 = Workstream(name="Alpha", category=Category.WORK, status=Status.IN_PROGRESS)
-    ws2 = Workstream(name="Beta", category=Category.PERSONAL, status=Status.QUEUED)
-    ws3 = Workstream(name="Gamma", category=Category.META, status=Status.DONE)
+    ws1 = Workstream(name="Alpha", category=Category.WORK)
+    ws2 = Workstream(name="Beta", category=Category.PERSONAL)
+    ws3 = Workstream(name="Gamma", category=Category.META)
     for ws in [ws1, ws2, ws3]:
         store.add(ws)
 
@@ -1020,7 +1003,7 @@ class TestEnrichmentRendering:
     def test_jira_status_renders(self):
         """Workstream with ticket_key and ticket_status shows Jira badge."""
         from rendering import _render_ws_option
-        ws = Workstream(name="Test WS", category=Category.WORK, status=Status.IN_PROGRESS)
+        ws = Workstream(name="Test WS", category=Category.WORK)
         ws.ticket_key = "UB-1234"
         ws.ticket_status = "In Progress"
         result = _render_ws_option(ws, [], {})
@@ -1030,7 +1013,7 @@ class TestEnrichmentRendering:
     def test_mr_badge_renders(self):
         """Workstream with mr_url shows MR badge."""
         from rendering import _render_ws_option
-        ws = Workstream(name="Test WS", category=Category.WORK, status=Status.IN_PROGRESS)
+        ws = Workstream(name="Test WS", category=Category.WORK)
         ws.mr_url = "https://gitlab.com/mr/1"
         result = _render_ws_option(ws, [], {})
         assert "MR" in result
@@ -1038,7 +1021,7 @@ class TestEnrichmentRendering:
     def test_ticket_solve_badge_renders(self):
         """Workstream with ticket_solve_status shows solving badge."""
         from rendering import _render_ws_option
-        ws = Workstream(name="Test WS", category=Category.WORK, status=Status.IN_PROGRESS)
+        ws = Workstream(name="Test WS", category=Category.WORK)
         ws.ticket_solve_status = "running"
         result = _render_ws_option(ws, [], {})
         assert "solving" in result
@@ -1046,7 +1029,7 @@ class TestEnrichmentRendering:
     def test_no_enrichment_renders_clean(self):
         """Workstream without enrichment data renders without badges."""
         from rendering import _render_ws_option
-        ws = Workstream(name="Clean WS", category=Category.PERSONAL, status=Status.QUEUED)
+        ws = Workstream(name="Clean WS", category=Category.PERSONAL)
         result = _render_ws_option(ws, [], {})
         assert "MR" not in result
         assert "solving" not in result
@@ -1057,7 +1040,7 @@ class TestEnrichmentRendering:
         """Rendered enrichment markup must be valid Rich markup (no crashes)."""
         from rich.text import Text
         from rendering import _render_ws_option
-        ws = Workstream(name="Full WS", category=Category.WORK, status=Status.IN_PROGRESS)
+        ws = Workstream(name="Full WS", category=Category.WORK)
         ws.ticket_key = "UB-9999"
         ws.ticket_status = "Done"
         ws.mr_url = "https://gitlab.com/mr/42"
@@ -1153,10 +1136,10 @@ def app_with_sessions(tmp_path):
     project_dir.mkdir()
 
     store = Store(path=store_path)
-    ws1 = Workstream(name="Alpha", category=Category.WORK, status=Status.IN_PROGRESS)
+    ws1 = Workstream(name="Alpha", category=Category.WORK)
     ws1.add_link("worktree", str(project_dir), "project")
-    ws2 = Workstream(name="Beta", category=Category.PERSONAL, status=Status.QUEUED)
-    ws3 = Workstream(name="Gamma", category=Category.META, status=Status.DONE)
+    ws2 = Workstream(name="Beta", category=Category.PERSONAL)
+    ws3 = Workstream(name="Gamma", category=Category.META)
     for ws in [ws1, ws2, ws3]:
         store.add(ws)
 
@@ -1583,7 +1566,7 @@ class TestCLISubcommands:
         store_path = tmp_path / "cli_test_data.json"
         store = Store(path=store_path)
         ws = Workstream(name="CLI Test WS", description="A test",
-                        category=Category.WORK, status=Status.IN_PROGRESS)
+                        category=Category.WORK)
         store.add(ws)
         return store, ws
 
@@ -1693,12 +1676,6 @@ class TestBrainDumpParser:
         from brain import parse_brain_dump
         assert parse_brain_dump("") == []
         assert parse_brain_dump("   ") == []
-
-    def test_status_detection(self):
-        from brain import parse_brain_dump
-        from models import Status
-        tasks = parse_brain_dump("deploy is blocked on migration")
-        assert tasks[0].status == Status.BLOCKED
 
     def test_category_detection(self):
         from brain import parse_brain_dump
@@ -1963,7 +1940,7 @@ class TestCLIEdgeCases:
         """cmd_note should create todo items, not append to notes string."""
         store_path = tmp_path / "cli_data.json"
         store = Store(path=store_path)
-        ws = Workstream(name="Test", status=Status.IN_PROGRESS)
+        ws = Workstream(name="Test")
         store.add(ws)
 
         from cli import cmd_note
@@ -1986,7 +1963,7 @@ class TestCLIEdgeCases:
         """cmd_show should display links and notes without crashing."""
         store_path = tmp_path / "cli_data.json"
         store = Store(path=store_path)
-        ws = Workstream(name="Detailed WS", status=Status.IN_PROGRESS,
+        ws = Workstream(name="Detailed WS",
                         description="A detailed workstream")
         ws.notes = "Some important notes\nLine 2"
         ws.add_link("worktree", "/path/to/repo", "main repo")
@@ -2389,7 +2366,7 @@ class TestRichMarkupEscaping:
 
     def test_render_ws_option_with_markup_name(self):
         from rendering import _render_ws_option
-        ws = Workstream(name="[red]Malicious[/red]", status=Status.IN_PROGRESS)
+        ws = Workstream(name="[red]Malicious[/red]")
         # Should not raise
         result = _render_ws_option(ws, [], {})
         # The brackets should be escaped
@@ -2397,7 +2374,7 @@ class TestRichMarkupEscaping:
 
     def test_render_ws_option_with_unicode_name(self):
         from rendering import _render_ws_option
-        ws = Workstream(name="🚀 Unicode Test 日本語", status=Status.IN_PROGRESS)
+        ws = Workstream(name="🚀 Unicode Test 日本語")
         result = _render_ws_option(ws, [], {})
         assert "Unicode Test" in result
 
@@ -2411,7 +2388,7 @@ class TestCLINoteCreatesTodo:
     def test_note_creates_todo_item(self, tmp_path):
         store_path = tmp_path / "data.json"
         store = Store(path=store_path)
-        ws = Workstream(name="Test", status=Status.IN_PROGRESS)
+        ws = Workstream(name="Test")
         store.add(ws)
 
         from cli import cmd_note
@@ -2430,7 +2407,7 @@ class TestCLINoteCreatesTodo:
     def test_note_empty_text_exits(self, tmp_path):
         store_path = tmp_path / "data.json"
         store = Store(path=store_path)
-        ws = Workstream(name="Test", status=Status.IN_PROGRESS)
+        ws = Workstream(name="Test")
         store.add(ws)
 
         from cli import cmd_note

@@ -20,7 +20,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-from models import Category, Status, Workstream
+from models import Category, Workstream
 from threads import Thread, _extract_first_message, _extract_git_branch
 
 CACHE_DIR = Path.home() / ".cache" / "claude-orchestrator"
@@ -304,7 +304,6 @@ def get_discovered_workstreams(threads: list[Thread]) -> list[Workstream]:
                 id=ws_dict["id"],
                 name=ws_dict.get("name", ""),
                 description=ws_dict.get("description", ""),
-                status=Status(ws_dict.get("status", "in-progress")),
                 category=Category(ws_dict.get("category", "personal")),
                 thread_ids=list(thread_ids),
                 created_at=ws_dict.get("created_at", ""),
@@ -349,7 +348,6 @@ def pin_workstream(ws_id: str, store) -> bool:
         id=ws_dict["id"],
         name=ws_dict.get("name", ""),
         description=ws_dict.get("description", ""),
-        status=Status(ws_dict.get("status", "in-progress")),
         category=Category(ws_dict.get("category", "personal")),
         thread_ids=ws_dict.get("thread_ids", []),
     )
