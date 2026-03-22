@@ -775,12 +775,15 @@ class AppState:
                     ws.ticket_summary = jira_info.summary
                     ws.ticket_status = jira_info.status
 
-                # MR enrichment — match by branch name
-                git_st = self.git_status_cache.get(ws.repo_path) if ws.repo_path else None
-                branch = git_st.branch if git_st and hasattr(git_st, 'branch') else ""
-                if branch and branch in mr_cache:
-                    mr_info = mr_cache[branch]
-                    ws.mr_url = mr_info.get("web_url", "")
+                # MR enrichment — match by ticket key or branch name
+                mr_info = mr_cache.get(ws.ticket_key)
+                if not mr_info:
+                    git_st = self.git_status_cache.get(ws.repo_path) if ws.repo_path else None
+                    branch = git_st.branch if git_st and hasattr(git_st, 'branch') else ""
+                    if branch:
+                        mr_info = mr_cache.get(branch)
+                if mr_info:
+                    ws.mr_url = mr_info.get("web_url", "") or mr_info.get("url", "")
 
                 # Ticket-solve enrichment
                 solve_info = get_ticket_solve_status(ws.ticket_key)
