@@ -190,6 +190,10 @@ Alt+Shift+Ctrl+Space → jira-fzf
 
 All three NSP windows run inside tmux with `destroy-unattached` (closing the window kills the session for a fresh start next time). Copy mode works via `Alt+k`.
 
+## Dependencies
+
+- **libvterm** — system library for the integrated terminal emulator (`libvterm-dev` on Debian/Ubuntu, `libvterm` on Arch/Fedora). Falls back to pyte without it.
+
 ## Data
 
 - **Store:** `~/dev/claude-orchestrator/data.json`
