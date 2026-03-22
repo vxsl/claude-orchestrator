@@ -453,6 +453,8 @@ class TodoScreen(_VimOptionListMixin, ModalScreen[None]):
 
         self._update_pane_labels()
         self._update_context_preview()
+        # Restore focus — clear_options() can cause the OptionList to lose focus
+        self._focused_olist().focus()
 
     @staticmethod
     def _highlighted_item_id(olist: OptionList, items: list[TodoItem]) -> str | None:
@@ -1408,9 +1410,6 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
     _PANEL_NAME_TO_ID = {v: k for k, v in _PANEL_ID_TO_NAME.items()}
 
     def action_next_panel(self):
-        if self._peek_mode:
-            self._close_peek()
-            return
         panels = self._panel_ids()
         current_id = self._PANEL_NAME_TO_ID.get(self._active_pane, "detail-sessions")
         idx = panels.index(current_id) if current_id in panels else 0
@@ -1423,9 +1422,6 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         self._update_pane_labels()
 
     def action_prev_panel(self):
-        if self._peek_mode:
-            self._close_peek()
-            return
         panels = self._panel_ids()
         current_id = self._PANEL_NAME_TO_ID.get(self._active_pane, "detail-sessions")
         idx = panels.index(current_id) if current_id in panels else 0
