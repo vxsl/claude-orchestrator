@@ -762,10 +762,10 @@ class TerminalWidget(Widget, can_focus=True):
         if key == "ctrl+d" or key == "shift+pagedown":
             self._scroll_down(self._nrow // 2)
             return
-        if key == "shift+up":
+        if key == "shift+up" or (key == "k" and self._scroll_offset > 0):
             self._scroll_up(1)
             return
-        if key == "shift+down":
+        if key == "shift+down" or (key == "j" and self._scroll_offset > 0):
             self._scroll_down(1)
             return
         if key == "shift+home":
