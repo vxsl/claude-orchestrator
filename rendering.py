@@ -41,6 +41,7 @@ C_LIGHT = "#e6edf3"      # primary text (terminal foreground)
 C_MID = "#b1bac4"        # secondary text (terminal normal white)
 C_DIM = "#6e7681"        # subdued (terminal bright-black)
 C_FAINT = "#484f58"      # near-invisible — IDs, decorative
+C_RESOLVED = "#7a8a9e"  # muted blue-gray — committed/resolved sessions
 
 # ─── Background Palette ──────────────────────────────────────────────
 BG_BASE = "#000000"      # true black — matches terminal
@@ -444,8 +445,8 @@ def _render_session_option(
     committed = bool(s.last_commit_sha)
 
     if committed:
-        icon = f"[{C_GREEN}]✓[/{C_GREEN}]"
-        badge = f"[{C_GREEN}]committed[/{C_GREEN}]"
+        icon = f"[{C_RESOLVED}]✓[/{C_RESOLVED}]"
+        badge = f"[{C_RESOLVED}]committed[/{C_RESOLVED}]"
         badge_w = 9
     else:
         icon = _activity_icon(act, throbber_frame, seen=seen)
@@ -524,7 +525,7 @@ def _render_session_option(
         commit_msg = _rich_escape(s.last_commit_summary[:max_msg])
         if len(s.last_commit_summary) > max_msg:
             commit_msg += "…"
-        lines.append(f"{INDENT}[{C_GREEN}]{sha_short}[/{C_GREEN}] [{C_DIM}]{commit_msg}[/{C_DIM}]")
+        lines.append(f"{INDENT}[{C_RESOLVED}]{sha_short}[/{C_RESOLVED}] [{C_DIM}]{commit_msg}[/{C_DIM}]")
     elif s.last_message_text:
         max_snippet = title_width + 12
         snippet = _rich_escape(s.last_message_text[:max_snippet])
