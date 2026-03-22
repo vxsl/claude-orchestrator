@@ -1118,6 +1118,8 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
 
     def _rebuild_all_options(self):
         """Re-render every session option in place (preserves highlight)."""
+        if self._content_search_active:
+            return  # Don't overwrite highlighted search results
         olist = self.query_one("#detail-sessions", OptionList)
         for i, s in enumerate(self._detail_sessions):
             if i < olist.option_count:
@@ -1133,6 +1135,8 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
 
     def _tick_throbber(self):
         self._throbber_frame += 1
+        if self._content_search_active:
+            return  # Don't overwrite highlighted search results
         # Only update options that are actually animating (cached from last build)
         # Recompute activity fresh so snippet styling stays in sync with state
         olist = self.query_one("#detail-sessions", OptionList)
