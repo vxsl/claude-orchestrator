@@ -49,7 +49,7 @@ from rendering import (
     _short_model, _short_project,
     _render_session_option, _session_title,
     _render_todo_option, _render_notification_option,
-    _render_content_search_result,
+    _render_content_search_result, tool_bar_legend,
     TODO_UNDONE_ICON, TODO_DONE_ICON,
     _rich_escape,
 )
@@ -853,6 +853,7 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
     #detail-container {{
         width: 100%; height: 100%;
         padding: 0; background: {BG_BASE};
+        layers: default peek;
     }}
     #detail-header {{
         height: auto;
@@ -956,6 +957,27 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         color: {C_DIM};
         dock: bottom;
     }}
+    #detail-peek-overlay {{
+        display: none;
+        layer: peek;
+        width: 100%; height: 100%;
+        background: {BG_BASE} 95%;
+    }}
+    #detail-peek-overlay.visible {{
+        display: block;
+    }}
+    #detail-peek-scroll {{
+        width: 100%; height: 100%;
+        padding: 1 3;
+    }}
+    #detail-peek-content {{
+        width: 100%;
+    }}
+    #detail-peek-header {{
+        padding: 0 3 1 3;
+        color: {C_BLUE};
+        text-style: bold;
+    }}
     """
 
     _option_list_id = "detail-sessions"
@@ -979,6 +1001,9 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         # Full unfiltered lists (set once sessions are loaded)
         self._all_sessions: list[ClaudeSession] = []
         self._all_archived: list[ClaudeSession] = []
+        # Peek overlay state
+        self._peek_timer = None
+        self._peek_visible: bool = False
 
     def compose(self) -> ComposeResult:
         with Vertical(id="detail-container"):
@@ -1008,6 +1033,10 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
                     yield Static(f"[{C_DIM}]No notifications[/{C_DIM}]", id="detail-no-feed")
 
             yield Static(self._render_help(), id="detail-help")
+            with Vertical(id="detail-peek-overlay"):
+                yield Static("", id="detail-peek-header")
+                with VerticalScroll(id="detail-peek-scroll"):
+                    yield Static("", id="detail-peek-content")
 
     def on_mount(self):
         self._last_seen_cache = load_last_seen()
@@ -1076,10 +1105,11 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         n_archived = len(self._archived_sessions)
         n_feed = len([n for n in self._feed_notifications if not n.dismissed])
 
+        legend = f"  {tool_bar_legend()}"
         if self._active_pane == "sessions":
-            sess_label.update(f"[bold {C_BLUE}]Sessions[/bold {C_BLUE}] [{C_DIM}]({n_active})[/{C_DIM}]")
+            sess_label.update(f"[bold {C_BLUE}]Sessions[/bold {C_BLUE}] [{C_DIM}]({n_active})[/{C_DIM}]{legend}")
         else:
-            sess_label.update(f"[{C_DIM}]Sessions ({n_active})[/{C_DIM}]")
+            sess_label.update(f"[{C_DIM}]Sessions ({n_active})[/{C_DIM}]{legend}")
 
         if self._active_pane == "archived":
             arch_label.update(f"[bold {C_BLUE}]Archived[/bold {C_BLUE}] [{C_DIM}]({n_archived})[/{C_DIM}]")
@@ -1531,6 +1561,7 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
             ("n", "+todo"), ("e", "todos"),
             ("o", "open"), ("x", "archive ws"),
             ("a", "archive/restore"),
+            ("space", "peek"),
             ("^j/^k", "panels"), ("/", "search"),
             ("^H", "back"),
         ]
@@ -1658,6 +1689,85 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
                 event.stop()
                 event.prevent_default()
                 self._focus_search_results()
+            return
+        # Space hold = peek into session
+        if event.key == "space" and self._active_pane in ("sessions", "archived"):
+            event.stop()
+            event.prevent_default()
+            self._peek_hold()
+
+    # ── Session peek (hold space) ──
+
+    def _peek_hold(self):
+        """Called on each space keypress. Shows peek and resets the release timer."""
+        if not self._peek_visible:
+            self._show_peek()
+        # Reset timer — when key repeats stop (user released), timer fires
+        if self._peek_timer is not None:
+            self._peek_timer.stop()
+        self._peek_timer = self.set_timer(0.4, self._peek_release)
+
+    def _peek_release(self):
+        """Timer fired — user released space."""
+        self._hide_peek()
+
+    def _show_peek(self):
+        """Populate and show the peek overlay for the highlighted session."""
+        olist = self._focused_olist()
+        idx = olist.highlighted
+        sessions = self._archived_sessions if self._active_pane == "archived" else self._detail_sessions
+        if idx is None or idx >= len(sessions):
+            return
+        session = sessions[idx]
+        # Load content
+        from sessions import extract_session_content
+        if session.session_id in self._content_cache:
+            messages = self._content_cache[session.session_id]
+        else:
+            messages = extract_session_content(session.jsonl_path) if session.jsonl_path else []
+            self._content_cache[session.session_id] = messages
+        # Render
+        title = _session_title(session)
+        header = self.query_one("#detail-peek-header", Static)
+        header.update(f"[bold {C_BLUE}]{_rich_escape(title)}[/bold {C_BLUE}]  [{C_DIM}]{session.age} · {_short_model(session.model)}[/{C_DIM}]")
+        content = self.query_one("#detail-peek-content", Static)
+        content.update(self._render_peek_messages(messages))
+        # Scroll to bottom (most recent messages)
+        scroll = self.query_one("#detail-peek-scroll", VerticalScroll)
+        scroll.scroll_end(animate=False)
+        overlay = self.query_one("#detail-peek-overlay")
+        overlay.add_class("visible")
+        self._peek_visible = True
+
+    def _hide_peek(self):
+        """Hide the peek overlay."""
+        overlay = self.query_one("#detail-peek-overlay")
+        overlay.remove_class("visible")
+        self._peek_visible = False
+        if self._peek_timer is not None:
+            self._peek_timer.stop()
+            self._peek_timer = None
+
+    @staticmethod
+    def _render_peek_messages(messages) -> str:
+        """Render session messages as a conversation for the peek overlay."""
+        if not messages:
+            return f"[{C_DIM}]No conversation content[/{C_DIM}]"
+        lines: list[str] = []
+        for msg in messages:
+            if msg.role == "user":
+                role_fmt = f"[bold {C_CYAN}]you[/bold {C_CYAN}]"
+            else:
+                role_fmt = f"[bold {C_PURPLE}]claude[/bold {C_PURPLE}]"
+            # Truncate very long messages but keep them readable
+            text = msg.text
+            if len(text) > 2000:
+                text = text[:2000] + "\n…(truncated)"
+            text_escaped = _rich_escape(text)
+            lines.append(f"{role_fmt}")
+            lines.append(f"[{C_LIGHT}]{text_escaped}[/{C_LIGHT}]")
+            lines.append("")
+        return "\n".join(lines)
 
     @work(thread=True, exclusive=True, group="content_cache")
     def _warm_content_cache(self):
