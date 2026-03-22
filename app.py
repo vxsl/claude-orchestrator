@@ -197,7 +197,7 @@ class OrchestratorApp(App):
         self._throbber_timer = None
         self._session_watcher: SessionWatcher | None = None
         self._refresh_pending = False  # debounce flag for _refresh_ws_table
-        self._detached_sessions: set[str] = set()  # tmux session names being watched
+        self._detached_terminals: dict[str, dict] = {}  # session_id -> detached state
 
     def on_key(self, event) -> None:
         if event.key in ("ctrl+j", "ctrl+k"):
@@ -1314,19 +1314,24 @@ class OrchestratorApp(App):
     ) -> None:
         """Push a ClaudeSessionScreen for the given workstream."""
         from claude_session_screen import ClaudeSessionScreen
+
+        # Check for a detached PTY we can reattach to
+        pty_state = None
+        effective_sid = session_id
+        if session_id and session_id in self._detached_terminals:
+            info = self._detached_terminals.pop(session_id)
+            info["active"] = False  # stop drain thread
+            pty_state = info["pty_state"]
+
         screen = ClaudeSessionScreen(
             ws=ws, store=self.state.store,
-            session_id=session_id, prompt=prompt, cwd=cwd,
+            session_id=effective_sid, prompt=prompt, cwd=cwd,
+            pty_state=pty_state,
         )
-        # Cancel any existing watcher for this tmux session (re-attach case)
-        self._detached_sessions.discard(screen.tmux_name)
 
         def _on_dismiss(result):
-            if result == "detached":
-                self._watch_detached_session(
-                    screen.tmux_name, ws, screen._session_id,
-                    screen._jsonl, screen._start_time,
-                )
+            if isinstance(result, dict) and result.get("detached"):
+                self._start_pty_drain(result)
             elif result is not None:
                 self.notify(
                     f"{result.model_short} | {result.message_count} msgs | {result.tokens_display}",
@@ -1337,52 +1342,47 @@ class OrchestratorApp(App):
                 callback(result)
         self.push_screen(screen, callback=_on_dismiss)
 
-    @work(thread=True)
-    def _watch_detached_session(
-        self, tmux_name: str, ws: Workstream,
-        session_id: str, jsonl_path: str, start_time: float,
-    ) -> None:
-        """Poll until a detached tmux session ends, then run cleanup."""
-        import time as _time
-        from claude_session_screen import (
-            tmux_session_alive, auto_link_session, log_session_exit,
-        )
-        self._detached_sessions.add(tmux_name)
-        try:
-            while tmux_name in self._detached_sessions:
-                if not tmux_session_alive(tmux_name):
-                    break
-                _time.sleep(3)
-            else:
-                return  # Watcher cancelled (session re-attached)
+    def _start_pty_drain(self, info: dict) -> None:
+        """Start a background thread that drains the PTY so the process
+        doesn't block on write while the user is in DetailScreen."""
+        import select
+        import threading
+        from claude_session_screen import auto_link_session, log_session_exit
 
-            # Session ended — run cleanup
-            auto_link_session(self.state.store, ws.id, session_id)
-            log_session_exit(session_id, ws.name, start_time, exit_type="tmux-bg")
+        session_id = info["session_id"]
+        pty_state = info["pty_state"]
+        info["active"] = True
+        self._detached_terminals[session_id] = info
 
-            session = None
-            jp = Path(jsonl_path)
-            if jp.exists():
+        def drain():
+            fd = pty_state["fd"]
+            seq_filter = pty_state["seq_filter"]
+            stream = pty_state["stream"]
+            while info.get("active"):
                 try:
-                    from sessions import parse_session
-                    session = parse_session(jp)
-                except Exception:
-                    pass
+                    ready, _, _ = select.select([fd], [], [], 0.5)
+                    if ready:
+                        data = os.read(fd, 65536)
+                        if not data:
+                            break  # EOF — process exited
+                        text = data.decode(errors="replace")
+                        text = seq_filter.feed(text)
+                        try:
+                            stream.feed(text)
+                        except Exception:
+                            pass
+                except OSError:
+                    break
+            # Clean up if process actually exited (not just reattached)
+            if info.get("active"):
+                self._detached_terminals.pop(session_id, None)
+                ws = info["ws"]
+                auto_link_session(self.state.store, ws.id, session_id)
+                log_session_exit(session_id, ws.name, info["start_time"],
+                                 exit_type="bg-drain")
+                self.call_from_thread(self._refresh_ws_table)
 
-            if session:
-                self.call_from_thread(
-                    self.notify,
-                    f"[{ws.name}] done — {session.model_short} | "
-                    f"{session.message_count} msgs | {session.tokens_display}",
-                    timeout=8,
-                )
-            else:
-                self.call_from_thread(
-                    self.notify, f"[{ws.name}] session ended", timeout=5,
-                )
-            self.call_from_thread(self._refresh_ws_table)
-        finally:
-            self._detached_sessions.discard(tmux_name)
+        threading.Thread(target=drain, daemon=True, name=f"pty-drain-{session_id[:8]}").start()
 
     def action_spawn(self):
         if self.state.view_mode != ViewMode.WORKSTREAMS:

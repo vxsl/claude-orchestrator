@@ -43,20 +43,7 @@ _PASSTHROUGH_KEYS = {"ctrl+j", "ctrl+k", "ctrl+e", "ctrl+backslash"}
 ORCH_DIR = str(Path(__file__).parent)
 
 
-# ── Tmux session helpers ──────────────────────────────────────────────
-
-def tmux_session_name(session_id: str) -> str:
-    """Deterministic tmux session name for a Claude session."""
-    return f"orch-{session_id[:8]}"
-
-
-def tmux_session_alive(name: str) -> bool:
-    """Check if a tmux session exists."""
-    return subprocess.run(
-        ["tmux", "has-session", "-t", name],
-        capture_output=True,
-    ).returncode == 0
-
+# ── Session helpers ───────────────────────────────────────────────────
 
 def auto_link_session(store: Store, ws_id: str, session_id: str) -> None:
     """Link a claude-session to a workstream if not already linked."""
@@ -315,6 +302,7 @@ class ClaudeSessionScreen(Screen):
         session_id: str | None = None,
         prompt: str | None = None,
         cwd: str | None = None,
+        pty_state: dict | None = None,
     ) -> None:
         super().__init__()
         self._ws = ws
@@ -326,6 +314,7 @@ class ClaudeSessionScreen(Screen):
         self._sys_prompt = self._build_context()
         self._active_panel = "cs-terminal"
         self._start_time = time.time()
+        self._pty_state = pty_state  # reattach to existing PTY if set
 
         # Pre-compute everything compose() needs (no I/O in compose)
         self._sync_slash_commands()
@@ -336,11 +325,9 @@ class ClaudeSessionScreen(Screen):
         self._tig_env = {"TIGRC_USER": self._tigrc_path}
         self._git_branch = self._detect_git_branch()
         self._jsonl = self._jsonl_path()
-        self.tmux_name = tmux_session_name(self._session_id)
-        self._create_tmux_session()
 
-        log.debug("ClaudeSessionScreen.__init__: sid=%s cwd=%s tmux=%s new=%s",
-                  self._session_id[:8], self._cwd, self.tmux_name, self._is_new)
+        log.debug("ClaudeSessionScreen.__init__: sid=%s cwd=%s new=%s reattach=%s",
+                  self._session_id[:8], self._cwd, self._is_new, pty_state is not None)
 
     def _resolve_cwd(self) -> str:
         from actions import ws_working_dir
@@ -420,40 +407,6 @@ class ClaudeSessionScreen(Screen):
             pass
         return ""
 
-    # ── Tmux session management ──────────────────────────────────
-
-    def _create_tmux_session(self) -> None:
-        """Create a detached tmux session running the claude command, if not already running."""
-        if tmux_session_alive(self.tmux_name):
-            log.debug("tmux session %s already exists, will attach", self.tmux_name)
-            return
-
-        # Build shell command with env exports to avoid quoting issues
-        env_exports = "; ".join(
-            f"export {k}={shlex.quote(v)}" for k, v in self._env.items()
-        )
-        shell_cmd = f"{env_exports}; exec {self._claude_command}"
-
-        result = subprocess.run(
-            ["tmux", "new-session", "-d",
-             "-s", self.tmux_name,
-             "-c", self._cwd,
-             shell_cmd],
-            capture_output=True, text=True,
-        )
-        if result.returncode != 0:
-            log.error("tmux new-session failed: %s", result.stderr)
-            raise RuntimeError(f"tmux new-session failed: {result.stderr}")
-
-        # Configure the session: no status bar, no prefix interference
-        for opt, val in [("status", "off"), ("remain-on-exit", "off"),
-                         ("prefix", "F12"), ("prefix2", "F12")]:
-            subprocess.run(
-                ["tmux", "set-option", "-t", self.tmux_name, opt, val],
-                capture_output=True,
-            )
-        log.debug("Created tmux session %s", self.tmux_name)
-
     # ── Slash command syncing ─────────────────────────────────────
 
     def _sync_slash_commands(self) -> None:
@@ -530,7 +483,8 @@ set status-view-show-untracked-dirs = no
                     initial_title=self._initial_title,
                 )
                 yield TerminalWidget(
-                    command=f"tmux attach-session -t {shlex.quote(self.tmux_name)}",
+                    command=self._claude_command,
+                    env=self._env,
                     cwd=self._cwd,
                     passthrough_keys=_PASSTHROUGH_KEYS,
                     id="cs-terminal",
@@ -560,13 +514,22 @@ set status-view-show-untracked-dirs = no
 
     def on_mount(self) -> None:
         log.debug("ClaudeSessionScreen.on_mount: starting terminals")
+        claude_tw = self.query_one("#cs-terminal", TerminalWidget)
+        if self._pty_state:
+            # Reattach to existing PTY (coming back from DetailScreen)
+            claude_tw.attach(self._pty_state)
+            log.debug("  reattached cs-terminal")
+        else:
+            claude_tw.start()
+            log.debug("  started cs-terminal")
         for tw in self.query(TerminalWidget):
-            try:
-                tw.start()
-                log.debug("  started %s", tw.id)
-            except Exception as e:
-                log.error("  FAILED to start %s: %s", tw.id, e)
-        self.query_one("#cs-terminal", TerminalWidget).focus()
+            if tw.id != "cs-terminal":
+                try:
+                    tw.start()
+                    log.debug("  started %s", tw.id)
+                except Exception as e:
+                    log.error("  FAILED to start %s: %s", tw.id, e)
+        claude_tw.focus()
         self._update_pane_focus()
         log.debug("ClaudeSessionScreen.on_mount: done")
 
@@ -584,7 +547,7 @@ set status-view-show-untracked-dirs = no
         if not isinstance(widget, TerminalWidget) or widget.id != "cs-terminal":
             return  # A sidebar terminal exited, ignore
 
-        log.debug("Claude terminal finished (tmux session ended), cleaning up")
+        log.debug("Claude terminal finished, cleaning up")
 
         auto_link_session(self._store, self._ws.id, self._session_id)
         log_session_exit(self._session_id, self._ws.name, self._start_time)
@@ -608,8 +571,14 @@ set status-view-show-untracked-dirs = no
     # ── Navigation ─────────────────────────────────────────────────
 
     def action_go_back(self) -> None:
-        """Detach from the session (ctrl+h) — tmux session keeps running."""
-        self.dismiss("detached")
+        """Detach from the session — process keeps running in the PTY."""
+        claude_tw = self.query_one("#cs-terminal", TerminalWidget)
+        pty_state = claude_tw.detach()
+        if pty_state:
+            self.dismiss({"detached": True, "pty_state": pty_state,
+                          "session_id": self._session_id,
+                          "ws": self._ws, "start_time": self._start_time,
+                          "jsonl": self._jsonl})
 
     # ── Panel navigation ──────────────────────────────────────────
 

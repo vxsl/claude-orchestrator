@@ -319,6 +319,42 @@ class TerminalWidget(Widget, can_focus=True):
         self._fd = None
         self._p_out = None
 
+    def detach(self) -> dict | None:
+        """Stop reading but keep the process alive.  Returns state dict
+        that can be passed to ``attach()`` on a new widget instance."""
+        if self._pid is None:
+            return None
+        if self._read_task:
+            self._read_task.cancel()
+            self._read_task = None
+        state = {
+            "pid": self._pid,
+            "fd": self._fd,
+            "p_out": self._p_out,
+            "screen": self._screen,
+            "stream": self._stream,
+            "seq_filter": self._seq_filter,
+        }
+        # Neuter so on_unmount → stop() won't kill the process
+        self._pid = None
+        self._fd = None
+        self._p_out = None
+        return state
+
+    def attach(self, state: dict) -> None:
+        """Reattach to an existing PTY from a previous ``detach()``.
+        Call this instead of ``start()``."""
+        self._pid = state["pid"]
+        self._fd = state["fd"]
+        self._p_out = state["p_out"]
+        self._screen = state["screen"]
+        self._stream = state["stream"]
+        self._seq_filter = state["seq_filter"]
+        # Resize pyte + PTY to match current widget size
+        self._screen.resize(self._nrow, self._ncol)
+        self._set_pty_size(self._nrow, self._ncol)
+        self._read_task = asyncio.create_task(self._read_loop())
+
     def on_unmount(self) -> None:
         self.stop()
 
