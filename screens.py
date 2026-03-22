@@ -824,96 +824,6 @@ class AddScreen(ModalScreen[Workstream | None]):
         self.dismiss(None)
 
 
-# ─── Peek Screen ─────────────────────────────────────────────────────
-
-class PeekScreen(ModalScreen[None]):
-    """Full-screen conversation viewer for a session. Any non-nav key dismisses."""
-
-    BINDINGS = [
-        Binding("escape,space,backspace,ctrl+h,q", "dismiss", "Close", priority=True),
-    ]
-
-    DEFAULT_CSS = f"""
-    PeekScreen {{
-        align: center middle;
-    }}
-    #peek-container {{
-        width: 100%; height: 100%;
-        background: {BG_BASE};
-    }}
-    #peek-header {{
-        height: auto;
-        padding: 1 3 0 3;
-    }}
-    #peek-scroll {{
-        width: 100%; height: 1fr;
-        padding: 0 3;
-    }}
-    #peek-hint {{
-        height: 1;
-        padding: 0 2;
-        background: {BG_BASE};
-        color: {C_DIM};
-        dock: bottom;
-    }}
-    """
-
-    def __init__(self, title: str, content: str):
-        super().__init__()
-        self._title = title
-        self._content = content
-
-    def compose(self) -> ComposeResult:
-        with Vertical(id="peek-container"):
-            yield Static(self._title, id="peek-header")
-            with VerticalScroll(id="peek-scroll"):
-                yield Static(self._content, id="peek-body")
-            yield Static(
-                f"[{C_YELLOW}]j/k[/{C_YELLOW}] scroll  "
-                f"[{C_YELLOW}]^D/^U[/{C_YELLOW}] page  "
-                f"[{C_YELLOW}]g/G[/{C_YELLOW}] top/bottom  "
-                f"[{C_YELLOW}]space/esc[/{C_YELLOW}] close",
-                id="peek-hint",
-            )
-
-    def on_mount(self):
-        scroll = self.query_one("#peek-scroll", VerticalScroll)
-        scroll.scroll_end(animate=False)
-        scroll.focus()
-
-    def on_key(self, event) -> None:
-        scroll = self.query_one("#peek-scroll", VerticalScroll)
-        if event.key == "j" or event.key == "down":
-            event.stop()
-            event.prevent_default()
-            scroll.scroll_relative(y=2)
-        elif event.key == "k" or event.key == "up":
-            event.stop()
-            event.prevent_default()
-            scroll.scroll_relative(y=-2)
-        elif event.key == "ctrl+d":
-            event.stop()
-            event.prevent_default()
-            scroll.scroll_page_down()
-        elif event.key == "ctrl+u":
-            event.stop()
-            event.prevent_default()
-            scroll.scroll_page_up()
-        elif event.key == "g":
-            event.stop()
-            event.prevent_default()
-            scroll.scroll_home()
-        elif event.key == "G":
-            event.stop()
-            event.prevent_default()
-            scroll.scroll_end()
-        elif event.key not in ("shift", "ctrl", "alt"):
-            # Any other real keypress closes the peek
-            event.stop()
-            event.prevent_default()
-            self.dismiss(None)
-
-
 # ─── Detail Screen ──────────────────────────────────────────────────
 
 class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
@@ -1069,6 +979,7 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         # Full unfiltered lists (set once sessions are loaded)
         self._all_sessions: list[ClaudeSession] = []
         self._all_archived: list[ClaudeSession] = []
+        self._peek_mode: bool = False
         self._spawn_draft: str = ""  # persists prompt draft across open/close
 
     def compose(self) -> ComposeResult:
@@ -1216,8 +1127,8 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
 
     def _rebuild_all_options(self):
         """Re-render every session option in place (preserves highlight)."""
-        if self._content_search_active:
-            return  # Don't overwrite highlighted search results
+        if self._content_search_active or self._peek_mode:
+            return  # Don't overwrite search results or peek content
         olist = self.query_one("#detail-sessions", OptionList)
         for i, s in enumerate(self._detail_sessions):
             if i < olist.option_count:
@@ -1233,8 +1144,8 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
 
     def _tick_throbber(self):
         self._throbber_frame += 1
-        if self._content_search_active:
-            return  # Don't overwrite highlighted search results
+        if self._content_search_active or self._peek_mode:
+            return  # Don't overwrite search results or peek content
         # Only update options that are actually animating (cached from last build)
         # Recompute activity fresh so snippet styling stays in sync with state
         olist = self.query_one("#detail-sessions", OptionList)
@@ -1511,11 +1422,15 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
 
     def action_select_session(self):
         """Vim-style l to select the highlighted session (same as enter)."""
+        if self._peek_mode:
+            return
         olist = self._focused_olist()
         if olist.highlighted is not None and olist.option_count > 0:
             olist.action_select()
 
     def on_option_list_option_selected(self, event: OptionList.OptionSelected):
+        if self._peek_mode:
+            return
         oid = event.option_id
         log.debug("option_selected: option_id=%r option_index=%r widget_id=%s",
                   oid, event.option_index, event.option_list.id if hasattr(event, 'option_list') else "?")
@@ -1639,15 +1554,19 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
             return False
 
     def action_dismiss(self) -> None:
-        """Override dismiss: if search is active, cancel search first."""
-        if self._search_is_active():
+        """Override dismiss: close peek, then search, then screen."""
+        if self._peek_mode:
+            self._close_peek()
+        elif self._search_is_active():
             self._cancel_search()
         else:
             super().action_dismiss(None)
 
     def action_go_back(self):
-        """Ctrl+H/Backspace: cancel search if active, otherwise dismiss."""
-        if self._search_is_active():
+        """Ctrl+H/Backspace: close peek, then search, then dismiss."""
+        if self._peek_mode:
+            self._close_peek()
+        elif self._search_is_active():
             self._cancel_search()
         else:
             self.dismiss(None)
@@ -1758,38 +1677,37 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
             event.prevent_default()
             self._open_peek()
 
-    # ── Session peek ──
+    # ── Session peek (replaces OptionList content in-place) ──
 
     def _open_peek(self):
-        """Push a PeekScreen showing the highlighted session's conversation."""
-        olist = self._focused_olist()
+        """Replace session options with conversation messages in the same OptionList."""
+        if self._peek_mode:
+            self._close_peek()
+            return
+        olist = self.query_one("#detail-sessions", OptionList)
         idx = olist.highlighted
         sessions = self._archived_sessions if self._active_pane == "archived" else self._detail_sessions
         if idx is None or idx >= len(sessions):
             return
         session = sessions[idx]
-        title_text = _session_title(session)
-        header = (
-            f"[bold {C_BLUE}]{_rich_escape(title_text)}[/bold {C_BLUE}]  "
-            f"[{C_DIM}]{session.age} · {_short_model(session.model)} · "
-            f"{session.message_count} msgs · {session.tokens_display}[/{C_DIM}]"
-        )
         from sessions import extract_session_content
         if session.session_id in self._content_cache:
             messages = self._content_cache[session.session_id]
         else:
             messages = extract_session_content(session.jsonl_path) if session.jsonl_path else []
             self._content_cache[session.session_id] = messages
-        body = self._render_peek_messages(messages)
-        self.app.push_screen(PeekScreen(header, f"{body}"))
-
-    @staticmethod
-    def _render_peek_messages(messages) -> str:
-        """Render session messages as a conversation."""
         if not messages:
-            return f"[{C_DIM}]No conversation content[/{C_DIM}]"
-        lines: list[str] = []
-        for msg in messages:
+            return
+        title_text = _session_title(session)
+        header = (
+            f"[bold {C_BLUE}]{_rich_escape(title_text)}[/bold {C_BLUE}]  "
+            f"[{C_DIM}]{session.age} · {_short_model(session.model)} · "
+            f"{session.message_count} msgs · {session.tokens_display}[/{C_DIM}]\n"
+            f"[{C_DIM}]space[/{C_DIM}] close  [{C_DIM}]j/k[/{C_DIM}] scroll"
+        )
+        olist.clear_options()
+        olist.add_option(Option(header, id="peek-header"))
+        for i, msg in enumerate(messages):
             if msg.role == "user":
                 role_fmt = f"[bold {C_CYAN}]you[/bold {C_CYAN}]"
             else:
@@ -1797,11 +1715,25 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
             text = msg.text
             if len(text) > 2000:
                 text = text[:2000] + "\n…(truncated)"
-            text_escaped = _rich_escape(text)
-            lines.append(f"{role_fmt}")
-            lines.append(f"[{C_LIGHT}]{text_escaped}[/{C_LIGHT}]")
-            lines.append("")
-        return "\n".join(lines)
+            prompt = f"{role_fmt}\n[{C_LIGHT}]{_rich_escape(text)}[/{C_LIGHT}]"
+            olist.add_option(Option(prompt, id=f"peek-msg-{i}"))
+        if olist.option_count > 0:
+            olist.highlighted = olist.option_count - 1
+        self._peek_mode = True
+        sess_label = self.query_one("#detail-sessions-label", Static)
+        sess_label.update(
+            f"[bold {C_BLUE}]Conversation[/bold {C_BLUE}] "
+            f"[{C_DIM}]({len(messages)} messages)[/{C_DIM}]"
+        )
+
+    def _close_peek(self):
+        """Restore the normal session list."""
+        self._peek_mode = False
+        self._build_session_list()
+        olist = self.query_one("#detail-sessions", OptionList)
+        if olist.option_count > 0:
+            olist.highlighted = 0
+        self._update_pane_labels()
 
     @work(thread=True, exclusive=True, group="content_cache")
     def _warm_content_cache(self):
@@ -2082,7 +2014,7 @@ class SpawnPromptScreen(ModalScreen[tuple[str, str] | None]):
             yield Label(f"Spawn: {self.ws.name}", id="spawn-title")
             yield TextArea(self._draft, id="spawn-editor")
             yield Static(
-                f"[{C_DIM}]Ctrl+S[/{C_DIM}] spawn  [{C_DIM}]Enter[/{C_DIM}] spawn empty  [{C_DIM}]^H[/{C_DIM}] back (draft saved)",
+                f"[{C_DIM}]Ctrl+S[/{C_DIM}] spawn  [{C_DIM}]^H[/{C_DIM}] back (draft saved)",
                 id="spawn-hint",
             )
 
@@ -2101,14 +2033,6 @@ class SpawnPromptScreen(ModalScreen[tuple[str, str] | None]):
         text = self.query_one("#spawn-editor", TextArea).text
         self.dismiss(("cancel", text))
 
-    def key_enter(self):
-        """Enter with empty editor spawns immediately; otherwise insert newline."""
-        editor = self.query_one("#spawn-editor", TextArea)
-        if not editor.text.strip():
-            self.dismiss(("spawn", ""))
-        else:
-            # Let TextArea handle the Enter key normally
-            return False
 
 
 # ─── Brain Dump Screen ──────────────────────────────────────────────
