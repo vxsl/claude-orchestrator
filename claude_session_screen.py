@@ -17,7 +17,7 @@ import time
 import uuid
 from pathlib import Path
 
-from textual import work
+from textual import events, work
 from textual.binding import Binding
 from textual.app import ComposeResult
 from textual.containers import Horizontal, Vertical
@@ -265,7 +265,6 @@ class ClaudeSessionScreen(Screen):
 
     BINDINGS = [
         Binding("ctrl+e", "extract_todo", "Extract todo", priority=True),
-        Binding("ctrl+h", "go_back", "^H back", priority=True),
         Binding("ctrl+backslash", "go_back", "C-\\ back", priority=True),
     ]
 
@@ -570,6 +569,14 @@ set status-view-show-untracked-dirs = no
         self.dismiss(session)
 
     # ── Navigation ─────────────────────────────────────────────────
+
+    def on_key(self, event: events.Key) -> None:
+        # Textual reports ctrl+h as key="backspace" character="\x08";
+        # distinguish from physical backspace (character="\x7f").
+        if event.key == "backspace" and event.character == "\x08":
+            event.stop()
+            event.prevent_default()
+            self.action_go_back()
 
     def action_go_back(self) -> None:
         """Detach from the session — process keeps running in the PTY."""
