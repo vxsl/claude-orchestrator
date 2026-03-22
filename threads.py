@@ -31,6 +31,12 @@ class ThreadActivity(Enum):
     IDLE = "idle"                      # Not live, nothing unread
 
 
+# Tools that block on user input (polls, questions, plan confirmations)
+_INTERACTIVE_TOOLS = frozenset({
+    "AskUserQuestion",
+    "ExitPlanMode",
+})
+
 # How long a finished response is considered "fresh"
 FRESH_THRESHOLD = timedelta(minutes=30)
 
@@ -73,6 +79,11 @@ def session_activity(session: ClaudeSession, last_seen: dict[str, str] | None = 
         # Any stop_reason other than tool_use means the turn is done
         # (end_turn, stop_sequence, max_tokens, etc.)
         if session.last_stop_reason and session.last_stop_reason != "tool_use":
+            return ThreadActivity.AWAITING_INPUT
+
+        # Interactive tools (AskUserQuestion, ExitPlanMode) mean Claude is
+        # waiting for the user to respond, not thinking.
+        if session.last_stop_reason == "tool_use" and session.last_tool_name in _INTERACTIVE_TOOLS:
             return ThreadActivity.AWAITING_INPUT
 
         return ThreadActivity.THINKING

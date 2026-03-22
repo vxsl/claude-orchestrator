@@ -358,6 +358,27 @@ class TestSessionActivity:
                                last_stop_reason="max_tokens")
         assert session_activity(s) == ThreadActivity.AWAITING_INPUT
 
+    def test_awaiting_input_when_interactive_tool(self):
+        """Interactive tools like AskUserQuestion mean Claude is waiting for user."""
+        s = self._make_session(is_live=True, last_message_role="assistant",
+                               last_stop_reason="tool_use",
+                               last_tool_name="AskUserQuestion")
+        assert session_activity(s) == ThreadActivity.AWAITING_INPUT
+
+    def test_awaiting_input_when_exit_plan_mode(self):
+        """ExitPlanMode is an interactive tool (plan confirmation poll)."""
+        s = self._make_session(is_live=True, last_message_role="assistant",
+                               last_stop_reason="tool_use",
+                               last_tool_name="ExitPlanMode")
+        assert session_activity(s) == ThreadActivity.AWAITING_INPUT
+
+    def test_thinking_when_regular_tool_use(self):
+        """Non-interactive tools (Bash, Read, etc.) mean Claude is still working."""
+        s = self._make_session(is_live=True, last_message_role="assistant",
+                               last_stop_reason="tool_use",
+                               last_tool_name="Bash")
+        assert session_activity(s) == ThreadActivity.THINKING
+
     def test_idle_when_not_live_and_last_is_user(self):
         s = self._make_session(is_live=False, last_message_role="user")
         assert session_activity(s) == ThreadActivity.IDLE

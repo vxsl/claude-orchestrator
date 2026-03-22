@@ -86,6 +86,15 @@ def extract_session_content(jsonl_path: str) -> list[SessionMessage]:
     return messages
 
 
+def _last_tool_name(msg: dict) -> str:
+    """Return the name of the last tool_use block in an assistant message, or ''."""
+    name = ""
+    for block in msg.get("content", []):
+        if isinstance(block, dict) and block.get("type") == "tool_use":
+            name = block.get("name", "")
+    return name
+
+
 def _is_interrupt_marker(data: dict) -> bool:
     """Return True if this user message is a '[Request interrupted…]' marker."""
     msg = data.get("message", {})
@@ -144,6 +153,7 @@ class ClaudeSession:
     turn_complete: bool = False  # True when system:turn_duration logged after last user/assistant
     all_session_ids: list[str] = field(default_factory=list)  # All sessionIds found in JSONL (for resume matching)
     last_message_text: str = ""  # Snippet of last user or assistant message
+    last_tool_name: str = ""     # Name of last tool_use in assistant message
 
     @property
     def model_short(self) -> str:
@@ -331,6 +341,7 @@ def parse_session(jsonl_path: Path) -> Optional[ClaudeSession]:
                     session.total_input_tokens += usage.get("cache_read_input_tokens", 0)
                     session.total_output_tokens += usage.get("output_tokens", 0)
                     session.last_stop_reason = msg.get("stop_reason") or ""
+                    session.last_tool_name = _last_tool_name(msg) or ""
                     if not session.model and msg.get("model"):
                         session.model = msg["model"]
 
@@ -393,6 +404,7 @@ def refresh_session_tail(session: ClaudeSession, tail_bytes: int = 8192) -> bool
                     session.turn_complete = True
             if msg_type == "assistant" and "message" in data:
                 session.last_stop_reason = data["message"].get("stop_reason") or ""
+                session.last_tool_name = _last_tool_name(data["message"]) or ""
             if (msg_type == "system" and data.get("subtype") in (
                     "turn_duration", "stop_hook_summary")
                     or msg_type in ("last-prompt", "custom-title",
