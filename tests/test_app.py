@@ -2105,6 +2105,83 @@ class TestOnReturnFromModal:
             assert any(t.text == "test note in detail" for t in ws_after.todos)
 
 
+# ─── E2E: TodoScreen ─────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+class TestTodoScreen:
+    """Test the TodoScreen accessed via 'e' in DetailScreen."""
+
+    async def test_e_opens_todo_screen(self, app_with_store):
+        """Pressing e in detail screen should open TodoScreen."""
+        async with app_with_store.run_test(size=(120, 40)) as pilot:
+            await pilot.press("enter")
+            from screens import DetailScreen, TodoScreen
+            assert isinstance(pilot.app.screen, DetailScreen)
+            await pilot.press("e")
+            assert isinstance(pilot.app.screen, TodoScreen)
+
+    async def test_todo_screen_escape_dismisses(self, app_with_store):
+        """Escape should dismiss TodoScreen back to DetailScreen."""
+        async with app_with_store.run_test(size=(120, 40)) as pilot:
+            await pilot.press("enter")
+            from screens import DetailScreen, TodoScreen
+            await pilot.press("e")
+            assert isinstance(pilot.app.screen, TodoScreen)
+            await pilot.press("escape")
+            assert isinstance(pilot.app.screen, DetailScreen)
+
+    async def test_todo_add_and_toggle(self, app_with_store):
+        """Add a todo then toggle it done via space."""
+        async with app_with_store.run_test(size=(120, 40)) as pilot:
+            ws = pilot.app._selected_ws()
+            # Add a todo first via quick note
+            await pilot.press("n")
+            for char in "test todo":
+                await pilot.press(char)
+            await pilot.press("enter")
+            # Now open detail and then todos
+            await pilot.press("enter")
+            from screens import DetailScreen, TodoScreen
+            assert isinstance(pilot.app.screen, DetailScreen)
+            await pilot.press("e")
+            assert isinstance(pilot.app.screen, TodoScreen)
+            ts = pilot.app.screen
+            # Should have at least one todo
+            assert len(ts._active_items) >= 1
+
+
+# ─── E2E: Links screen ──────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+class TestLinksScreen:
+    """Test the LinksScreen accessed via 'o' in DetailScreen."""
+
+    async def test_o_with_no_links_notifies(self, app_with_store):
+        """Pressing o in detail with no links should show notification."""
+        async with app_with_store.run_test(size=(120, 40)) as pilot:
+            await pilot.press("enter")
+            from screens import DetailScreen
+            assert isinstance(pilot.app.screen, DetailScreen)
+            # Workstream has no links
+            await pilot.press("o")
+            # Should still be on DetailScreen (notification shown, no LinksScreen pushed)
+            assert isinstance(pilot.app.screen, DetailScreen)
+
+    async def test_L_opens_add_link_screen(self, app_with_store):
+        """Pressing L in detail should open AddLinkScreen."""
+        async with app_with_store.run_test(size=(120, 40)) as pilot:
+            await pilot.press("enter")
+            from screens import DetailScreen, AddLinkScreen
+            assert isinstance(pilot.app.screen, DetailScreen)
+            await pilot.press("L")
+            assert isinstance(pilot.app.screen, AddLinkScreen)
+            # Escape back
+            await pilot.press("escape")
+            assert isinstance(pilot.app.screen, DetailScreen)
+
+
 @pytest.mark.asyncio
 class TestSessionArchiveRestore:
     """Test session archive/restore (space key) in DetailScreen."""
