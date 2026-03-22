@@ -1,6 +1,7 @@
 """Embedded terminal emulator widget for Textual.
 
-Uses pyte for VT100 emulation and ptyprocess for PTY management.
+Uses libvterm (via ctypes) for complete VT terminal emulation when
+available, falling back to pyte for systems without libvterm (e.g. macOS).
 Renders the terminal screen via Textual's render_line / Strip API
 for efficient partial updates.
 
@@ -28,6 +29,12 @@ from textual import events
 from textual.message import Message
 from textual.strip import Strip
 from textual.widget import Widget
+
+try:
+    from vterm_backend import VTermBackend
+    _HAS_VTERM = True
+except ImportError:
+    _HAS_VTERM = False
 
 
 # ── pyte subclasses ───────────────────────────────────────────────
@@ -296,11 +303,15 @@ class TerminalWidget(Widget, can_focus=True):
         self._passthrough_keys = passthrough_keys or set()
         self._ncol = 80
         self._nrow = 24
-        self._screen = _Screen(self._ncol, self._nrow)
-        self._stream = _Stream(self._screen)
-        self._seq_filter = _SeqFilter()
         self._mouse_tracking = False
         self._sync_output = False  # DEC private mode 2026 (synchronized output)
+
+        # Terminal backend: libvterm (complete) or pyte (fallback)
+        self._backend = VTermBackend(self._ncol, self._nrow) if _HAS_VTERM else None
+        if not self._backend:
+            self._screen = _Screen(self._ncol, self._nrow)
+            self._stream = _Stream(self._screen)
+            self._seq_filter = _SeqFilter()
 
         # PTY state
         self._pid: int | None = None
@@ -359,14 +370,17 @@ class TerminalWidget(Widget, can_focus=True):
         if self._read_task:
             self._read_task.cancel()
             self._read_task = None
-        state = {
+        state: dict = {
             "pid": self._pid,
             "fd": self._fd,
             "p_out": self._p_out,
-            "screen": self._screen,
-            "stream": self._stream,
-            "seq_filter": self._seq_filter,
         }
+        if self._backend:
+            state["backend"] = self._backend
+        else:
+            state["screen"] = self._screen
+            state["stream"] = self._stream
+            state["seq_filter"] = self._seq_filter
         # Neuter so on_unmount → stop() won't kill the process
         self._pid = None
         self._fd = None
@@ -379,11 +393,14 @@ class TerminalWidget(Widget, can_focus=True):
         self._pid = state["pid"]
         self._fd = state["fd"]
         self._p_out = state["p_out"]
-        self._screen = state["screen"]
-        self._stream = state["stream"]
-        self._seq_filter = state["seq_filter"]
-        # Resize pyte + PTY to match current widget size
-        self._screen.resize(self._nrow, self._ncol)
+        if "backend" in state:
+            self._backend = state["backend"]
+            self._backend.resize(self._nrow, self._ncol)
+        else:
+            self._screen = state["screen"]
+            self._stream = state["stream"]
+            self._seq_filter = state["seq_filter"]
+            self._screen.resize(self._nrow, self._ncol)
         self._set_pty_size(self._nrow, self._ncol)
         self._read_task = asyncio.create_task(self._read_loop())
 
@@ -408,15 +425,15 @@ class TerminalWidget(Widget, can_focus=True):
                 pass
 
     async def _read_loop(self) -> None:
-        """Read PTY output and feed to pyte."""
+        """Read PTY output and feed to terminal backend."""
         loop = asyncio.get_running_loop()
-        queue: asyncio.Queue[str | None] = asyncio.Queue()
+        queue: asyncio.Queue[bytes | None] = asyncio.Queue()
         event = asyncio.Event()
 
         def _on_output():
             try:
-                data = self._p_out.read(65536).decode(errors="replace")
-                queue.put_nowait(data)
+                raw = self._p_out.read(65536)
+                queue.put_nowait(raw)
                 event.set()
             except Exception:
                 queue.put_nowait(None)
@@ -432,7 +449,10 @@ class TerminalWidget(Widget, can_focus=True):
                     if data is None:
                         self.post_message(self.Finished())
                         return
-                    self._process_output(data)
+                    if self._backend:
+                        self._process_output_vterm(data)
+                    else:
+                        self._process_output(data.decode(errors="replace"))
                 if not self._sync_output:
                     self.refresh()
         except asyncio.CancelledError:
@@ -463,6 +483,20 @@ class TerminalWidget(Widget, can_focus=True):
         except Exception:
             pass
 
+    def _process_output_vterm(self, data: bytes) -> None:
+        """Feed raw bytes to libvterm and detect sync output."""
+        if b'\x1b[?2026h' in data:
+            self._sync_output = True
+        if b'\x1b[?2026l' in data:
+            self._sync_output = False
+        response = self._backend.feed(data)
+        if response and self._p_out:
+            try:
+                self._p_out.write(response)
+            except OSError:
+                pass
+        self._mouse_tracking = self._backend.mouse_tracking
+
     # ── Rendering ──────────────────────────────────────────────────
 
     def get_content_width(self, container, viewport):
@@ -473,6 +507,53 @@ class TerminalWidget(Widget, can_focus=True):
 
     def render_line(self, y: int) -> Strip:
         """Render a single terminal line as a Textual Strip."""
+        if self._backend:
+            return self._render_line_vterm(y)
+        return self._render_line_pyte(y)
+
+    def _render_line_vterm(self, y: int) -> Strip:
+        backend = self._backend
+        if y >= backend.lines:
+            return Strip.blank(self._ncol)
+
+        cursor_x = backend.cursor_x if backend.cursor_y == y else -1
+        segments: list[Segment] = []
+        run_text: list[str] = []
+        run_style: Style | None = None
+
+        def _flush():
+            nonlocal run_text, run_style
+            if run_text:
+                segments.append(Segment("".join(run_text), run_style or Style()))
+                run_text = []
+
+        for x in range(backend.columns):
+            cell = backend.get_cell(y, x)
+
+            if x == cursor_x and self.has_focus:
+                style = Style(reverse=True)
+            else:
+                attrs = cell.attrs
+                style = Style(
+                    color=backend.color_to_rich(cell.fg),
+                    bgcolor=backend.color_to_rich(cell.bg),
+                    bold=bool(attrs & 0x01),
+                    italic=bool(attrs & 0x08),
+                    underline=bool((attrs >> 1) & 0x03),
+                    strike=bool(attrs & 0x80),
+                    reverse=bool(attrs & 0x20),
+                )
+
+            if style != run_style:
+                _flush()
+                run_style = style
+
+            run_text.append(backend.cell_char(cell))
+
+        _flush()
+        return Strip(segments, self._ncol)
+
+    def _render_line_pyte(self, y: int) -> Strip:
         if y >= self._screen.lines:
             return Strip.blank(self._ncol)
 
@@ -504,7 +585,6 @@ class TerminalWidget(Widget, can_focus=True):
             run_text.append(char.data)
 
         _flush()
-
         return Strip(segments, self._ncol)
 
     # ── Input ──────────────────────────────────────────────────────
@@ -548,7 +628,10 @@ class TerminalWidget(Widget, can_focus=True):
     async def on_resize(self, event: events.Resize) -> None:
         self._ncol = self.size.width
         self._nrow = self.size.height
-        self._screen.resize(self._nrow, self._ncol)
+        if self._backend:
+            self._backend.resize(self._nrow, self._ncol)
+        else:
+            self._screen.resize(self._nrow, self._ncol)
         self._set_pty_size(self._nrow, self._ncol)
         self.refresh()
 

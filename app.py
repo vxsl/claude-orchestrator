@@ -1356,8 +1356,10 @@ class OrchestratorApp(App):
 
         def drain():
             fd = pty_state["fd"]
-            seq_filter = pty_state["seq_filter"]
-            stream = pty_state["stream"]
+            backend = pty_state.get("backend")
+            if not backend:
+                seq_filter = pty_state["seq_filter"]
+                stream = pty_state["stream"]
             while info.get("active"):
                 try:
                     ready, _, _ = select.select([fd], [], [], 0.5)
@@ -1365,12 +1367,15 @@ class OrchestratorApp(App):
                         data = os.read(fd, 65536)
                         if not data:
                             break  # EOF — process exited
-                        text = data.decode(errors="replace")
-                        text = seq_filter.feed(text)
-                        try:
-                            stream.feed(text)
-                        except Exception:
-                            pass
+                        if backend:
+                            backend.feed(data)
+                        else:
+                            text = data.decode(errors="replace")
+                            text = seq_filter.feed(text)
+                            try:
+                                stream.feed(text)
+                            except Exception:
+                                pass
                 except OSError:
                     break
             # Clean up if process actually exited (not just reattached)
