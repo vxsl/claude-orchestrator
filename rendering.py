@@ -110,8 +110,9 @@ def _context_color(pct: float) -> str:
 
 
 def _context_bar(context_tokens: int, window_size: int = 200_000, width: int = 12) -> str:
-    """Render a context window fill bar: ████░░░░ 52%
+    """Render a context window fill bar: ▬▬▬▬▬▬──── 52%
 
+    Uses same glyphs as the tool bar (▬ filled, ─ empty).
     Color transitions green→yellow→orange→red as the window fills.
     Returns empty string if no context data.
     """
@@ -122,7 +123,7 @@ def _context_bar(context_tokens: int, window_size: int = 200_000, width: int = 1
     filled = max(0, min(width, filled))
     empty = width - filled
     color = _context_color(pct)
-    bar = f"[{color}]{'█' * filled}[/{color}][{C_DIM}]{'░' * empty}[/{C_DIM}]"
+    bar = f"[{color}]{'▬' * filled}[/{color}][{C_DIM}]{'─' * empty}[/{C_DIM}]"
     label = f"[{color}]{pct:.0f}%[/{color}]"
     return f"{bar} {label}"
 
@@ -136,7 +137,7 @@ def _context_bar_compact(context_tokens: int, window_size: int = 200_000, width:
     filled = max(0, min(width, filled))
     empty = width - filled
     color = _context_color(pct)
-    return f"[{color}]{'█' * filled}[/{color}][{C_DIM}]{'░' * empty}[/{C_DIM}]"
+    return f"[{color}]{'▬' * filled}[/{color}][{C_DIM}]{'─' * empty}[/{C_DIM}]"
 
 
 # ─── Rich Markup Helpers ────────────────────────────────────────────
