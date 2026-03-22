@@ -26,6 +26,7 @@ from pyte.screens import Char
 from rich.segment import Segment
 from rich.style import Style
 from textual import events
+from textual.geometry import Region
 from textual.message import Message
 from textual.strip import Strip
 from textual.widget import Widget
@@ -457,7 +458,7 @@ class TerminalWidget(Widget, can_focus=True):
                     else:
                         self._process_output(data.decode(errors="replace"))
                 if not self._sync_output:
-                    self.refresh()
+                    self._refresh_dirty()
         except asyncio.CancelledError:
             pass
         finally:
@@ -501,6 +502,25 @@ class TerminalWidget(Widget, can_focus=True):
         self._mouse_tracking = self._backend.mouse_tracking
 
     # ── Rendering ──────────────────────────────────────────────────
+
+    def _refresh_dirty(self) -> None:
+        """Refresh only lines that libvterm's damage callback marked dirty.
+        Falls back to full refresh for pyte backend or when scrolled up."""
+        if not self._backend or self._scroll_offset > 0:
+            self.refresh()
+            return
+        dirty = self._backend.dirty_rows
+        if not dirty:
+            return
+        if len(dirty) >= self._nrow:
+            # All lines dirty — full refresh is cheaper
+            dirty.clear()
+            self.refresh()
+            return
+        w = self._ncol
+        regions = [Region(0, row, w, 1) for row in dirty]
+        dirty.clear()
+        self.refresh(*regions)
 
     def get_content_width(self, container, viewport):
         return self._ncol

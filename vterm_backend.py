@@ -140,6 +140,10 @@ class VTermBackend:
     MAX_SCROLLBACK = 10000  # ~32MB max at 80 cols
 
     def __init__(self, cols: int, rows: int) -> None:
+        # Init tracking state before callbacks can fire
+        self.dirty_rows: set[int] = set()
+        self.scrollback: list[tuple[int, bytes]] = []
+
         self._vt = _vterm_new(rows, cols)
         self._screen = _vterm_obtain_screen(self._vt)
         self._state = _vterm_obtain_state(self._vt)
@@ -148,11 +152,6 @@ class VTermBackend:
         self.cursor_y = 0
         self.cursor_x = 0
         self.mouse_tracking = False
-
-        # Scrollback buffer — list of (cols, raw_bytes) tuples.
-        # Each raw_bytes is a memcpy of the VTermScreenCell array from
-        # sb_pushline — no per-cell Python objects. Most recent line at END.
-        self.scrollback: list[tuple[int, bytes]] = []
 
         # Prevent GC of callback pointers
         self._cb_damage = _damage_cb(self._on_damage)
@@ -175,6 +174,9 @@ class VTermBackend:
         _vterm_screen_set_damage_merge(self._screen, _DAMAGE_ROW)
         _vterm_screen_reset(self._screen, 1)
 
+        # Dirty row tracking from damage callback
+        self.dirty_rows: set[int] = set()
+
         # Reusable structs to avoid per-call allocation
         self._cell = VTermScreenCell()
         self._pos = VTermPos()
@@ -190,6 +192,8 @@ class VTermBackend:
     # ── Callbacks ──
 
     def _on_damage(self, rect, user):
+        for row in range(rect.start_row, rect.end_row):
+            self.dirty_rows.add(row)
         return 0
 
     def _on_movecursor(self, pos, oldpos, visible, user):
