@@ -1034,7 +1034,7 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         for s in self._archived_sessions:
             if s.is_live:
                 refresh_session_tail(s)
-        self.call_from_thread(self._rebuild_all_options)
+        self.app.call_from_thread(self._rebuild_all_options)
 
     def _focused_olist(self) -> OptionList:
         if self._active_pane == "archived":
