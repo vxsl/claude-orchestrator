@@ -616,16 +616,15 @@ class AppState:
                 if not entry.is_dir(follow_symlinks=False):
                     continue
                 name = entry.name
-                # Skip hidden dirs (except a few we want to peek into)
-                if name.startswith(".") and name not in (".config",):
-                    continue
                 if name in self._SKIP_DIRS:
                     continue
                 path = Path(entry.path)
                 git_dir = path / ".git"
                 if git_dir.exists():
                     repos.add(str(path))
-                    # Don't recurse into repos (submodules are their own thing)
+                    continue
+                # Hidden dirs: check for .git but don't recurse further
+                if name.startswith("."):
                     continue
                 _scan(path, depth + 1)
 
