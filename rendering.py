@@ -669,7 +669,7 @@ def _render_notified_session_option(
       {icon} {title}                                     {badge}
          {model}  {msgs}  {tokens}  {duration}  {age}    {sid}
          ▏▏▏▏▏░░░  app.py sessions.py +4                {project}
-         {notif_icon} {notification_message}              {notif_age}
+         {notification_message}                           {notif_age}
     """
     INDENT = "    "
     if line_width > 0:
@@ -679,7 +679,12 @@ def _render_notified_session_option(
         LINE_WIDTH = title_width + 20
 
     icon = _activity_icon(act, throbber_frame, seen=seen)
-    badge = _activity_badge(act, seen=seen)
+    # Badge: use green instead of yellow for "your turn" on notified sessions
+    if act in (ThreadActivity.AWAITING_INPUT, ThreadActivity.RESPONSE_READY):
+        badge_color = C_DIM if seen else C_GREEN
+        badge = f"[{badge_color}]your turn[/{badge_color}]"
+    else:
+        badge = _activity_badge(act, seen=seen)
     badge_w = _BADGE_WIDTHS.get(act, 0)
     model = _short_model(s.model)
     title_raw = _session_title(s)[:title_width]
@@ -738,29 +743,25 @@ def _render_notified_session_option(
     else:
         line3 = f"{INDENT}{left}"
 
-    # Line 4: notification (replaces snippet line)
+    # Line 4: notification message (replaces snippet — no dot icon)
     freshness = notif.freshness
     if notif.dismissed:
         notif_color = C_DIM
-        notif_icon = "·"
     elif freshness == "fresh":
         notif_color = C_GREEN
-        notif_icon = "●"
     elif freshness == "recent":
         notif_color = C_ORANGE
-        notif_icon = "●"
     else:
         notif_color = C_DIM
-        notif_icon = "○"
 
     notif_age = _relative_time(notif.timestamp)
     msg_raw = notif.message.replace("\n", " ").strip()
-    max_msg = LINE_WIDTH - 4 - 2 - len(notif_age) - 2
+    max_msg = LINE_WIDTH - 4 - len(notif_age) - 2
     if len(msg_raw) > max_msg:
         msg_raw = msg_raw[:max_msg - 1] + "…"
     msg_esc = _rich_escape(msg_raw)
-    age_gap = max(2, LINE_WIDTH - 4 - 2 - len(msg_raw) - len(notif_age))
-    line4 = f"{INDENT}[{notif_color}]{notif_icon} {msg_esc}[/{notif_color}]{' ' * age_gap}[{C_DIM}]{notif_age}[/{C_DIM}]"
+    age_gap = max(2, LINE_WIDTH - 4 - len(msg_raw) - len(notif_age))
+    line4 = f"{INDENT}[{notif_color}]{msg_esc}[/{notif_color}]{' ' * age_gap}[{C_DIM}]{notif_age}[/{C_DIM}]"
 
     return "\n".join([line1, line2, line3, line4])
 
