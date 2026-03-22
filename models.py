@@ -114,6 +114,18 @@ class Workstream:
     last_user_activity: str = ""  # timestamp of last user message (for stable sorting)
     status_changed_at: str = field(default_factory=lambda: datetime.now().isoformat())
 
+    def __post_init__(self):
+        # Sanitize name: strip whitespace, fix "UB-XXXX: UB-XXXX" redundancy
+        if self.name:
+            self.name = self.name.strip()
+            # Fix "TICKET: TICKET" pattern (e.g. "UB-6636: UB-6636")
+            if ": " in self.name:
+                prefix, suffix = self.name.split(": ", 1)
+                if suffix.strip() == prefix.strip():
+                    self.name = prefix.strip()
+        if self.description:
+            self.description = self.description.strip()
+
     # ── Transient enrichment fields (NOT persisted) ──
     ticket_key: str = field(default="", repr=False)           # e.g. "UB-1234", from branch name
     ticket_summary: str = field(default="", repr=False)       # from Jira cache
