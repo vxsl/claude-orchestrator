@@ -123,15 +123,6 @@ FOOTER_PANE=$(tmux split-window -l 1 -P -F '#{pane_id}' "${FOOTER_ARGS[@]}")
 # Focus back to the main pane (above the footer)
 tmux select-pane -U
 
-# ─── Launch sidebar pane (right of main) ────────────────────────
-SIDEBAR_PANE=$(tmux split-window -h -l 36 -P -F '#{pane_id}' \
-    "${ORCH_DIR}/orch-sidebar" \
-    --ws-id "$WS_ID" \
-    --session-id "$SESSION_ID")
-
-# Focus back to the main pane (left of sidebar)
-tmux select-pane -L
-
 # ─── Tag this window with session ID (for reattach detection) ────
 tmux set-option -w @orch_session_id "$SESSION_ID" 2>/dev/null || true
 
@@ -146,7 +137,6 @@ tmux set-option -w @orch_main_pane "$MAIN_PANE" 2>/dev/null || true
 tmux set-hook -w pane-exited \
     "if-shell 'tmux display-message -t \"$MAIN_PANE\" -p 2>/dev/null' '' \
         'run-shell \"tmux kill-pane -t $HEADER_PANE 2>/dev/null; \
-                     tmux kill-pane -t $SIDEBAR_PANE 2>/dev/null; \
                      tmux kill-pane -t $FOOTER_PANE 2>/dev/null; true\"'"
 
 # C-e: extract todo — only fires in orch session windows (checks for @orch_session_id tag)
@@ -206,7 +196,6 @@ printf '%s  exit=%d  last_role=%s  last_type=%s  session=%s  ws=%s\n' \
 # ─── Post-session: kill surrounding panes ────────────────────────
 # Remove the failsafe hook first so it doesn't fire during our own cleanup
 tmux set-hook -uw pane-exited 2>/dev/null || true
-tmux kill-pane -t "$SIDEBAR_PANE" 2>/dev/null || true
 tmux kill-pane -t "$HEADER_PANE" 2>/dev/null || true
 tmux kill-pane -t "$FOOTER_PANE" 2>/dev/null || true
 
