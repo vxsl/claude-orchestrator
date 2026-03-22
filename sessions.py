@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import json
 import os
+import re
 import time
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -121,6 +122,44 @@ def _last_tool_name(msg: dict) -> str:
     return name
 
 
+def _last_bash_has_commit(msg: dict) -> bool:
+    """True if the last Bash tool_use in this assistant message contains 'git commit'."""
+    has = False
+    for block in msg.get("content", []):
+        if isinstance(block, dict) and block.get("type") == "tool_use" and block.get("name") == "Bash":
+            cmd = block.get("input", {}).get("command", "")
+            has = "git commit" in cmd
+    return has
+
+
+# Pattern: [branch sha] commit message
+_COMMIT_RE = re.compile(r"\[(\S+)\s+([0-9a-f]{7,})\]\s+(.+)")
+
+
+def _extract_commit_from_result(data: dict) -> tuple[str, str]:
+    """Extract (sha, summary) from a tool_result following a git commit.
+
+    Returns ('', '') if no commit pattern found.
+    """
+    msg = data.get("message", {})
+    for block in msg.get("content", []):
+        if not isinstance(block, dict) or block.get("type") != "tool_result":
+            continue
+        content = block.get("content", "")
+        texts = []
+        if isinstance(content, str):
+            texts.append(content)
+        elif isinstance(content, list):
+            for item in content:
+                if isinstance(item, dict) and item.get("type") == "text":
+                    texts.append(item.get("text", ""))
+        for text in texts:
+            m = _COMMIT_RE.search(text)
+            if m:
+                return m.group(2), m.group(3).strip()
+    return "", ""
+
+
 def _is_interrupt_marker(data: dict) -> bool:
     """Return True if this user message is a '[Request interrupted…]' marker."""
     msg = data.get("message", {})
@@ -181,6 +220,8 @@ class ClaudeSession:
     all_session_ids: list[str] = field(default_factory=list)  # All sessionIds found in JSONL (for resume matching)
     last_message_text: str = ""  # Snippet of last user or assistant message
     last_tool_name: str = ""     # Name of last tool_use in assistant message
+    last_commit_sha: str = ""    # SHA from last git commit (if session ended with one)
+    last_commit_summary: str = ""  # Commit message from last git commit
     tool_counts: dict[str, int] = field(default_factory=dict)  # category -> count
     files_mutated: list[str] = field(default_factory=list)      # basenames, ordered by first touch
 
@@ -337,6 +378,7 @@ def parse_session(jsonl_path: Path) -> Optional[ClaudeSession]:
         with open(jsonl_path) as f:
             first_ts = None
             last_ts = None
+            _pending_commit = False  # True when last assistant msg had git commit
             for line in f:
                 line = line.strip()
                 if not line:
@@ -400,6 +442,14 @@ def parse_session(jsonl_path: Path) -> Optional[ClaudeSession]:
                 if msg_type == "assistant":
                     session.assistant_message_count += 1
 
+                # Extract commit SHA from tool_result after a git commit
+                if _pending_commit and msg_type == "user" and "message" in data:
+                    sha, summary = _extract_commit_from_result(data)
+                    if sha:
+                        session.last_commit_sha = sha
+                        session.last_commit_summary = summary
+                    _pending_commit = False
+
                 # Extract usage and stop_reason from assistant messages
                 if msg_type == "assistant" and "message" in data:
                     msg = data["message"]
@@ -410,6 +460,8 @@ def parse_session(jsonl_path: Path) -> Optional[ClaudeSession]:
                     session.total_output_tokens += usage.get("output_tokens", 0)
                     session.last_stop_reason = msg.get("stop_reason") or ""
                     session.last_tool_name = _last_tool_name(msg) or ""
+                    # Track if this assistant message ends with a git commit
+                    _pending_commit = _last_bash_has_commit(msg)
                     if not session.model and msg.get("model"):
                         session.model = msg["model"]
                     # Scan content blocks for tool usage
@@ -457,6 +509,7 @@ def refresh_session_tail(session: ClaudeSession, tail_bytes: int = 8192) -> bool
                 f.readline()  # skip partial first line
             content = f.read().decode("utf-8", errors="replace")
 
+        _pending_commit = False
         for line in content.splitlines():
             line = line.strip()
             if not line:
@@ -471,6 +524,15 @@ def refresh_session_tail(session: ClaudeSession, tail_bytes: int = 8192) -> bool
                 session.last_activity = ts
 
             msg_type = data.get("type", "")
+
+            # Extract commit SHA from tool_result after a git commit
+            if _pending_commit and msg_type == "user" and "message" in data:
+                sha, summary = _extract_commit_from_result(data)
+                if sha:
+                    session.last_commit_sha = sha
+                    session.last_commit_summary = summary
+                _pending_commit = False
+
             if msg_type in ("user", "assistant"):
                 session.turn_complete = False
                 if msg_type == "user" and ts:
@@ -484,6 +546,7 @@ def refresh_session_tail(session: ClaudeSession, tail_bytes: int = 8192) -> bool
             if msg_type == "assistant" and "message" in data:
                 session.last_stop_reason = data["message"].get("stop_reason") or ""
                 session.last_tool_name = _last_tool_name(data["message"]) or ""
+                _pending_commit = _last_bash_has_commit(data["message"])
             if (msg_type == "system" and data.get("subtype") in (
                     "turn_duration", "stop_hook_summary")
                     or msg_type in ("last-prompt", "custom-title",

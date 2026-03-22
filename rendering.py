@@ -440,9 +440,17 @@ def _render_session_option(
     else:
         LINE_WIDTH = title_width + 20  # right-alignment anchor
 
-    icon = _activity_icon(act, throbber_frame, seen=seen)
-    badge = _activity_badge(act, seen=seen)
-    badge_w = _BADGE_WIDTHS.get(act, 0)
+    # Resolved state: session's last action was a git commit
+    committed = bool(s.last_commit_sha)
+
+    if committed:
+        icon = f"[{C_GREEN}]✓[/{C_GREEN}]"
+        badge = f"[{C_GREEN}]committed[/{C_GREEN}]"
+        badge_w = 9
+    else:
+        icon = _activity_icon(act, throbber_frame, seen=seen)
+        badge = _activity_badge(act, seen=seen)
+        badge_w = _BADGE_WIDTHS.get(act, 0)
     model = _short_model(s.model)
     title_raw = _session_title(s)[:title_width]
     title_esc = _rich_escape(title_raw)
@@ -452,8 +460,10 @@ def _render_session_option(
     duration = s.duration_display
     age_str = s.age
 
-    # Title styling: idle sessions are dimmed, everything else is normal weight.
-    if act == ThreadActivity.IDLE:
+    # Title styling: committed = dim green, idle = dim, active = bright
+    if committed:
+        title_fmt = f"[{C_DIM}]{title_esc}[/{C_DIM}]"
+    elif act == ThreadActivity.IDLE:
         title_fmt = f"[{C_DIM}]{title_esc}[/{C_DIM}]"
     else:
         title_fmt = f"[{C_LIGHT}]{title_esc}[/{C_LIGHT}]"
@@ -507,8 +517,15 @@ def _render_session_option(
         line3 = f"{INDENT}{left}"
     lines.append(line3)
 
-    # Line 4: last message snippet — role colored, snippet in mid
-    if s.last_message_text:
+    # Line 4: commit info (if resolved) or last message snippet
+    if committed:
+        sha_short = s.last_commit_sha[:7]
+        max_msg = title_width + 4
+        commit_msg = _rich_escape(s.last_commit_summary[:max_msg])
+        if len(s.last_commit_summary) > max_msg:
+            commit_msg += "…"
+        lines.append(f"{INDENT}[{C_GREEN}]{sha_short}[/{C_GREEN}] [{C_DIM}]{commit_msg}[/{C_DIM}]")
+    elif s.last_message_text:
         max_snippet = title_width + 12
         snippet = _rich_escape(s.last_message_text[:max_snippet])
         if len(s.last_message_text) > max_snippet:
