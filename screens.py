@@ -1577,6 +1577,8 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         search_input = self.query_one("#detail-search-input", _SearchInput)
         search_input.add_class("visible")
         search_input.focus()
+        # Hide archived pane so search results get full width
+        self.query_one("#detail-archived-pane").display = False
         # Start warming the content cache in background
         if not self._content_ready:
             self._warm_content_cache()
@@ -1588,9 +1590,11 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         search_input.remove_class("visible")
         self._content_search_active = False
         self._content_results = []
-        # Restore normal session lists
+        # Restore normal session lists and archived pane
         self._detail_sessions = list(self._all_sessions)
         self._archived_sessions = list(self._all_archived)
+        if self._archived_sessions:
+            self.query_one("#detail-archived-pane").display = True
         self._rebuild_session_lists()
         self._update_help_bar()
         # Return focus to the sessions list
@@ -1615,6 +1619,8 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
             self._content_results = []
             self._detail_sessions = list(self._all_sessions)
             self._archived_sessions = list(self._all_archived)
+            if self._archived_sessions:
+                self.query_one("#detail-archived-pane").display = True
             self._rebuild_session_lists()
             return
         if self._content_ready:
@@ -1688,12 +1694,11 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
             no_sess.display = True
             self._detail_sessions = []
 
-        # Hide archived pane during search (results span both)
+        # Hide archived pane during search (results span full width)
+        self.query_one("#detail-archived-pane").display = False
         arch_olist = self.query_one("#detail-archived", OptionList)
         arch_olist.clear_options()
         self._archived_sessions = []
-        no_arch = self.query_one("#detail-no-archived", Static)
-        no_arch.display = True
 
         # Update labels
         sess_label = self.query_one("#detail-sessions-label", Static)
