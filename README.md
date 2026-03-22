@@ -1,50 +1,40 @@
-# orch — Claude Brain Workstream Manager
+# orch — Thought to Thread
 
-A terminal-native hub for managing parallel workstreams across Claude sessions. Think of each workstream as a topic you're exploring with Claude — the tool tracks context, auto-discovers sessions, and lets you resume any workstream with a single keypress.
+A terminal-native workstation for agentic coding. Every git worktree is a workstream. Every workstream is a tab. Every thought becomes a running Claude session.
 
-Built with Python and [Textual](https://textual.textualize.io/). Designed to match the fzedit/jira-fzf mellow color palette.
+Built with Python and [Textual](https://textual.textualize.io/) with embedded libvterm terminals, mellow GitHub Dark palette, and vim-first keybindings.
+
+## Philosophy
+
+**Thought to thread.** The gap between "I have an idea" and "Claude is working on it" should be zero friction. Three paths, all converging:
+
+1. **Brain dump** — `b`, type stream-of-consciousness, `l` to launch immediately
+2. **From ticket** — `T`, fuzzy-search Jira, Enter to create workstream and open it
+3. **Quick start** — `c` on any workstream, or `C` to pick a repo
 
 ## Quick Start
 
 ```bash
-# Launch: Alt+Space (xmonad NSP) or:
-orch                    # TUI dashboard (default)
-orch tui                # same thing
+orch                    # Launch TUI (default)
+python app.py           # Or run directly
 ```
 
-The TUI is the primary interface. Everything else is secondary.
+## Tabbed Navigation
 
-## TUI Views
+The app uses a tabbed interface — each opened workstream gets its own persistent tab.
 
-Press `Tab` to cycle between three views:
+| Key | Action |
+|-----|--------|
+| `Tab` / `Shift+Tab` | Cycle through open tabs |
+| `Enter` / `Ctrl+L` | Open workstream in new tab |
+| `Ctrl+W` | Close current tab |
+| `Ctrl+H` / `Backspace` | Back / dismiss |
 
-### Workstreams (main view)
-
-Your brain workstreams — topics you're working on with Claude. Each workstream shows:
-- Status icon (colored: ● active, ◉ review, ✓ done, ✗ blocked, ○ queued)
-- Name with inline indicators (⚡ live tmux, ⏰ stale, link type icons, session count)
-- Category (work / personal / meta)
-- Last updated time
-
-The **preview pane** (right side, toggle with `p`) shows:
-- Description
-- **Auto-discovered Claude sessions** — activity summary (session count, messages, cost), recent session titles
-- Context (linked directories)
-- Notes
-- Timeline
-
-### Sessions
-
-All Claude sessions from `~/.claude/projects/`, sorted by recent activity. Shows:
-- Session title
-- Linked workstream name (or project directory if unlinked)
-- Model, cost, age
-
-Press `r` to resume a session, `l` to link it to a workstream.
-
-### Archived
-
-Threads you've archived. Press `u` to unarchive, `d` to delete permanently.
+The **Home tab** (always present) shows the workstream list with:
+- Status icons and activity indicators
+- Git branch name (yellow if dirty, +N/-N for ahead/behind)
+- Session count and token usage
+- Preview pane with sessions, notes, and context
 
 ## Keybindings
 
@@ -52,175 +42,140 @@ Threads you've archived. Press `u` to unarchive, `d` to delete permanently.
 
 | Key | Action |
 |-----|--------|
-| `j` / `k` / `↓` / `↑` | Move down / up |
-| `Ctrl+N` / `Ctrl+P` | Move down / up (vim) |
+| `j` / `k` | Move down / up |
 | `Ctrl+D` / `Ctrl+U` | Half-page down / up |
 | `g` / `G` | Jump to top / bottom |
-| `Enter` | Open detail / resume session |
-| `Tab` | Cycle views (Workstreams → Sessions → Archived) |
-| `Escape` | Back / close / clear search |
+| `Ctrl+J` / `Ctrl+K` | Cycle panels |
+| `/` | Search |
+| `?` | Searchable help (fuzzy-filter all keybindings) |
 
 ### Workstream Actions
 
 | Key | Action |
 |-----|--------|
-| `r` | **Resume** — auto-finds the most recent Claude session for this workstream and resumes it. Falls back to opening the linked directory. |
-| `c` | **New session** — opens a prompt editor, then launches Claude with workstream context injected |
-| `n` | **Quick note** — inline timestamped note (type and press Enter) |
-| `s` / `S` | Cycle status forward / backward |
+| `c` | New Claude session (with workstream context) |
+| `r` | Resume most recent session |
 | `a` | Add new workstream |
-| `b` | Brain dump — multi-line editor that parses stream-of-consciousness into workstreams |
-| `E` | Rename workstream (inline) |
-| `e` | Edit notes (full editor) |
-| `l` | Add link |
+| `b` | Brain dump → parse → optionally launch |
+| `n` | Quick todo |
+| `e` | Full todo list |
+| `E` | Rename |
+| `L` | Add link |
 | `o` | Open links |
-| `x` | Archive |
-| `d` | Delete (with confirmation) |
+| `x` | Archive / unarchive |
+| `d` | Delete |
+
+### Dev-Workflow Integration
+
+| Key | Action |
+|-----|--------|
+| `P` | **Ship** — run oneshot (staged → branch → commit → MR) |
+| `T` | **Ticket** — browse Jira tickets, link or create workstream |
+| `B` | **Branches** — browse worktrees and recent branches |
+| `C` | **Repo spawn** — pick a repo, then spawn Claude |
 
 ### Filters & Sort
 
 | Key | Action |
 |-----|--------|
-| `1`–`5` | Filter: All / Work / Personal / Active / Stale |
-| `/` | Live search by name/description |
+| `1`–`6` | Filter: All / Work / Personal / Active / Stale / Archived |
 | `F1`–`F5` | Sort: Status / Updated / Created / Category / Name |
-
-### Other
-
-| Key | Action |
-|-----|--------|
-| `:` | Command palette (vim-style) |
-| `p` | Toggle preview pane |
-| `R` | Refresh all data |
-| `?` | Help screen |
-| `q` | Quit |
-
-## Auto-Session Discovery
-
-The killer feature. When you link a directory to a workstream (worktree or file link), orch automatically finds all Claude sessions in that directory by scanning `~/.claude/projects/`. No manual session linking needed.
-
-**How it works:**
-1. You create a workstream and add a directory link: `:link worktree:~/dev/my-project`
-2. Orch scans `~/.claude/projects/` for sessions whose project path matches
-3. The preview pane shows all matching sessions with activity stats
-4. `r` resumes the most recent one automatically
-
-Explicit `claude-session` links still work as manual overrides and take priority.
-
-## Claude Session Wrapper
-
-When you launch Claude from orch (`r` or `c`), it runs through `orch-claude` — a wrapper that provides:
-
-### Header Bar
-A 1-line tmux pane at the top showing:
-```
- ORCH  FE testing deep dive  in-progress  work  │  45 msgs  2.3M  $34.50  │  Ctrl+D exit
-```
-Updates every 5 seconds with live stats from the session JSONL.
-
-### Context Injection
-Claude receives your workstream context via `--append-system-prompt`:
-```
-You are working on the brain workstream: "FE testing deep dive"
-Description: Vitest DX + browser testing + coverage badge for Dove
-Status: in-progress
-Category: work
-```
-
-### Auto-Linking
-When you exit Claude (`Ctrl+D` or `/exit`), the session ID is automatically linked back to the workstream. No manual `orch link` needed.
-
-### Post-Session Summary
-```
-── session ended ──
-FE testing deep dive  │  45 msgs  ·  2.3M  ·  $34.50
-✓ session linked to workstream
-press any key to return to orch
-```
 
 ## Command Palette
 
-Press `:` for vim-style commands:
-
-| Command | Action |
-|---------|--------|
-| `:status <status>` | Set status (queued, in-progress, awaiting-review, done, blocked) |
-| `:link <kind:value>` | Add link (worktree, ticket, claude-session, file, url, slack) |
-| `:note <text>` | Add timestamped note |
-| `:search <query>` | Search threads |
-| `:sort <mode>` | Sort (status, updated, created, category, name) |
-| `:filter <mode>` | Filter (all, work, personal, active, stale) |
-| `:archive` / `:unarchive` | Archive/restore |
-| `:export [path]` | Export to markdown |
-| `:brain <text>` | Parse brain dump inline |
-| `:workstreams` / `:sessions` / `:archived` | Switch views |
-| `:help` | Help screen |
-
-## CLI Reference
-
-The CLI is secondary to the TUI but useful for scripting and quick operations.
-
-```bash
-orch add "fix auth bug" -c work [-d desc] [-s status] [-l kind:value]
-orch list [-c category] [-s status] [-S sort] [--search query] [--archived]
-orch show <id>
-orch status <id> <status>
-orch brain "fix auth, review MR, deploy blocked" [-y]
-orch link <id> kind:value [-l label]
-orch note <id> "note text"
-orch sessions [-p project] [-n limit]
-orch resume <id>
-orch spawn <id>
-orch watch <id>
-orch archive [id]
-orch unarchive <id>
-orch history
-orch export [-o path]
-orch import <file> [-y]
-orch completions bash|zsh
-```
-
-## xmonad Integration
+Press `:` for vim-style commands. All dev-workflow tools are accessible:
 
 ```
-Alt+Space           → orch (main dashboard)
-Alt+Ctrl+Space      → fzedit
-Alt+Shift+Ctrl+Space → jira-fzf
+:ship / :oneshot / :publish    Ship staged changes
+:ticket / :jira [query]        Browse Jira tickets
+:tc [title]                    Create Jira ticket
+:solve UB-1234                 Run ticket-solve headlessly
+:branches                      Browse branches & worktrees
+:files                         Open file picker (fzedit)
+:wip                           Quick WIP commit
+:restage                       Unstage WIP commits
+
+:status <status>               Set workstream status
+:link <kind:value>             Add link
+:note <text>                   Add todo
+:search <query>                Search
+:sort / :filter                Sort/filter workstreams
+:export [path]                 Export to markdown
+:brain <text>                  Parse brain dump inline
+:help                          Help
 ```
 
-All three NSP windows run inside tmux with `destroy-unattached` (closing the window kills the session for a fresh start next time). Copy mode works via `Alt+k`.
+## Claude Session Screen
 
-## Dependencies
+When you launch or resume a Claude session, you get a full embedded terminal with:
 
-- **libvterm** — system library for the integrated terminal emulator (`libvterm-dev` on Debian/Ubuntu, `libvterm` on Arch/Fedora). Falls back to pyte without it.
+- **3-line header** — live stats (title, model, elapsed, messages, tokens, tool usage)
+- **Main terminal** — libvterm PTY with full scrollback and mouse support
+- **Sidebar** — tig status + tig log for git context
+- **Footer** — session ID, cwd, git branch, keybinding hints
 
-## Data
+| Key | Action |
+|-----|--------|
+| `Ctrl+E` | Extract todo from conversation |
+| `Ctrl+J/K` | Cycle between terminal and tig panels |
+| `Ctrl+H` | Detach (process survives, reattach later) |
+| `Ctrl+D` | Exit session |
 
-- **Store:** `~/dev/claude-orchestrator/data.json`
-- **Backups:** `~/dev/claude-orchestrator/backups/` (auto before destructive ops, keeps last 20)
-- **Sessions:** Auto-discovered from `~/.claude/projects/<project-dir>/<session-id>.jsonl`
+## Auto-Session Discovery
+
+Link a directory to a workstream (worktree or file link), and orch automatically finds all Claude sessions in that directory by scanning `~/.claude/projects/`. No manual session linking needed.
+
+Sessions show live activity: **thinking** (pulsing cyan), **your turn** (yellow badge), or idle.
+
+## Dev-Workflow Tools
+
+Orch integrates [dev-workflow-tools](~/bin/dev-workflow-tools) when available:
+
+- **oneshot** — staged changes → branch → commit → MR in one command
+- **publish-changes** — create GitLab MRs with Jira integration
+- **jira-fzf** — Jira ticket browser (cache read, no API calls from orch)
+- **ticket-solve** — headless Claude ticket solver with worktree creation
+- **fzedit** — interactive file finder
+- **rr.sh** branch data — worktree status, recent branches
+
+These appear where contextually relevant — ticket actions from the home view, ship from workstreams with staged changes, branches from repos.
 
 ## Architecture
 
 ```
-orch (bash launcher)
-├── cli.py          — argparse CLI (20+ commands, completions)
-├── app.py          — Textual TUI (2300+ lines)
-│   ├── 3 views: Threads, Sessions, Archived
-│   ├── Preview pane with auto-session discovery
-│   ├── Modal screens (detail, notes, links, add, brain dump, spawn, confirm)
-│   └── vim bindings, command palette, live tmux polling
-├── orch-claude     — bash wrapper for Claude sessions (header, context, auto-link)
-├── orch-header     — bash live status bar for header pane
+app.py              — Textual shell: tabs, compose, event routing
+├── widgets.py      — FuzzyPicker, ModalForm, TabBar, InlineInput
+├── state.py        — AppState + TabManager (pure Python, no Textual)
+├── screens.py      — Modal screens (Detail, Todo, pickers, forms)
+├── rendering.py    — Color palette, Rich markup, display formatting
+├── actions.py      — Git status, Jira cache, dev-tool integration
+├── config.py       — Keybinding configuration with user overrides
 ├── models.py       — Workstream, Store, Status, Category, Link
-├── brain.py        — stream-of-consciousness parser
 ├── sessions.py     — Claude session discovery from JSONL
-└── tests/          — 183 tests (models, brain, sessions, TUI)
+├── terminal.py     — libvterm/pyte terminal emulation
+├── claude_session_screen.py — Embedded Claude terminal with live stats
+├── brain.py        — Stream-of-consciousness parser
+├── threads.py      — Thread clustering and activity detection
+└── tests/          — 270+ tests (state, models, actions, widgets, app)
 ```
 
-## Tests
+### Design Principles
 
-```bash
-python -m pytest tests/ -v       # Run all 183 tests
-python -m pytest tests/ -q       # Quick summary
-```
+- **Modular split** — state.py has no Textual dependency (testable with fast sync tests)
+- **Minimal blast radius** — each module is focused, changes stay contained
+- **Code sharing** — FuzzyPicker and ModalForm used by all picker/form screens
+- **Vim-first** — j/k navigation everywhere, `:` command palette, `/` search
+
+## Dependencies
+
+- **Python 3.12+**
+- **Textual** — TUI framework
+- **libvterm** (optional) — system library for terminal emulation. Falls back to pyte.
+- **dev-workflow-tools** (optional) — `~/bin/dev-workflow-tools` for Jira/GitLab integration
+
+## Data
+
+- **Store:** `~/.claude/data.json`
+- **Backups:** automatic, keeps last 20
+- **Sessions:** `~/.claude/projects/<project>/<session>.jsonl`
+- **Jira cache:** `~/.cache/jira-fzf/tickets.json` (from dev-workflow-tools)
