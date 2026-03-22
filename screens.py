@@ -961,23 +961,32 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
     #detail-peek-overlay {{
         display: none;
         layer: peek;
+        align: center middle;
         width: 100%; height: 100%;
-        background: {BG_BASE} 95%;
     }}
     #detail-peek-overlay.visible {{
         display: block;
     }}
+    #detail-peek-box {{
+        width: 80%;
+        height: 70%;
+        max-width: 120;
+        background: {BG_BASE};
+        border: round {C_BLUE};
+        padding: 0;
+    }}
     #detail-peek-scroll {{
-        width: 100%; height: 100%;
-        padding: 1 3;
+        width: 100%; height: 1fr;
+        padding: 0 2;
     }}
     #detail-peek-content {{
         width: 100%;
     }}
     #detail-peek-header {{
-        padding: 0 3 1 3;
+        padding: 1 2 0 2;
         color: {C_BLUE};
         text-style: bold;
+        height: auto;
     }}
     """
 
@@ -1035,9 +1044,10 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
 
             yield Static(self._render_help(), id="detail-help")
             with Vertical(id="detail-peek-overlay"):
-                yield Static("", id="detail-peek-header")
-                with VerticalScroll(id="detail-peek-scroll"):
-                    yield Static("", id="detail-peek-content")
+                with Vertical(id="detail-peek-box"):
+                    yield Static("", id="detail-peek-header")
+                    with VerticalScroll(id="detail-peek-scroll"):
+                        yield Static("", id="detail-peek-content")
 
     def on_mount(self):
         self._last_seen_cache = load_last_seen()
@@ -1703,10 +1713,7 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         """Called on each space keypress. Shows peek and resets the release timer."""
         if not self._peek_visible:
             self._show_peek()
-        else:
-            # Refresh live tmux capture on key repeat
-            self._refresh_peek()
-        # Reset timer — when key repeats stop (user released), timer fires
+        # Just reset the dismiss timer — don't re-render on repeats
         if self._peek_timer is not None:
             self._peek_timer.stop()
         self._peek_timer = self.set_timer(0.4, self._peek_release)
@@ -1758,18 +1765,6 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         overlay = self.query_one("#detail-peek-overlay")
         overlay.add_class("visible")
         self._peek_visible = True
-
-    def _refresh_peek(self):
-        """Re-capture the tmux pane while peek is held open (live update)."""
-        if not self._peek_visible:
-            return
-        sid = getattr(self, '_peek_session_id', None)
-        if not sid:
-            return
-        pane_text = capture_session_pane(sid)
-        if pane_text is not None:
-            content = self.query_one("#detail-peek-content", Static)
-            content.update(_rich_escape(pane_text))
 
     def _hide_peek(self):
         """Hide the peek overlay."""
