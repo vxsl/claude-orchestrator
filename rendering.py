@@ -515,7 +515,7 @@ def _render_session_option(
             snippet += "…"
         is_user = s.last_message_role == "user"
         prefix = f"[{C_MID}]you:[/{C_MID}] " if is_user else ""
-        lines.append(f"{INDENT}{prefix}[italic {C_FAINT}]{snippet}[/italic {C_FAINT}]")
+        lines.append(f"{INDENT}{prefix}[italic #3b4048]{snippet}[/italic #3b4048]")
 
     return "\n".join(lines)
 
