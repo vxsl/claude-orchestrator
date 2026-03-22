@@ -11,8 +11,6 @@ import os
 import subprocess
 from pathlib import Path
 
-from rich.text import Text
-
 from textual import on, work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
@@ -27,45 +25,39 @@ from textual.widgets.option_list import Option
 
 from config import build_app_bindings
 from models import (
-    Category, Link, Origin, Status, Store, Workstream,
+    Category, Link, Status, Store, Workstream,
     STATUS_ICONS, _relative_time,
 )
 from sessions import ClaudeSession
-from threads import Thread, ThreadActivity, session_activity, mark_thread_seen, discover_threads
+from threads import Thread, session_activity, mark_thread_seen, discover_threads
 from thread_namer import apply_cached_names, name_uncached_threads, title_sessions, get_session_title, refresh_thread_titles
 from watcher import SessionWatcher
 from workstream_synthesizer import (
-    synthesize_workstreams, get_discovered_workstreams, get_assigned_thread_ids,
-    pin_workstream, dismiss_workstream,
+    synthesize_workstreams, get_discovered_workstreams,
 )
 from description_refresher import refresh_descriptions
 
-# Import from new modules
 from rendering import (
-    C_BLUE, C_CYAN, C_DIM, C_GREEN, C_ORANGE, C_PURPLE, C_RED, C_YELLOW,
-    BG_BASE, BG_SURFACE, BG_RAISED,
-    STATUS_THEME, CATEGORY_THEME,
-    LINK_TYPE_ICONS, LINK_ORDER, LINK_KINDS,
+    C_BLUE, C_CYAN, C_DIM, C_GREEN, C_PURPLE, C_RED, C_YELLOW,
+    BG_BASE,
     ViewMode,
-    _token_color, _token_color_markup, _colored_tokens,
-    _status_markup, _category_markup, _link_icon,
-    _ws_indicators, _short_project, _short_model, _worktree_styled,
-    THROBBER_FRAMES, _ACTIVITY_PRIORITY,
-    _activity_icon, _activity_badge, _best_activity, _all_sessions_seen, _is_session_seen,
+    _token_color, _token_color_markup,
+    _status_markup, _category_markup,
+    _is_session_seen,
     _render_session_option, _render_ws_option, _session_title,
     _rich_escape,
 )
 from state import AppState
 from actions import (
-    ws_directories, ws_working_dir,
-    find_sessions_for_ws, do_resume, resume_session_now, open_link,
+    ws_directories,
+    do_resume, resume_session_now, open_link,
     refresh_liveness,
 )
 from screens import (
     SessionsChanged,
     HelpScreen, QuickNoteScreen, TodoScreen, LinksScreen,
     AddScreen, DetailScreen, BrainDumpScreen, BrainPreviewScreen,
-    AddLinkScreen, LinkSessionScreen, SessionPickerScreen, ConfirmScreen,
+    AddLinkScreen, LinkSessionScreen, ConfirmScreen,
     RepoPickerScreen, WorkstreamPickerScreen, _SENTINEL_NEW,
 )
 
