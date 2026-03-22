@@ -130,7 +130,7 @@ class HelpScreen(FuzzyPickerScreen):
         ("ws-todos", f"[{C_YELLOW}]e[/{C_YELLOW}]  Todo list"),
         ("ws-rename", f"[{C_YELLOW}]E[/{C_YELLOW}]  Rename"),
         ("ws-open", f"[{C_YELLOW}]o[/{C_YELLOW}]  Open links"),
-        ("ws-archive", f"[{C_YELLOW}]x[/{C_YELLOW}]  Archive / unarchive"),
+        ("ws-archive", f"[{C_YELLOW}]u[/{C_YELLOW}]  Archive / unarchive"),
         ("ws-delete", f"[{C_YELLOW}]d[/{C_YELLOW}]  Delete"),
         # Session
         ("sess-exit", f"[{C_YELLOW}]Ctrl+D[/{C_YELLOW}]  Exit Claude session"),

@@ -80,7 +80,7 @@ The **Home tab** (always present) shows the workstream list with:
 | Key | Action |
 |-----|--------|
 | `1`–`6` | Filter: All / Work / Personal / Active / Stale / Archived |
-| `F1`–`F5` | Sort: Status / Updated / Created / Category / Name |
+| `F1`–`F5` | Sort: Activity / Updated / Created / Category / Name |
 
 ## Command Palette
 
