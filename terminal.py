@@ -349,6 +349,14 @@ class TerminalWidget(Widget, can_focus=True):
         if event.character:
             self._write_to_pty(event.character)
 
+    async def on_paste(self, event: events.Paste) -> None:
+        if self._pid is None:
+            return
+        event.stop()
+        event.prevent_default()
+        # Use bracketed paste mode so the terminal app knows it's a paste
+        self._write_to_pty(f"\x1b[200~{event.text}\x1b[201~")
+
     async def on_resize(self, event: events.Resize) -> None:
         self._ncol = self.size.width
         self._nrow = self.size.height
