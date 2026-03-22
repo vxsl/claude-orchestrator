@@ -347,10 +347,7 @@ def _render_ws_option(
          {status} · {category} · {worktree} · {N sess} · {tokens} · {updated}
          {description}
     """
-    from models import Origin
-
     IND = "     "
-    is_discovered = ws.origin == Origin.DISCOVERED
 
     # ── Activity icon (auto-derived from session state, not manual status) ──
     best = _best_activity(ws_sessions, last_seen)
@@ -367,9 +364,7 @@ def _render_ws_option(
 
     # ── Line 1: icon + name + indicators + branch ──
     name_esc = _rich_escape(ws.name)
-    indicators = ""
-    if not is_discovered:
-        indicators = _ws_indicators(ws, tmux_check=tmux_check)
+    indicators = _ws_indicators(ws, tmux_check=tmux_check)
     ind_markup = f"  [{C_DIM}]{indicators}[/{C_DIM}]" if indicators else ""
 
     branch_markup = ""
@@ -392,9 +387,6 @@ def _render_ws_option(
 
     cc = CATEGORY_THEME.get(ws.category, C_DIM)
     parts.append(f"[{cc}]{ws.category.value}[/{cc}]")
-
-    if is_discovered:
-        parts.append(f"[{C_DIM}]discovered[/{C_DIM}]")
 
     wt_text, wt_color = _worktree_styled(ws)
     if wt_text:
