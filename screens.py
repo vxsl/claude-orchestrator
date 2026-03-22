@@ -55,6 +55,7 @@ from rendering import (
 )
 from actions import (
     launch_orch_claude, ws_directories, resume_session_now, open_link,
+    capture_session_pane,
 )
 from notifications import Notification, dismiss_notification, dismiss_all_for_dirs
 from state import fuzzy_match, content_search, SessionSearchResult
@@ -1702,6 +1703,9 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         """Called on each space keypress. Shows peek and resets the release timer."""
         if not self._peek_visible:
             self._show_peek()
+        else:
+            # Refresh live tmux capture on key repeat
+            self._refresh_peek()
         # Reset timer — when key repeats stop (user released), timer fires
         if self._peek_timer is not None:
             self._peek_timer.stop()
@@ -1719,31 +1723,60 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         if idx is None or idx >= len(sessions):
             return
         session = sessions[idx]
-        # Load content
-        from sessions import extract_session_content
-        if session.session_id in self._content_cache:
-            messages = self._content_cache[session.session_id]
-        else:
-            messages = extract_session_content(session.jsonl_path) if session.jsonl_path else []
-            self._content_cache[session.session_id] = messages
-        # Render
+        self._peek_session_id = session.session_id
+
         title = _session_title(session)
         header = self.query_one("#detail-peek-header", Static)
-        header.update(f"[bold {C_BLUE}]{_rich_escape(title)}[/bold {C_BLUE}]  [{C_DIM}]{session.age} · {_short_model(session.model)}[/{C_DIM}]")
-        content = self.query_one("#detail-peek-content", Static)
-        content.update(self._render_peek_messages(messages))
-        # Scroll to bottom (most recent messages)
+
+        # Try live tmux capture first
+        pane_text = capture_session_pane(session.session_id)
+        if pane_text is not None:
+            header.update(
+                f"[bold {C_BLUE}]{_rich_escape(title)}[/bold {C_BLUE}]  "
+                f"[{C_DIM}]{session.age} · {_short_model(session.model)}[/{C_DIM}]  "
+                f"[bold {C_GREEN}]LIVE[/bold {C_GREEN}]"
+            )
+            content = self.query_one("#detail-peek-content", Static)
+            content.update(pane_text)
+        else:
+            # Fallback: show JSONL conversation
+            header.update(
+                f"[bold {C_BLUE}]{_rich_escape(title)}[/bold {C_BLUE}]  "
+                f"[{C_DIM}]{session.age} · {_short_model(session.model)}[/{C_DIM}]"
+            )
+            from sessions import extract_session_content
+            if session.session_id in self._content_cache:
+                messages = self._content_cache[session.session_id]
+            else:
+                messages = extract_session_content(session.jsonl_path) if session.jsonl_path else []
+                self._content_cache[session.session_id] = messages
+            content = self.query_one("#detail-peek-content", Static)
+            content.update(self._render_peek_messages(messages))
+
         scroll = self.query_one("#detail-peek-scroll", VerticalScroll)
         scroll.scroll_end(animate=False)
         overlay = self.query_one("#detail-peek-overlay")
         overlay.add_class("visible")
         self._peek_visible = True
 
+    def _refresh_peek(self):
+        """Re-capture the tmux pane while peek is held open (live update)."""
+        if not self._peek_visible:
+            return
+        sid = getattr(self, '_peek_session_id', None)
+        if not sid:
+            return
+        pane_text = capture_session_pane(sid)
+        if pane_text is not None:
+            content = self.query_one("#detail-peek-content", Static)
+            content.update(pane_text)
+
     def _hide_peek(self):
         """Hide the peek overlay."""
         overlay = self.query_one("#detail-peek-overlay")
         overlay.remove_class("visible")
         self._peek_visible = False
+        self._peek_session_id = None
         if self._peek_timer is not None:
             self._peek_timer.stop()
             self._peek_timer = None
@@ -1759,7 +1792,6 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
                 role_fmt = f"[bold {C_CYAN}]you[/bold {C_CYAN}]"
             else:
                 role_fmt = f"[bold {C_PURPLE}]claude[/bold {C_PURPLE}]"
-            # Truncate very long messages but keep them readable
             text = msg.text
             if len(text) > 2000:
                 text = text[:2000] + "\n…(truncated)"
