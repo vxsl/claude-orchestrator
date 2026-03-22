@@ -1374,6 +1374,9 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
     _PANEL_NAME_TO_ID = {v: k for k, v in _PANEL_ID_TO_NAME.items()}
 
     def action_next_panel(self):
+        if self._peek_mode:
+            self._close_peek()
+            return
         panels = self._panel_ids()
         current_id = self._PANEL_NAME_TO_ID.get(self._active_pane, "detail-sessions")
         idx = panels.index(current_id) if current_id in panels else 0
@@ -1386,6 +1389,9 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         self._update_pane_labels()
 
     def action_prev_panel(self):
+        if self._peek_mode:
+            self._close_peek()
+            return
         panels = self._panel_ids()
         current_id = self._PANEL_NAME_TO_ID.get(self._active_pane, "detail-sessions")
         idx = panels.index(current_id) if current_id in panels else 0
@@ -1484,8 +1490,9 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         lines = []
         dirs = ws_directories(self.ws)
         other_links = [lnk for lnk in self.ws.links
-                       if lnk.kind not in ("worktree", "file")
-                       or not os.path.isdir(os.path.expanduser(lnk.value))]
+                       if lnk.kind != "claude-session"
+                       and (lnk.kind not in ("worktree", "file")
+                            or not os.path.isdir(os.path.expanduser(lnk.value)))]
         if dirs or other_links:
             lines.append(f"[bold {C_BLUE}]Context[/bold {C_BLUE}]")
             for d in dirs:
@@ -1936,8 +1943,9 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
     def _find_composing_window(self) -> str | None:
         """Find a tmux window for this ws where the user hasn't submitted yet."""
         from actions import find_tmux_windows_for_ws
-        known_sids = {s.session_id for s in self._detail_sessions}
-        known_sids |= {sid for s in self._detail_sessions for sid in s.all_session_ids}
+        all_sessions = self._all_sessions + self._all_archived
+        known_sids = {s.session_id for s in all_sessions}
+        known_sids |= {sid for s in all_sessions for sid in s.all_session_ids}
         for sid, wid in find_tmux_windows_for_ws(self.ws.name):
             if sid not in known_sids:
                 return wid
