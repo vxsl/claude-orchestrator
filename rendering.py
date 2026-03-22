@@ -428,7 +428,7 @@ def _render_session_option(
 
     Layout — 4 lines:
       {icon} {title}                                     {badge}
-         {model}  {msgs}  {duration}  {age}              {sid}
+         {model}  {msgs}  {tokens}  {duration}  {age}    {sid}
          ▏▏▏▏▏░░░  app.py sessions.py +4                {project}
          {role}: {snippet}
     """
@@ -442,6 +442,7 @@ def _render_session_option(
     title_raw = _session_title(s)[:title_width]
     title_esc = _rich_escape(title_raw)
     sid = s.session_id[:8]
+    tokens_plain = s.tokens_display
     msgs_str = f"{s.message_count} msgs"
     duration = s.duration_display
     age_str = s.age
@@ -460,16 +461,20 @@ def _render_session_option(
     else:
         line1 = f" {icon} {title_fmt}"
 
-    # Line 2: only show model if not opus; stats dim, age mid, sid faint
+    # Line 2: only show model if not opus; stats dim, tokens colored, age mid, sid faint
     model_part = "" if model == "opus" else f"[{C_BLUE}]{model:<8}[/{C_BLUE}]"
+    tokens_fmt = _colored_tokens(s)
+    tok_pad = " " * max(1, 8 - len(tokens_plain))
     dur_str = f"{duration:<8}" if duration else ""
     dur_len = 8 if duration else 0
     model_len = 0 if model == "opus" else 8
-    meta_left_len = 4 + model_len + 10 + dur_len + len(age_str)
+    meta_left_len = 4 + model_len + 10 + 8 + dur_len + len(age_str)
     sid_gap = max(2, LINE_WIDTH - meta_left_len - 8)
 
     line2 = (
-        f"{INDENT}{model_part}[{C_DIM}]{msgs_str:<10}"
+        f"{INDENT}{model_part}[{C_DIM}]{msgs_str:<10}[/{C_DIM}]"
+        f"{tokens_fmt}"
+        f"[{C_DIM}]{tok_pad}"
         f"{dur_str}[/{C_DIM}]"
         f"[{C_MID}]{age_str}[/{C_MID}]"
         f"{' ' * sid_gap}[{C_FAINT}]{sid}[/{C_FAINT}]"
