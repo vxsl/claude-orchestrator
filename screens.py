@@ -840,7 +840,7 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         Binding("x", "archive", "Archive"),
         Binding("a", "archive_session", "Archive/restore", priority=True),
         Binding("h", "focus_sessions", show=False, priority=True),
-        Binding("l", "focus_archived", show=False, priority=True),
+        Binding("l", "select_session", show=False),
         Binding("d", "dismiss_notification", "Dismiss", show=False),
         Binding("D", "dismiss_all_notifications", "Dismiss all", show=False),
         Binding("/", "search", "Search", show=False, priority=True),
@@ -1411,6 +1411,12 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
             if s.session_id == sid:
                 return s
         return None
+
+    def action_select_session(self):
+        """Vim-style l to select the highlighted session (same as enter)."""
+        olist = self._focused_olist()
+        if olist.highlighted is not None and olist.option_count > 0:
+            olist.action_select()
 
     def on_option_list_option_selected(self, event: OptionList.OptionSelected):
         oid = event.option_id
