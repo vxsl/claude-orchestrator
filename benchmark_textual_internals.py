@@ -186,7 +186,8 @@ async def profile_textual_internals():
 
         print("--- Real app: cursor navigation ---\n")
 
-        table = app.query_one("#ws-table", DataTable)
+        from textual.widgets import OptionList
+        table = app.query_one("#ws-table", OptionList)
         for _ in range(30):
             table.action_cursor_down()
             await pilot.pause()

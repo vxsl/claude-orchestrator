@@ -423,15 +423,15 @@ class TodoScreen(_VimOptionListMixin, ModalScreen[None]):
         no_active = self.query_one("#todo-no-active", Static)
         old_id = self._highlighted_item_id(olist, self._active_items)
         old_active_idx = olist.highlighted
-        olist.clear_options()
         if self._active_items:
             olist.display = True
             no_active.display = False
-            for item in self._active_items:
-                prompt = _render_todo_option(item)
-                olist.add_option(Option(prompt, id=item.id))
+            options = [Option(_render_todo_option(item), id=item.id) for item in self._active_items]
+            olist.clear_options()
+            olist.add_options(options)
             self._restore_highlight(olist, self._active_items, old_id, old_active_idx)
         else:
+            olist.clear_options()
             olist.display = False
             no_active.display = True
 
@@ -441,16 +441,16 @@ class TodoScreen(_VimOptionListMixin, ModalScreen[None]):
         arch_pane = self.query_one("#todo-archived-pane")
         old_arch_id = self._highlighted_item_id(arch_olist, self._archived_items)
         old_arch_idx = arch_olist.highlighted
-        arch_olist.clear_options()
         if self._archived_items:
             arch_pane.display = True
             arch_olist.display = True
             no_arch.display = False
-            for item in self._archived_items:
-                prompt = _render_todo_option(item, is_archived=True)
-                arch_olist.add_option(Option(prompt, id=item.id))
+            options = [Option(_render_todo_option(item, is_archived=True), id=item.id) for item in self._archived_items]
+            arch_olist.clear_options()
+            arch_olist.add_options(options)
             self._restore_highlight(arch_olist, self._archived_items, old_arch_id, old_arch_idx)
         else:
+            arch_olist.clear_options()
             # Hide entire archived pane when empty
             arch_pane.display = False
             if self._active_pane == "archived":
@@ -1432,7 +1432,6 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
 
     def _build_session_list(self):
         olist = self.query_one("#detail-sessions", OptionList)
-        olist.clear_options()
         animating = []
 
         # Split into notified, elevated (unseen your-turn without notification), and quiet
@@ -1453,10 +1452,11 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         # Sort notified by notification recency (newest first)
         notified.sort(key=lambda s: self._session_notifications[s.session_id].dt, reverse=True)
 
-        # Build the unified list: notified first, then elevated, separator, then quiet
+        # Build all options before touching widget tree
         all_elevated = notified + elevated
         self._notified_count = len(all_elevated)
         lw = self._session_line_width("#detail-sessions")
+        options = []
         idx = 0
         for s in notified:
             act = session_activity(s, self._last_seen_cache)
@@ -1469,7 +1469,7 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
                 ws_repo_path=self.ws.repo_path, seen=seen,
                 line_width=lw,
             )
-            olist.add_option(Option(prompt, id=s.session_id))
+            options.append(Option(prompt, id=s.session_id))
             idx += 1
 
         for s in elevated:
@@ -1482,11 +1482,11 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
                 ws_repo_path=self.ws.repo_path, seen=seen,
                 line_width=lw,
             )
-            olist.add_option(Option(prompt, id=s.session_id))
+            options.append(Option(prompt, id=s.session_id))
             idx += 1
 
         if all_elevated and quiet:
-            olist.add_option(Option(QUIET_SEPARATOR_LABEL, id="__separator__", disabled=True))
+            options.append(Option(QUIET_SEPARATOR_LABEL, id="__separator__", disabled=True))
             idx += 1
 
         for s in quiet:
@@ -1495,25 +1495,29 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
                 animating.append((idx, act))
             seen = _is_session_seen(s, self._last_seen_cache)
             prompt = _render_session_option(s, act, self._throbber_frame, ws_repo_path=self.ws.repo_path, seen=seen, line_width=lw)
-            olist.add_option(Option(prompt, id=s.session_id))
+            options.append(Option(prompt, id=s.session_id))
             idx += 1
 
+        olist.clear_options()
+        olist.add_options(options)
         self._animating_sessions = animating
         log.debug("build_session_list: %d notified + %d elevated + %d quiet, option_count=%d",
                   len(notified), len(elevated), len(quiet), olist.option_count)
 
     def _build_archived_list(self):
         olist = self.query_one("#detail-archived", OptionList)
-        olist.clear_options()
         animating = []
         alw = self._session_line_width("#detail-archived")
+        options = []
         for i, s in enumerate(self._archived_sessions):
             act = session_activity(s, self._last_seen_cache)
             if act in (ThreadActivity.THINKING, ThreadActivity.AWAITING_INPUT):
                 animating.append((i, act))
             seen = _is_session_seen(s, self._last_seen_cache)
             prompt = _render_session_option(s, act, self._throbber_frame, ws_repo_path=self.ws.repo_path, seen=seen, line_width=alw)
-            olist.add_option(Option(prompt, id=f"a:{s.session_id}"))
+            options.append(Option(prompt, id=f"a:{s.session_id}"))
+        olist.clear_options()
+        olist.add_options(options)
         self._animating_archived = animating
 
     # ── Feed (notification) panel ──

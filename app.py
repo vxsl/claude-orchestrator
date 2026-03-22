@@ -323,7 +323,6 @@ class OrchestratorApp(App):
         self._refresh_ws_table()
         self._load_sessions()
         self._refresh_archived_table()
-        self._update_all_bars()
 
         self.query_one("#preview-sessions", OptionList).display = False
 
@@ -549,9 +548,10 @@ class OrchestratorApp(App):
 
     def _apply_liveness_change(self):
         self._preview_ws_id = None  # force preview refresh on liveness change
-        self._refresh_ws_table_debounced()
-        if self.state.view_mode == ViewMode.SESSIONS:
-            self._refresh_sessions_table()
+        with self.batch_update():
+            self._refresh_ws_table_debounced()
+            if self.state.view_mode == ViewMode.SESSIONS:
+                self._refresh_sessions_table()
 
     def _update_preview(self, force: bool = False):
         if not self.state.preview_visible:
@@ -674,14 +674,16 @@ class OrchestratorApp(App):
     def _refresh_preview_sessions(self):
         olist = self.query_one("#preview-sessions", OptionList)
         highlighted = olist.highlighted
-        olist.clear_options()
+        options = []
         for i, s in enumerate(self.state.preview_sessions):
             act = session_activity(s, self.state.last_seen_cache)
             seen = _is_session_seen(s, self.state.last_seen_cache)
-            olist.add_option(Option(
+            options.append(Option(
                 _render_session_option(s, act, self.state.throbber_frame, title_width=35, seen=seen),
                 id=str(i),
             ))
+        olist.clear_options()
+        olist.add_options(options)
         if highlighted is not None and highlighted < len(self.state.preview_sessions):
             olist.highlighted = highlighted
 
@@ -914,25 +916,30 @@ class OrchestratorApp(App):
         last_seen = self.state.get_last_seen()
         lw = self._olist_line_width(table)
 
+        # Build all options before touching the widget tree
+        options = []
+        for ws in items:
+            ws_sessions = self.state.sessions_for_ws(ws)
+            git_st = None
+            repo = ws.repo_path
+            if repo:
+                git_st = self.state.git_status_cache.get(repo)
+            prompt = _render_ws_option(
+                ws, ws_sessions, last_seen,
+                tmux_check=self.state.ws_has_tmux,
+                line_width=lw,
+                git_status=git_st,
+            )
+            options.append(Option(prompt, id=ws.id))
+
         with self.batch_update():
             table.clear_options()
-            for ws in items:
-                ws_sessions = self.state.sessions_for_ws(ws)
-                # Get cached git status for this workstream's repo
-                git_st = None
-                repo = ws.repo_path
-                if repo:
-                    git_st = self.state.git_status_cache.get(repo)
-                prompt = _render_ws_option(
-                    ws, ws_sessions, last_seen,
-                    tmux_check=self.state.ws_has_tmux,
-                    line_width=lw,
-                    git_status=git_st,
-                )
-                table.add_option(Option(prompt, id=ws.id))
+            table.add_options(options)
             self._olist_restore_cursor(table, old_key, old_idx)
             self._update_all_bars()
-            self._update_preview(force=True)
+            # Only force-rebuild preview if the selected item changed
+            new_key = self._olist_cursor_key(table)
+            self._update_preview(force=(new_key != old_key))
 
     def _selected_ws(self) -> Workstream | None:
         try:
@@ -1039,7 +1046,7 @@ class OrchestratorApp(App):
         self.state.update_sessions(sessions, threads, discovered)
         self._preview_ws_id = None
         with self.batch_update():
-            self._refresh_ws_table_debounced()
+            self._refresh_ws_table()
             self._refresh_sessions_table()
         for screen in self.screen_stack:
             screen.post_message(SessionsChanged())
@@ -1056,13 +1063,16 @@ class OrchestratorApp(App):
         last_seen = self.state.get_last_seen()
         lw = self._olist_line_width(table)
 
+        options = []
+        for session in self.state.sessions:
+            act = session_activity(session, last_seen)
+            seen = _is_session_seen(session, last_seen)
+            prompt = _render_session_option(session, act, 0, seen=seen, line_width=lw)
+            options.append(Option(prompt, id=session.session_id))
+
         with self.batch_update():
             table.clear_options()
-            for session in self.state.sessions:
-                act = session_activity(session, last_seen)
-                seen = _is_session_seen(session, last_seen)
-                prompt = _render_session_option(session, act, 0, seen=seen, line_width=lw)
-                table.add_option(Option(prompt, id=session.session_id))
+            table.add_options(options)
             self._olist_restore_cursor(table, old_key, old_idx)
             self._update_all_bars()
 
@@ -1085,12 +1095,15 @@ class OrchestratorApp(App):
         last_seen = self.state.get_last_seen()
         lw = self._olist_line_width(table)
 
+        options = []
+        for ws in self.state.store.archived:
+            ws_sessions = self.state.sessions_for_ws(ws)
+            prompt = _render_ws_option(ws, ws_sessions, last_seen, line_width=lw)
+            options.append(Option(prompt, id=ws.id))
+
         with self.batch_update():
             table.clear_options()
-            for ws in self.state.store.archived:
-                ws_sessions = self.state.sessions_for_ws(ws)
-                prompt = _render_ws_option(ws, ws_sessions, last_seen, line_width=lw)
-                table.add_option(Option(prompt, id=ws.id))
+            table.add_options(options)
             self._olist_restore_cursor(table, old_key, old_idx)
 
     def _selected_archived(self) -> Workstream | None:
@@ -1278,24 +1291,27 @@ class OrchestratorApp(App):
                 name = self.state.unarchive(ws.id)
                 if name:
                     self.notify(f"Restored: {name}", timeout=2)
-                    self._refresh_ws_table()
-                    self._refresh_archived_table()
+                    with self.batch_update():
+                        self._refresh_ws_table()
+                        self._refresh_archived_table()
         elif self.state.view_mode == ViewMode.WORKSTREAMS:
             ws = self._selected_ws()
             if ws:
                 name = self.state.archive(ws.id)
                 if name:
                     self.notify(f"Archived: {name}", timeout=2)
-                    self._refresh_ws_table()
-                    self._refresh_archived_table()
+                    with self.batch_update():
+                        self._refresh_ws_table()
+                        self._refresh_archived_table()
         elif self.state.view_mode == ViewMode.ARCHIVED:
             ws = self._selected_archived()
             if ws:
                 name = self.state.unarchive(ws.id)
                 if name:
                     self.notify(f"Restored: {name}", timeout=2)
-                    self._refresh_ws_table()
-                    self._refresh_archived_table()
+                    with self.batch_update():
+                        self._refresh_ws_table()
+                        self._refresh_archived_table()
 
     # Keep legacy action names so DetailScreen and other callers still work
     def action_archive(self):

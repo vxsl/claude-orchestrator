@@ -8,7 +8,9 @@ Screen {
     color: #b1bac4;
 }
 
-* {
+/* Scope scrollbar styles to scrollable widgets only — universal * selector
+   causes CSS recalculation on every OptionList option during cursor movement */
+OptionList, VerticalScroll, TextArea, Screen {
     scrollbar-size: 1 1;
     scrollbar-background: transparent;
     scrollbar-color: #161b22;

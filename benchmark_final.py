@@ -8,6 +8,8 @@ import os
 
 sys.path.insert(0, os.path.dirname(__file__))
 
+from textual.widgets import OptionList
+
 
 async def bench_real_app():
     from app import OrchestratorApp
@@ -22,9 +24,8 @@ async def bench_real_app():
         await asyncio.sleep(2)
         await pilot.pause()
 
-        from fast_table import FastTable
-        table = app.query_one("#ws-table", FastTable)
-        print(f"  Rows: {table.row_count}")
+        table = app.query_one("#ws-table", OptionList)
+        print(f"  Rows: {table.option_count}")
 
         # Bench: cursor down (should be fast — only 2 lines dirty)
         times = []
@@ -81,10 +82,10 @@ async def bench_real_app():
             await pilot.pause()
 
         # Bench: preview update (cursor to new workstream)
-        table.move_cursor(row=0)
+        table.highlighted = 0
         await pilot.pause()
         times = []
-        for i in range(min(10, table.row_count - 1)):
+        for i in range(min(10, table.option_count - 1)):
             t0 = time.perf_counter()
             table.action_cursor_down()
             await pilot.pause()

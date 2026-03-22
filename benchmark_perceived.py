@@ -49,9 +49,9 @@ async def bench_key_press():
         times = []
         for _ in range(3):
             # Move to a valid row first
-            from fast_table import FastTable
-            table = pilot.app.query_one("#ws-table", FastTable)
-            table.move_cursor(row=0)
+            from textual.widgets import OptionList
+            table = pilot.app.query_one("#ws-table", OptionList)
+            table.highlighted = 0
             await pilot.pause()
 
             t0 = time.perf_counter()
