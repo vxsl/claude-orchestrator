@@ -401,6 +401,15 @@ class TerminalWidget(Widget, can_focus=True):
                         self.post_message(self.Finished())
                         return
                     self._process_output(data)
+                # Debounce: let rapid output (e.g. full-screen redraws)
+                # accumulate before rendering a frame.
+                await asyncio.sleep(0.01)
+                while not queue.empty():
+                    data = queue.get_nowait()
+                    if data is None:
+                        self.post_message(self.Finished())
+                        return
+                    self._process_output(data)
                 self.refresh()
         except asyncio.CancelledError:
             pass
