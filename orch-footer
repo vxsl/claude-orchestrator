@@ -1,23 +1,25 @@
 #!/usr/bin/env bash
-# orch-footer — 1-line footer bar for Claude sessions launched from orch
+# orch-footer — 1-line action bar for Claude sessions launched from orch
 #
-# Shows: session ID prefix, working directory, latest note, Ctrl+D hint
+# Shows: session ID, working dir, action hints
 set -euo pipefail
 
 # ─── Mellow palette ─────────────────────────────────────────────
 C_BLUE=$'\033[38;5;109m'
+C_GOLD=$'\033[38;5;179m'
 C_DIM=$'\033[38;5;244m'
 C_RESET=$'\033[0m'
 C_BG=$'\033[48;5;234m'
 
 # ─── Parse arguments ────────────────────────────────────────────
-SESSION_ID="" WS_NOTES="" CWD=""
+SESSION_ID="" CWD=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --session-id) SESSION_ID="$2"; shift 2;;
-        --ws-notes)   WS_NOTES="$2"; shift 2;;
         --cwd)        CWD="$2"; shift 2;;
+        # Accept and ignore legacy args
+        --ws-notes)   shift 2;;
         *)            shift;;
     esac
 done
@@ -28,33 +30,21 @@ SHORT_CWD="${CWD/#$HOME/~}"
 # Session ID prefix
 SHORT_SID="${SESSION_ID:0:8}"
 
-# Extract last note (strip timestamp prefix)
-LAST_NOTE=""
-if [[ -n "$WS_NOTES" ]]; then
-    LAST_NOTE=$(echo "$WS_NOTES" | tail -1 | sed 's/^\[.*\] //')
-fi
-
 # Hide cursor
 printf '\033[?25l'
 trap 'printf "\033[?25h"' EXIT
 
 # ─── Render ─────────────────────────────────────────────────────
-COLS=$(tput cols 2>/dev/null || echo 120)
-
 LINE="${C_BG}"
 LINE+=" ${C_BLUE}${SHORT_SID}${C_RESET}${C_BG}"
 LINE+="  ${C_DIM}${SHORT_CWD}${C_RESET}${C_BG}"
 
-if [[ -n "$LAST_NOTE" ]]; then
-    # Truncate note to fit
-    NOTE_MAX=$((COLS - 60))
-    (( NOTE_MAX < 10 )) && NOTE_MAX=10
-    NOTE_TRUNC="${LAST_NOTE:0:$NOTE_MAX}"
-    [[ ${#LAST_NOTE} -gt $NOTE_MAX ]] && NOTE_TRUNC+="…"
-    LINE+="  ${C_DIM}│  ${NOTE_TRUNC}${C_RESET}${C_BG}"
-fi
-
-LINE+="  ${C_DIM}│  Ctrl+\\ detach  Ctrl+D exit${C_RESET}"
+# Action bar
+LINE+="  ${C_DIM}│${C_RESET}${C_BG}"
+LINE+="  ${C_GOLD}C-e${C_RESET}${C_BG} ${C_DIM}extract todo${C_RESET}${C_BG}"
+LINE+="  ${C_DIM}C-h${C_RESET}${C_BG} ${C_DIM}orch${C_RESET}${C_BG}"
+LINE+="  ${C_DIM}C-\\\\${C_RESET}${C_BG} ${C_DIM}last window${C_RESET}${C_BG}"
+LINE+="  ${C_DIM}C-d${C_RESET}${C_BG} ${C_DIM}exit${C_RESET}${C_BG}"
 
 printf '\033[2K%s' "$LINE"
 

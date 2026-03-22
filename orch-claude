@@ -37,6 +37,21 @@ done
 ORCH_DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
 CWD="${CWD:-$HOME}"
 
+# ─── Sync slash commands to ~/.claude/commands/ ──────────────────
+CMDS_SRC="${ORCH_DIR}/commands"
+CMDS_DST="$HOME/.claude/commands"
+if [[ -d "$CMDS_SRC" ]]; then
+    mkdir -p "$CMDS_DST"
+    for cmd_file in "$CMDS_SRC"/*.md; do
+        [[ -f "$cmd_file" ]] || continue
+        dst_file="${CMDS_DST}/$(basename "$cmd_file")"
+        # Symlink if not already pointing to our source
+        if [[ ! -L "$dst_file" || "$(readlink -f "$dst_file")" != "$(readlink -f "$cmd_file")" ]]; then
+            ln -sf "$cmd_file" "$dst_file"
+        fi
+    done
+fi
+
 # ─── Determine session ID ───────────────────────────────────────
 IS_NEW=false
 if [[ -z "$SESSION_ID" ]]; then
@@ -72,10 +87,7 @@ if [[ -n "$WS_ID" && -f "$CONT_FILE" ]]; then
 fi
 
 # ─── Append distill command hints to context ──────────────────────
-DISTILL_HINT='Session distillation commands (use via Bash tool):
-- `orch distill crystallize --text "task summary" --context "detailed context"` — saves a rich todo item to this workstream for a future session to pick up. Use when the user says "crystallize this" or wants to save investigation results as an actionable todo.
-- `orch distill compact --summary "continuation context"` — saves a summary for the next session on this workstream. Use when the user says "compact" and wants to start fresh with distilled context. After running, tell the user to start a new session from the TUI.
-Environment: $ORCH_WS_ID and $ORCH_SESSION_ID are set automatically.'
+DISTILL_HINT='Extract todo: The user can press C-e or type /user:extract to distill this conversation into a rich todo item on the workstream. The slash command has full instructions. You can also run `orch distill crystallize --text "..." --context "..."` directly. $ORCH_WS_ID is set automatically.'
 
 # Only add distill hints if we have a workstream ID
 if [[ -n "$WS_ID" ]]; then
@@ -122,6 +134,17 @@ tmux select-pane -L
 
 # ─── Tag this window with session ID (for reattach detection) ────
 tmux set-option -w @orch_session_id "$SESSION_ID" 2>/dev/null || true
+
+# ─── Capture main pane ID and bind action keys ──────────────────
+MAIN_PANE=$(tmux display-message -p '#{pane_id}')
+tmux set-option -w @orch_main_pane "$MAIN_PANE" 2>/dev/null || true
+
+# C-e: extract todo — only fires in orch session windows (checks for @orch_session_id tag)
+# Falls through to normal C-e when not in an orch window
+tmux bind -n C-e if-shell \
+    'tmux display-message -p "#{@orch_session_id}" | grep -q .' \
+    "send-keys '/user:extract' Enter" \
+    'send-keys C-e'
 
 # ─── Export env vars for distill commands ──────────────────────────
 export ORCH_WS_ID="$WS_ID"
