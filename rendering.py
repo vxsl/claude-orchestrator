@@ -295,17 +295,26 @@ def _parse_iso(ts: str):
 
 
 def _is_session_seen(session, last_seen: dict[str, str] | None = None) -> bool:
-    """True if user has viewed this session since its last activity."""
+    """True if user has viewed this session since its last meaningful change.
+
+    Uses last_user_message_at (stable) instead of last_activity, which
+    gets bumped by heartbeat/system messages on every tail refresh.
+    """
     if not last_seen:
         return False
     seen_ts = last_seen.get(session.session_id)
-    if not seen_ts or not session.last_activity:
+    if not seen_ts:
+        return False
+    # Use last_user_message_at as the stable "something happened" marker.
+    # Falls back to last_activity for sessions without user messages.
+    anchor = getattr(session, 'last_user_message_at', '') or session.last_activity or ''
+    if not anchor:
         return False
     seen_dt = _parse_iso(seen_ts)
-    activity_dt = _parse_iso(session.last_activity)
-    if not seen_dt or not activity_dt:
+    anchor_dt = _parse_iso(anchor)
+    if not seen_dt or not anchor_dt:
         return False
-    return seen_dt >= activity_dt
+    return seen_dt >= anchor_dt
 
 
 def _all_sessions_seen(sessions: list, last_seen: dict[str, str] | None = None) -> bool:
