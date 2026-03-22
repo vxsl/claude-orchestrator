@@ -317,7 +317,7 @@ class TodoScreen(_VimOptionListMixin, ModalScreen[None]):
     }}
     #todo-active > .option-list--option-highlighted,
     #todo-archived > .option-list--option-highlighted {{
-        background: #252525;
+        background: #161b22;
     }}
     #todo-no-active, #todo-no-archived {{
         padding: 1 3;
@@ -887,7 +887,7 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
     }}
     #detail-sessions > .option-list--option-highlighted,
     #detail-archived > .option-list--option-highlighted {{
-        background: #252525;
+        background: #161b22;
     }}
     #detail-search-input {{
         display: none;
@@ -944,7 +944,7 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         background: {BG_BASE};
     }}
     #detail-feed > .option-list--option-highlighted {{
-        background: #252525;
+        background: #161b22;
     }}
     #detail-no-feed {{
         padding: 1 3;
@@ -1488,17 +1488,11 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
 
     def _render_body(self) -> str:
         lines = []
-        dirs = ws_directories(self.ws)
-        other_links = [lnk for lnk in self.ws.links
-                       if lnk.kind != "claude-session"
-                       and (lnk.kind not in ("worktree", "file")
-                            or not os.path.isdir(os.path.expanduser(lnk.value)))]
-        if dirs or other_links:
-            lines.append(f"[bold {C_BLUE}]Context[/bold {C_BLUE}]")
-            for d in dirs:
-                short = d.replace(str(Path.home()), "~")
-                lines.append(f"  [{C_DIM}]{short}[/{C_DIM}]")
-            for lnk in other_links:
+        ext_links = [lnk for lnk in self.ws.links
+                     if lnk.kind not in ("worktree", "file", "claude-session")]
+        if ext_links:
+            lines.append(f"[bold {C_BLUE}]Links[/bold {C_BLUE}]")
+            for lnk in ext_links:
                 icon = _link_icon(lnk.kind)
                 lines.append(f"  {icon} [{C_DIM}]{_rich_escape(lnk.label)}:[/{C_DIM}] {_rich_escape(lnk.value)}")
             lines.append("")

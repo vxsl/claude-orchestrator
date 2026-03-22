@@ -26,26 +26,26 @@ from sessions import ClaudeSession
 from threads import Thread, ThreadActivity, session_activity, _ACTIVITY_PRIORITY
 
 
-# ─── Color Palette (GitHub Dark-inspired, high contrast) ─────────────
-# Aligned with alacritty GitHub Dark theme for consistent terminal feel
+# ─── Color Palette (high contrast on true black) ─────────────────────
+# Matches alacritty GitHub Dark theme — bright text on black background
 
 C_BLUE = "#58a6ff"       # structural, borders
-C_PURPLE = "#bc8cff"     # headings, personal category
-C_CYAN = "#39c5cf"       # active states, work category
-C_GREEN = "#3fb950"      # success, done
-C_YELLOW = "#d29922"     # warnings, queued
+C_PURPLE = "#d2a8ff"     # headings, personal category
+C_CYAN = "#56d4dd"       # active states, work category
+C_GREEN = "#56d364"      # success, done
+C_YELLOW = "#e3b341"     # warnings, queued
 C_ORANGE = "#d7875f"     # secondary accents
-C_RED = "#ff7b72"        # errors, blocked
+C_RED = "#ffa198"        # errors, blocked
 C_GOLD = "#e3b341"       # crystallized todos, distilled knowledge
-C_LIGHT = "#b1bac4"      # primary text (matches terminal white)
-C_MID = "#8b949e"        # secondary metadata
-C_DIM = "#6e7681"        # subdued (matches terminal bright-black)
+C_LIGHT = "#e6edf3"      # primary text (terminal foreground)
+C_MID = "#b1bac4"        # secondary text (terminal normal white)
+C_DIM = "#6e7681"        # subdued (terminal bright-black)
 C_FAINT = "#484f58"      # near-invisible — IDs, decorative
 
-# ─── Background Palette (hardcoded to bypass Textual's auto-tinting) ──
-BG_BASE = "#141414"      # deepest — screen background
-BG_SURFACE = "#1a1a1a"   # slightly lifted — tables, panes
-BG_RAISED = "#222222"    # bars, headers, inputs
+# ─── Background Palette ──────────────────────────────────────────────
+BG_BASE = "#000000"      # true black — matches terminal
+BG_SURFACE = "#0d1117"   # barely lifted — panels
+BG_RAISED = "#161b22"    # bars, headers, inputs
 
 
 # ─── Theme maps ─────────────────────────────────────────────────────
@@ -411,14 +411,14 @@ def _render_session_option(
     else:
         line1 = f" {icon} {title_fmt}"
 
-    # Line 2: model, msgs, duration, age — varied grays by importance
+    # Line 2: model in blue, stats in mid, age in mid, sid faint
     dur_str = f"{duration:<8}" if duration else ""
     dur_len = 8 if duration else 0
     meta_left_len = 4 + 8 + 10 + dur_len + len(age_str)
     sid_gap = max(2, LINE_WIDTH - meta_left_len - 8)
 
     line2 = (
-        f"{INDENT}[{C_MID}]{model:<8}[/{C_MID}][{C_DIM}]{msgs_str:<10}"
+        f"{INDENT}[{C_BLUE}]{model:<8}[/{C_BLUE}][{C_DIM}]{msgs_str:<10}"
         f"{dur_str}[/{C_DIM}]"
         f"[{C_MID}]{age_str}[/{C_MID}]"
         f"{' ' * sid_gap}[{C_FAINT}]{sid}[/{C_FAINT}]"
@@ -446,7 +446,7 @@ def _render_session_option(
         line3 = f"{INDENT}{left}"
     lines.append(line3)
 
-    # Line 4: last message snippet — role tag slightly brighter than content
+    # Line 4: last message snippet — role colored, snippet in mid
     if s.last_message_text:
         max_snippet = title_width + 12
         snippet = _rich_escape(s.last_message_text[:max_snippet])
@@ -454,7 +454,8 @@ def _render_session_option(
             snippet += "…"
         is_user = s.last_message_role == "user"
         role_tag = "you" if is_user else "claude"
-        lines.append(f"{INDENT}[{C_MID}]{role_tag}:[/{C_MID}] [{C_DIM}]{snippet}[/{C_DIM}]")
+        role_color = C_GREEN if is_user else C_PURPLE
+        lines.append(f"{INDENT}[{role_color}]{role_tag}:[/{role_color}] [{C_DIM}]{snippet}[/{C_DIM}]")
 
     return "\n".join(lines)
 
@@ -518,14 +519,14 @@ def _render_content_search_result(
     fill = max(2, LINE_WIDTH - prefix_w - len(title_raw) - len(hits_str))
     line1 = f" \u2738 {title}{' ' * fill}[{C_YELLOW}]{hits_str}[/{C_YELLOW}]"
 
-    # Line 2: meta — varied grays
+    # Line 2: model in blue, stats dim, age mid, sid faint
     dur_str = f"{duration:<8}" if duration else ""
     dur_len = 8 if duration else 0
     meta_left_len = 4 + 8 + 10 + dur_len + len(age_str)
     sid_gap = max(2, LINE_WIDTH - meta_left_len - 8)
 
     line2 = (
-        f"{INDENT}[{C_MID}]{model:<8}[/{C_MID}][{C_DIM}]{msgs_str:<10}"
+        f"{INDENT}[{C_BLUE}]{model:<8}[/{C_BLUE}][{C_DIM}]{msgs_str:<10}"
         f"{dur_str}[/{C_DIM}]"
         f"[{C_MID}]{age_str}[/{C_MID}]"
         f"{' ' * sid_gap}[{C_FAINT}]{sid}[/{C_FAINT}]"
@@ -553,10 +554,11 @@ def _render_content_search_result(
         line3 = f"{INDENT}{left}"
     lines.append(line3)
 
-    # Snippet line
+    # Snippet line — role colored
     role_tag = "you" if hit.role == "user" else "claude"
+    role_color = C_GREEN if hit.role == "user" else C_PURPLE
     highlighted = _highlight_snippet(hit.snippet, hit.match_ranges)
-    lines.append(f"{INDENT}[{C_MID}]{role_tag}:[/{C_MID}] {highlighted}")
+    lines.append(f"{INDENT}[{role_color}]{role_tag}:[/{role_color}] {highlighted}")
     return "\n".join(lines)
 
 

@@ -1,19 +1,19 @@
 /* ── Orchestrator Global Styles ──
- * Single flat dark background. Differentiation through text color only.
- * BG=#141414 everywhere. Cursor is the only elevated element.
+ * True black background, high-contrast GitHub Dark palette.
+ * Differentiation through text color only. Cursor is the only elevated element.
  */
 
 Screen {
-    background: #141414;
-    color: #888888;
+    background: #000000;
+    color: #b1bac4;
 }
 
 * {
     scrollbar-size: 1 1;
     scrollbar-background: transparent;
-    scrollbar-color: #282828;
-    scrollbar-color-hover: #444444;
-    scrollbar-color-active: #87afaf 60%;
+    scrollbar-color: #161b22;
+    scrollbar-color-hover: #484f58;
+    scrollbar-color-active: #58a6ff 60%;
     scrollbar-background-hover: transparent;
     scrollbar-background-active: transparent;
     scrollbar-corner-color: transparent;
@@ -22,84 +22,84 @@ Screen {
 /* ── DataTable: flat, cursor pops ── */
 DataTable {
     scrollbar-size: 1 1;
-    background: #141414;
-    color: #888888;
+    background: #000000;
+    color: #b1bac4;
 }
 DataTable > .datatable--header {
     text-style: bold;
-    color: #87afaf;
-    background: #141414;
+    color: #58a6ff;
+    background: #000000;
 }
 DataTable > .datatable--cursor {
-    background: #252525;
-    color: #d0d0d0;
+    background: #161b22;
+    color: #e6edf3;
     text-style: bold;
 }
 DataTable > .datatable--hover {
-    background: #1e1e1e;
+    background: #0d1117;
 }
 DataTable > .datatable--even-row {
-    background: #141414;
+    background: #000000;
 }
 DataTable > .datatable--odd-row {
-    background: #141414;
+    background: #000000;
 }
 
 /* ── OptionList: flat ── */
 OptionList {
     scrollbar-size: 1 1;
     border: none;
-    background: #141414;
+    background: #000000;
 }
 OptionList > .option-list--option-highlighted {
-    background: #252525;
+    background: #161b22;
     text-style: bold;
 }
 OptionList > .option-list--option-hover {
-    background: #1e1e1e;
+    background: #0d1117;
 }
 
 /* ── Inputs ── */
 Input {
     border: none;
-    background: #1e1e1e;
+    background: #0d1117;
     padding: 0 1;
     height: 1;
 }
 Input:focus {
     border: none;
-    background: #1e1e1e;
+    background: #0d1117;
 }
 
 /* ── TextArea ── */
 TextArea {
-    border: round #282828;
-    background: #141414;
+    border: round #161b22;
+    background: #000000;
 }
 TextArea:focus {
-    border: round #87afaf 30%;
+    border: round #58a6ff 30%;
 }
 
 /* ── Select ── */
 Select {
-    border: round #282828;
+    border: round #161b22;
 }
 Select:focus {
-    border: round #87afaf 30%;
+    border: round #58a6ff 30%;
 }
 SelectOverlay {
-    background: #1a1a1a;
-    border: round #282828;
+    background: #0d1117;
+    border: round #161b22;
 }
 
 /* ── Modal scrim ── */
 ModalScreen {
-    background: #0a0a0a 90%;
+    background: #000000 90%;
 }
 
 /* ── Toast ── */
 Toast {
-    background: #1e1e1e;
-    color: #a0a0a0;
-    border: round #282828;
+    background: #0d1117;
+    color: #b1bac4;
+    border: round #161b22;
 }
