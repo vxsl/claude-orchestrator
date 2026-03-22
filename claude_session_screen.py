@@ -231,7 +231,7 @@ class ClaudeSessionScreen(Screen):
 
     BINDINGS = [
         Binding("ctrl+e", "extract_todo", "Extract todo", priority=True),
-        Binding("backspace,ctrl+h", "go_back", "^H back", priority=True),
+        Binding("ctrl+h", "go_back", "^H back", priority=True),
     ]
 
     DEFAULT_CSS = f"""
