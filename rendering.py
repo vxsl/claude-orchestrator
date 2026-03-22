@@ -315,32 +315,61 @@ def _render_session_option(
     s: ClaudeSession, act: ThreadActivity, throbber_frame: int = 0,
     title_width: int = 48,
 ) -> str:
-    """Render a session as a formatted two-line OptionList entry."""
+    """Render a session as a formatted multi-line OptionList entry.
+
+    Layout (columnar alignment):
+      {icon}  {title}                                  {badge}
+             {model:<7} {msgs:<9} {tokens:<7} {age}    {sid}
+             {role}: {snippet}
+    """
+    INDENT = "      "  # 6 spaces — aligns under title text
+    META_WIDTH = title_width + 2  # total plain-text width for metadata line
+
     icon = _activity_icon(act, throbber_frame)
     badge = _activity_badge(act)
     model = _short_model(s.model)
-    title = _rich_escape(_session_title(s)[:title_width])
-    tokens = _colored_tokens(s)
+    title_raw = _session_title(s)[:title_width]
+    title_esc = _rich_escape(title_raw)
+    sid = s.session_id[:8]
+    tokens_plain = s.tokens_display
+    msgs_str = f"{s.message_count} msgs"
+    age_str = s.age
 
+    # Title styling by activity state
     if act == ThreadActivity.IDLE:
-        title_fmt = f"[{C_DIM}]{title}[/{C_DIM}]"
+        title_fmt = f"[{C_DIM}]{title_esc}[/{C_DIM}]"
     elif act in (ThreadActivity.THINKING, ThreadActivity.AWAITING_INPUT):
-        title_fmt = f"[bold]{title}[/bold]"
+        title_fmt = f"[bold]{title_esc}[/bold]"
     elif act == ThreadActivity.RESPONSE_FRESH:
-        title_fmt = f"[bold {C_GREEN}]{title}[/bold {C_GREEN}]"
+        title_fmt = f"[bold {C_GREEN}]{title_esc}[/bold {C_GREEN}]"
     elif act == ThreadActivity.RESPONSE_READY:
-        title_fmt = f"[{C_ORANGE}]{title}[/{C_ORANGE}]"
+        title_fmt = f"[{C_ORANGE}]{title_esc}[/{C_ORANGE}]"
     else:
-        title_fmt = title
+        title_fmt = title_esc
 
-    pad = " " * max(1, title_width + 2 - len(title))
+    # Line 1: icon + title + right-aligned badge
+    pad = " " * max(1, title_width + 2 - len(title_raw))
     badge_part = f"{pad}{badge}" if badge else ""
     line1 = f" {icon}  {title_fmt}{badge_part}"
+
+    # Line 2: fixed-width columnar metadata + right-aligned session ID
+    # Columns: model(7) + msgs(9) + tokens(7) + age(variable) + gap + sid(8)
+    col_model = f"{model:<7}"
+    col_msgs = f"{msgs_str:<9}"
+    col_tokens_plain = f"{tokens_plain:<7}"
+    left_len = 7 + 9 + 7 + len(age_str)
+    sid_gap = " " * max(2, META_WIDTH - left_len - 8)
+
+    tokens_fmt = _colored_tokens(s)
+    tok_pad = " " * max(1, 7 - len(tokens_plain))
     line2 = (
-        f"      [{C_DIM}]{model} · {s.message_count} msgs · "
-        f"[/{C_DIM}]{tokens}[{C_DIM}] · {s.age}[/{C_DIM}]"
+        f"{INDENT}[{C_DIM}]{col_model}{col_msgs}[/{C_DIM}]"
+        f"{tokens_fmt}"
+        f"[{C_DIM}]{tok_pad}{age_str}"
+        f"{sid_gap}{sid}[/{C_DIM}]"
     )
-    # Third line: last message snippet — styled by activity state
+
+    # Line 3: last message snippet — styled by activity state
     if s.last_message_text:
         max_snippet = title_width + 10
         snippet = _rich_escape(s.last_message_text[:max_snippet])
@@ -348,11 +377,6 @@ def _render_session_option(
             snippet += "…"
         is_user = s.last_message_role == "user"
         role_tag = "you" if is_user else "claude"
-        # Color the snippet to reflect what matters:
-        # - thinking: cyan (active) — show what claude is working on
-        # - awaiting input / fresh response: green — claude answered, your turn
-        # - response ready (stale unread): orange — been waiting for you
-        # - idle: dim — just context
         if act == ThreadActivity.THINKING:
             snip_color = C_CYAN
         elif act in (ThreadActivity.AWAITING_INPUT, ThreadActivity.RESPONSE_FRESH):
@@ -363,7 +387,7 @@ def _render_session_option(
             snip_color = C_DIM
         role_style = f"[{C_DIM}]" if is_user else f"[italic {snip_color}]"
         role_end = f"[/{C_DIM}]" if is_user else f"[/italic {snip_color}]"
-        line3 = f"      [{C_DIM}]{role_tag}:[/{C_DIM}] {role_style}{snippet}{role_end}"
+        line3 = f"{INDENT}[{C_DIM}]{role_tag}:[/{C_DIM}] {role_style}{snippet}{role_end}"
         return f"{line1}\n{line2}\n{line3}"
     return f"{line1}\n{line2}"
 
@@ -403,23 +427,41 @@ def _render_content_search_result(
     """Render a content search result as a formatted OptionList entry.
 
     Line 1: session title
-    Line 2: hit count + model + age (dim)
+    Line 2: columnar metadata (matches _render_session_option layout)
     Line 3: best snippet with matched words highlighted
     """
+    INDENT = "      "
+    META_WIDTH = title_width + 2
     s = result.session
     hit = result.best_hit
     title = _rich_escape(_session_title(s)[:title_width])
     model = _short_model(s.model)
-    tokens = _colored_tokens(s)
+    tokens_plain = s.tokens_display
+    hits_str = f"{result.hit_count} hit{'s' if result.hit_count != 1 else ''}"
+    msgs_str = f"{s.message_count} msgs"
+    age_str = s.age
+    sid = s.session_id[:8]
+
+    # Columns: hits(8) + model(7) + msgs(9) + tokens(7) + age + gap + sid(8)
+    col_hits = f"{hits_str:<8}"
+    col_model = f"{model:<7}"
+    col_msgs = f"{msgs_str:<9}"
+    left_len = 8 + 7 + 9 + 7 + len(age_str)
+    sid_gap = " " * max(2, META_WIDTH - left_len - 8)
+
+    tokens_fmt = _colored_tokens(s)
+    tok_pad = " " * max(1, 7 - len(tokens_plain))
 
     line1 = f" \u2738  {title}"  # ✸ search icon
     line2 = (
-        f"      [{C_DIM}]{result.hit_count} match{'es' if result.hit_count != 1 else ''} · "
-        f"{model} · {s.message_count} msgs · [/{C_DIM}]{tokens}[{C_DIM}] · {s.age}[/{C_DIM}]"
+        f"{INDENT}[{C_DIM}]{col_hits}{col_model}{col_msgs}[/{C_DIM}]"
+        f"{tokens_fmt}"
+        f"[{C_DIM}]{tok_pad}{age_str}"
+        f"{sid_gap}{sid}[/{C_DIM}]"
     )
     role_tag = "you" if hit.role == "user" else "claude"
     highlighted = _highlight_snippet(hit.snippet, hit.match_ranges)
-    line3 = f"      [{C_DIM}]{role_tag}:[/{C_DIM}] {highlighted}"
+    line3 = f"{INDENT}[{C_DIM}]{role_tag}:[/{C_DIM}] {highlighted}"
     return f"{line1}\n{line2}\n{line3}"
 
 
