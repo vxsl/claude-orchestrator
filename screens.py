@@ -2681,24 +2681,36 @@ class RepoPickerScreen(ModalScreen[str | None]):
     def _on_filter_changed(self, event: Input.Changed) -> None:
         self._rebuild_list(event.value)
 
+    def _ensure_highlighted(self, ol: OptionList) -> bool:
+        """Ensure the option list has a highlighted item. Returns False if empty."""
+        if ol.option_count == 0:
+            return False
+        if ol.highlighted is None:
+            ol.highlighted = 0
+        return True
+
     def _on_key(self, event) -> None:
         """Route navigation keys to the option list while input stays focused."""
         ol = self.query_one("#repopick-list", OptionList)
         key = event.key
         if key in ("down", "ctrl+n"):
-            if ol.option_count > 0:
-                if ol.highlighted is None:
-                    ol.highlighted = 0
-                elif ol.highlighted < ol.option_count - 1:
-                    ol.action_cursor_down()
+            if self._ensure_highlighted(ol) and ol.highlighted < ol.option_count - 1:
+                ol.action_cursor_down()
             event.prevent_default()
             event.stop()
         elif key in ("up", "ctrl+p"):
-            if ol.option_count > 0:
-                if ol.highlighted is None:
-                    ol.highlighted = 0
-                elif ol.highlighted > 0:
-                    ol.action_cursor_up()
+            if self._ensure_highlighted(ol) and ol.highlighted > 0:
+                ol.action_cursor_up()
+            event.prevent_default()
+            event.stop()
+        elif key == "ctrl+d":
+            if self._ensure_highlighted(ol):
+                ol.action_page_down()
+            event.prevent_default()
+            event.stop()
+        elif key == "ctrl+u":
+            if self._ensure_highlighted(ol):
+                ol.action_page_up()
             event.prevent_default()
             event.stop()
 
