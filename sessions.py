@@ -263,6 +263,19 @@ def _decode_project_dir(dirname: str) -> str:
     # Claude uses dashes for path separators, but also for filenames with dashes
     # We need to be smart about this — check which interpretation yields a real path
     parts = dirname.lstrip("-").split("-")
+    # Claude encodes dotfiles as double-dash: e.g. "--xmonad" for ".xmonad".
+    # After splitting on "-", this produces empty strings before the dotfile segment.
+    # Merge each empty part with the following segment, prefixed with ".".
+    merged: list[str] = []
+    i = 0
+    while i < len(parts):
+        if parts[i] == "" and i + 1 < len(parts):
+            merged.append("." + parts[i + 1])
+            i += 2
+        else:
+            merged.append(parts[i])
+            i += 1
+    parts = merged
     # Try to reconstruct the path
     best_path = "/" + "/".join(parts)
     # Try progressively joining segments to find real directories

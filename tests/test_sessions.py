@@ -91,6 +91,20 @@ class TestDecodeProjectDir:
         result = _decode_project_dir("-home-user-dev-my-project")
         assert result.startswith("/")
 
+    def test_dotfile_double_dash(self, tmp_path):
+        """Double-dash encodes dotfiles: --xmonad → .xmonad."""
+        (tmp_path / ".xmonad").mkdir()
+        dirname = str(tmp_path / ".xmonad").replace("/", "-").replace("-.", "--").lstrip("-")
+        result = _decode_project_dir(dirname)
+        assert result == str(tmp_path / ".xmonad")
+
+    def test_nested_dotfile(self, tmp_path):
+        """Nested dotfiles: --dotfiles-xdg--config → .dotfiles/xdg/.config."""
+        (tmp_path / ".dotfiles" / "xdg" / ".config").mkdir(parents=True)
+        dirname = str(tmp_path / ".dotfiles" / "xdg" / ".config").replace("/", "-").replace("-.", "--").lstrip("-")
+        result = _decode_project_dir(dirname)
+        assert result == str(tmp_path / ".dotfiles" / "xdg" / ".config")
+
 
 # ─── Session Parsing ────────────────────────────────────────────────
 
