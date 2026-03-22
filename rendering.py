@@ -330,6 +330,106 @@ def _all_sessions_seen(sessions: list, last_seen: dict[str, str] | None = None) 
     return True
 
 
+# ─── Workstream Option Rendering ─────────────────────────────────────
+
+def _render_ws_option(
+    ws: Workstream,
+    ws_sessions: list[ClaudeSession],
+    last_seen: dict[str, str],
+    tmux_check=None,
+    line_width: int = 0,
+) -> str:
+    """Render a workstream as a formatted 2-line OptionList entry.
+
+    Layout:
+      {icon} {name}  {indicators}              {worktree}
+         {status}  {category}  {sessions}  {tokens}  {updated}
+    """
+    from models import Origin
+
+    INDENT = "    "
+    LINE_WIDTH = line_width if line_width > 0 else 72
+
+    is_discovered = ws.origin == Origin.DISCOVERED
+
+    # Icon
+    if is_discovered:
+        best = _best_activity(ws_sessions, last_seen)
+        all_seen = _all_sessions_seen(ws_sessions, last_seen)
+        icon = _activity_icon(best, seen=all_seen)
+    else:
+        color = STATUS_THEME.get(ws.status, C_DIM)
+        icon = f"[{color}]{STATUS_ICONS[ws.status]}[/{color}]"
+
+    # Name
+    name_raw = ws.name
+    name_esc = _rich_escape(name_raw)
+    if is_discovered:
+        name_fmt = f"[{C_LIGHT}]{name_esc}[/{C_LIGHT}]"
+    else:
+        name_fmt = f"[{C_LIGHT}]{name_esc}[/{C_LIGHT}]"
+
+    # Indicators (tmux, stale, link icons)
+    indicators = ""
+    if not is_discovered:
+        indicators = _ws_indicators(ws, tmux_check=tmux_check)
+    ind_markup = f"  [{C_DIM}]{indicators}[/{C_DIM}]" if indicators else ""
+
+    # Worktree label (right-aligned)
+    wt_text, wt_color = _worktree_styled(ws)
+    if wt_text:
+        wt_markup = f"[{wt_color}]{_rich_escape(wt_text)}[/{wt_color}]"
+        wt_w = len(wt_text)
+    else:
+        wt_markup = ""
+        wt_w = 0
+
+    # Line 1: " {icon} {name} {indicators}     {worktree}"
+    prefix_w = 3  # space + icon + space
+    name_w = len(name_raw)
+    ind_plain_w = len(indicators) + 2 if indicators else 0
+    if wt_markup:
+        fill = max(2, LINE_WIDTH - prefix_w - name_w - ind_plain_w - wt_w)
+        line1 = f" {icon} {name_fmt}{ind_markup}{' ' * fill}{wt_markup}"
+    else:
+        line1 = f" {icon} {name_fmt}{ind_markup}"
+
+    # Line 2: status, category, session count, tokens, updated
+    if is_discovered:
+        best = _best_activity(ws_sessions, last_seen)
+        badge = _activity_badge(best, seen=_all_sessions_seen(ws_sessions, last_seen))
+        status_part = badge if badge else f"[{C_DIM}]idle[/{C_DIM}]"
+    else:
+        sc = STATUS_THEME.get(ws.status, C_DIM)
+        status_part = f"[{sc}]{ws.status.value}[/{sc}]"
+
+    cc = CATEGORY_THEME.get(ws.category, C_DIM)
+    cat_part = f"[{cc}]{ws.category.value}[/{cc}]"
+
+    sess_count = len(ws_sessions) if ws_sessions else 0
+    sess_part = f"[{C_CYAN}]{sess_count}[/{C_CYAN}] sess" if sess_count else ""
+
+    # Tokens
+    tok_part = ""
+    if ws_sessions:
+        total_tokens = sum(s.total_input_tokens + s.total_output_tokens for s in ws_sessions)
+        if total_tokens > 0:
+            if total_tokens > 1_000_000:
+                tk = f"{total_tokens / 1_000_000:.1f}M"
+            elif total_tokens > 1_000:
+                tk = f"{total_tokens / 1_000:.0f}k"
+            else:
+                tk = str(total_tokens)
+            tok_part = _token_color_markup(tk, total_tokens)
+
+    updated_part = f"[{C_DIM}]{_relative_time(ws.updated_at)}[/{C_DIM}]"
+
+    parts = [p for p in (status_part, cat_part, sess_part, tok_part, updated_part) if p]
+    line2 = f"{INDENT}{'  '.join(parts)}"
+
+    return f"{line1}\n{line2}"
+
+
 # ─── Session Option Rendering ────────────────────────────────────────
 
 def _session_title(session: ClaudeSession, titles: dict[str, str] | None = None) -> str:

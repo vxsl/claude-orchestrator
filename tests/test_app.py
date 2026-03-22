@@ -344,7 +344,7 @@ class TestAppStartup:
     async def test_ws_table_has_rows(self, app_with_store):
         async with app_with_store.run_test(size=(120, 40)) as pilot:
             ws_table = pilot.app.query_one("#ws-table")
-            assert ws_table.row_count == 3
+            assert ws_table.option_count == 3
 
 
 @pytest.mark.asyncio
@@ -352,9 +352,9 @@ class TestNavigation:
     async def test_j_moves_down(self, app_with_store):
         async with app_with_store.run_test(size=(120, 40)) as pilot:
             table = pilot.app.query_one("#ws-table")
-            initial_row = table.cursor_row
+            initial_row = table.highlighted
             await pilot.press("j")
-            assert table.cursor_row == initial_row + 1
+            assert table.highlighted == initial_row + 1
 
     async def test_k_moves_up(self, app_with_store):
         async with app_with_store.run_test(size=(120, 40)) as pilot:
@@ -362,7 +362,7 @@ class TestNavigation:
             await pilot.press("j")  # move down first
             await pilot.press("j")
             await pilot.press("k")  # then up
-            assert table.cursor_row == 1
+            assert table.highlighted == 1
 
     async def test_g_goes_to_top(self, app_with_store):
         async with app_with_store.run_test(size=(120, 40)) as pilot:
@@ -370,27 +370,27 @@ class TestNavigation:
             await pilot.press("j")
             await pilot.press("j")
             await pilot.press("g")
-            assert table.cursor_row == 0
+            assert table.highlighted == 0
 
     async def test_G_goes_to_bottom(self, app_with_store):
         async with app_with_store.run_test(size=(120, 40)) as pilot:
             table = pilot.app.query_one("#ws-table")
             await pilot.press("G")
-            assert table.cursor_row == table.row_count - 1
+            assert table.highlighted == table.option_count - 1
 
     async def test_ctrl_n_moves_down(self, app_with_store):
         async with app_with_store.run_test(size=(120, 40)) as pilot:
             table = pilot.app.query_one("#ws-table")
-            initial = table.cursor_row
+            initial = table.highlighted
             await pilot.press("ctrl+n")
-            assert table.cursor_row == initial + 1
+            assert table.highlighted == initial + 1
 
     async def test_ctrl_p_moves_up(self, app_with_store):
         async with app_with_store.run_test(size=(120, 40)) as pilot:
             table = pilot.app.query_one("#ws-table")
             await pilot.press("j")
             await pilot.press("ctrl+p")
-            assert table.cursor_row == 0
+            assert table.highlighted == 0
 
 
 @pytest.mark.asyncio
@@ -434,14 +434,14 @@ class TestFilters:
             await pilot.press("2")
             assert pilot.app.filter_mode == "work"
             table = pilot.app.query_one("#ws-table")
-            assert table.row_count == 1  # Only Alpha is work
+            assert table.option_count == 1  # Only Alpha is work
 
     async def test_filter_personal(self, app_with_store):
         async with app_with_store.run_test(size=(120, 40)) as pilot:
             await pilot.press("3")
             assert pilot.app.filter_mode == "personal"
             table = pilot.app.query_one("#ws-table")
-            assert table.row_count == 1  # Only Beta is personal
+            assert table.option_count == 1  # Only Beta is personal
 
 
 @pytest.mark.asyncio
