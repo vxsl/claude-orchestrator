@@ -38,7 +38,9 @@ C_ORANGE = "#d7875f"     # 173 — secondary accents
 C_RED = "#d75f5f"        # 167 — errors, blocked
 C_GOLD = "#d7af5f"       # 179 — crystallized todos, distilled knowledge
 C_LIGHT = "#a0a0a0"      # soft foreground text
+C_MID = "#787878"        # medium gray — secondary metadata
 C_DIM = "#585858"        # subdued — present but not loud
+C_FAINT = "#3a3a3a"      # near-invisible — IDs, decorative
 
 # ─── Background Palette (hardcoded to bypass Textual's auto-tinting) ──
 BG_BASE = "#141414"      # deepest — screen background
@@ -411,42 +413,42 @@ def _render_session_option(
     else:
         line1 = f" {icon} {title_fmt}"
 
-    # Line 2: model, msgs, duration, age — no tokens/cost
+    # Line 2: model, msgs, duration, age — varied grays by importance
     dur_str = f"{duration:<8}" if duration else ""
     dur_len = 8 if duration else 0
     meta_left_len = 4 + 8 + 10 + dur_len + len(age_str)
     sid_gap = max(2, LINE_WIDTH - meta_left_len - 8)
 
     line2 = (
-        f"{INDENT}[{C_DIM}]{model:<8}{msgs_str:<10}"
-        f"{dur_str}"
-        f"{age_str}"
-        f"{' ' * sid_gap}{sid}[/{C_DIM}]"
+        f"{INDENT}[{C_MID}]{model:<8}[/{C_MID}][{C_DIM}]{msgs_str:<10}"
+        f"{dur_str}[/{C_DIM}]"
+        f"[{C_MID}]{age_str}[/{C_MID}]"
+        f"{' ' * sid_gap}[{C_FAINT}]{sid}[/{C_FAINT}]"
     )
 
     lines = [line1, line2]
 
-    # Line 3: tool usage bar + file touchpoints + project path (when differs)
+    # Line 3: tool usage bar + file touchpoints + project path (always rendered)
     bar = _tool_bar(s.tool_counts)
     files = _file_touchpoints(s.files_mutated)
     proj_label = ""
     if ws_repo_path and s.project_path and s.project_path.rstrip("/") != ws_repo_path.rstrip("/"):
-        proj_label = f"[{C_DIM}]{Path(s.project_path).name}[/{C_DIM}]"
+        proj_label = f"[{C_FAINT}]{Path(s.project_path).name}[/{C_FAINT}]"
 
-    tool_parts = [p for p in (bar, files) if p]
-    if tool_parts or proj_label:
-        left = "  ".join(tool_parts)
-        if proj_label:
-            import re
-            left_plain = re.sub(r"\[/?[^\]]*\]", "", left)
-            proj_plain = re.sub(r"\[/?[^\]]*\]", "", proj_label)
-            gap = max(2, LINE_WIDTH - 4 - len(left_plain) - len(proj_plain))
-            line3 = f"{INDENT}{left}{' ' * gap}{proj_label}" if left else f"{INDENT}{' ' * (LINE_WIDTH - 4 - len(proj_plain))}{proj_label}"
-        else:
-            line3 = f"{INDENT}{left}"
-        lines.append(line3)
+    left = "  ".join(p for p in (bar, files) if p)
+    if not left:
+        left = f"[{C_FAINT}]{'─' * 6}[/{C_FAINT}]"
+    if proj_label:
+        import re
+        left_plain = re.sub(r"\[/?[^\]]*\]", "", left)
+        proj_plain = re.sub(r"\[/?[^\]]*\]", "", proj_label)
+        gap = max(2, LINE_WIDTH - 4 - len(left_plain) - len(proj_plain))
+        line3 = f"{INDENT}{left}{' ' * gap}{proj_label}" if left else f"{INDENT}{' ' * (LINE_WIDTH - 4 - len(proj_plain))}{proj_label}"
+    else:
+        line3 = f"{INDENT}{left}"
+    lines.append(line3)
 
-    # Line 4: last message snippet
+    # Line 4: last message snippet — role tag slightly brighter than content
     if s.last_message_text:
         max_snippet = title_width + 12
         snippet = _rich_escape(s.last_message_text[:max_snippet])
@@ -454,7 +456,7 @@ def _render_session_option(
             snippet += "…"
         is_user = s.last_message_role == "user"
         role_tag = "you" if is_user else "claude"
-        lines.append(f"{INDENT}[{C_DIM}]{role_tag}: {snippet}[/{C_DIM}]")
+        lines.append(f"{INDENT}[{C_MID}]{role_tag}:[/{C_MID}] [{C_DIM}]{snippet}[/{C_DIM}]")
 
     return "\n".join(lines)
 
@@ -518,45 +520,45 @@ def _render_content_search_result(
     fill = max(2, LINE_WIDTH - prefix_w - len(title_raw) - len(hits_str))
     line1 = f" \u2738 {title}{' ' * fill}[{C_YELLOW}]{hits_str}[/{C_YELLOW}]"
 
-    # Line 2: meta
+    # Line 2: meta — varied grays
     dur_str = f"{duration:<8}" if duration else ""
     dur_len = 8 if duration else 0
     meta_left_len = 4 + 8 + 10 + dur_len + len(age_str)
     sid_gap = max(2, LINE_WIDTH - meta_left_len - 8)
 
     line2 = (
-        f"{INDENT}[{C_DIM}]{model:<8}{msgs_str:<10}"
-        f"{dur_str}"
-        f"{age_str}"
-        f"{' ' * sid_gap}{sid}[/{C_DIM}]"
+        f"{INDENT}[{C_MID}]{model:<8}[/{C_MID}][{C_DIM}]{msgs_str:<10}"
+        f"{dur_str}[/{C_DIM}]"
+        f"[{C_MID}]{age_str}[/{C_MID}]"
+        f"{' ' * sid_gap}[{C_FAINT}]{sid}[/{C_FAINT}]"
     )
 
     lines = [line1, line2]
 
-    # Line 3: tool usage bar + file touchpoints + project path
+    # Line 3: tool usage bar + file touchpoints + project path (always rendered)
     bar = _tool_bar(s.tool_counts)
     files = _file_touchpoints(s.files_mutated)
     proj_label = ""
     if ws_repo_path and s.project_path and s.project_path.rstrip("/") != ws_repo_path.rstrip("/"):
-        proj_label = f"[{C_DIM}]{Path(s.project_path).name}[/{C_DIM}]"
+        proj_label = f"[{C_FAINT}]{Path(s.project_path).name}[/{C_FAINT}]"
 
-    tool_parts = [p for p in (bar, files) if p]
-    if tool_parts or proj_label:
-        left = "  ".join(tool_parts)
-        if proj_label:
-            import re
-            left_plain = re.sub(r"\[/?[^\]]*\]", "", left)
-            proj_plain = re.sub(r"\[/?[^\]]*\]", "", proj_label)
-            gap = max(2, LINE_WIDTH - 4 - len(left_plain) - len(proj_plain))
-            line3 = f"{INDENT}{left}{' ' * gap}{proj_label}" if left else f"{INDENT}{' ' * (LINE_WIDTH - 4 - len(proj_plain))}{proj_label}"
-        else:
-            line3 = f"{INDENT}{left}"
-        lines.append(line3)
+    left = "  ".join(p for p in (bar, files) if p)
+    if not left:
+        left = f"[{C_FAINT}]{'─' * 6}[/{C_FAINT}]"
+    if proj_label:
+        import re
+        left_plain = re.sub(r"\[/?[^\]]*\]", "", left)
+        proj_plain = re.sub(r"\[/?[^\]]*\]", "", proj_label)
+        gap = max(2, LINE_WIDTH - 4 - len(left_plain) - len(proj_plain))
+        line3 = f"{INDENT}{left}{' ' * gap}{proj_label}" if left else f"{INDENT}{' ' * (LINE_WIDTH - 4 - len(proj_plain))}{proj_label}"
+    else:
+        line3 = f"{INDENT}{left}"
+    lines.append(line3)
 
     # Snippet line
     role_tag = "you" if hit.role == "user" else "claude"
     highlighted = _highlight_snippet(hit.snippet, hit.match_ranges)
-    lines.append(f"{INDENT}[{C_DIM}]{role_tag}:[/{C_DIM}] {highlighted}")
+    lines.append(f"{INDENT}[{C_MID}]{role_tag}:[/{C_MID}] {highlighted}")
     return "\n".join(lines)
 
 
