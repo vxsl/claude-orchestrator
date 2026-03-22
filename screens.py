@@ -1071,8 +1071,7 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         self._load_detail_sessions()
         self.query_one("#detail-sessions", OptionList).focus()
         self._update_pane_labels()
-        self.set_interval(10, self._schedule_liveness_refresh)
-        self.set_interval(10, self._poll_feed)
+        self.set_interval(10, self._periodic_refresh)
 
     def _mark_all_seen(self):
         """Mark all sessions in this workstream as seen right now."""
@@ -1085,7 +1084,8 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
             mark_thread_seen(s.session_id)
         self._last_seen_cache = load_last_seen()
 
-    def _schedule_liveness_refresh(self):
+    def _periodic_refresh(self):
+        """Single merged timer: liveness check + feed poll."""
         self._do_liveness_refresh()
 
     @work(thread=True, exclusive=True, group="detail_liveness")
@@ -1100,7 +1100,30 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         for s in self._archived_sessions:
             if s.is_live:
                 refresh_session_tail(s)
-        self.app.call_from_thread(self._rebuild_all_options)
+        # Build fingerprint to check if anything changed
+        fp = self._session_fingerprint()
+        self.app.call_from_thread(self._apply_liveness_result, fp)
+
+    def _session_fingerprint(self) -> frozenset:
+        """Quick fingerprint of session state to detect changes."""
+        return frozenset(
+            (s.session_id, s.is_live, s.last_message_role, s.message_count)
+            for s in self._detail_sessions
+        )
+
+    def _apply_liveness_result(self, new_fp: frozenset):
+        """Apply liveness changes only if session state actually changed."""
+        old_fp = getattr(self, '_last_session_fp', None)
+        self._last_session_fp = new_fp
+        if old_fp != new_fp:
+            with self.app.batch_update():
+                self._rebuild_all_options()
+        # Also poll feed
+        old_notif_sids = set(self._session_notifications.keys())
+        self._load_feed()
+        new_notif_sids = set(self._session_notifications.keys())
+        if old_notif_sids != new_notif_sids:
+            self._load_detail_sessions()
 
     def _session_line_width(self, olist_id: str = "#detail-sessions") -> int:
         """Return usable character width for session rows, or 0 for default."""
@@ -1586,13 +1609,7 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
             prompt = _render_notification_option(notif)
             olist.add_option(Option(prompt, id=f"notif:{notif.id}"))
 
-    def _poll_feed(self):
-        old_notif_sids = set(self._session_notifications.keys())
-        self._load_feed()
-        new_notif_sids = set(self._session_notifications.keys())
-        # If notification-to-session mapping changed, rebuild the session list
-        if old_notif_sids != new_notif_sids:
-            self._load_detail_sessions()
+    # _poll_feed merged into _apply_liveness_result (single timer)
 
     def action_dismiss_notification(self):
         """Dismiss the notification on the currently highlighted session."""
@@ -2127,11 +2144,12 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         self._update_animating_cache()
 
     def _refresh(self):
-        self.query_one("#detail-title", Static).update(self._render_title())
-        self.query_one("#detail-meta", Static).update(self._render_meta())
-        self.query_one("#detail-body", Static).update(self._render_body())
-        self._load_detail_sessions()
-        self._load_feed()
+        with self.app.batch_update():
+            self.query_one("#detail-title", Static).update(self._render_title())
+            self.query_one("#detail-meta", Static).update(self._render_meta())
+            self.query_one("#detail-body", Static).update(self._render_body())
+            self._load_detail_sessions()
+            self._load_feed()
 
     def action_cycle_status(self):
         statuses = list(Status)
