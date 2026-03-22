@@ -72,7 +72,7 @@ class _SearchInput(Input):
 
     BINDINGS = [
         Binding("escape", "cancel_search", "Cancel", priority=True),
-        Binding("backspace", "backspace_or_cancel", "Back", priority=True),
+        Binding("backspace,ctrl+h", "backspace_or_cancel", "Back", priority=True),
     ]
 
     def action_cancel_search(self):
@@ -92,7 +92,7 @@ class _SearchInput(Input):
 class HelpScreen(ModalScreen[None]):
     BINDINGS = [
         Binding("question_mark,escape", "dismiss", "Close"),
-        Binding("backspace", "go_back", "^H back"),
+        Binding("backspace,ctrl+h", "go_back", "^H back"),
     ]
 
     def action_go_back(self):
@@ -179,7 +179,7 @@ class HelpScreen(ModalScreen[None]):
 
 class QuickNoteScreen(ModalScreen[str | None]):
     BINDINGS = [
-        Binding("backspace", "go_back", "^H back"),
+        Binding("backspace,ctrl+h", "go_back", "^H back"),
         Binding("escape", "go_back", "Esc back", priority=True),
     ]
 
@@ -270,7 +270,7 @@ class TodoScreen(_VimOptionListMixin, ModalScreen[None]):
 
     BINDINGS = [
         Binding("escape", "dismiss", "Back"),
-        Binding("backspace", "go_back", "^H back"),
+        Binding("backspace,ctrl+h", "go_back", "^H back"),
         Binding("a", "add_todo", "Add"),
         Binding("enter,space", "toggle_done", "Toggle done", priority=True),
         Binding("e", "edit_todo", "Edit"),
@@ -625,7 +625,7 @@ class TodoScreen(_VimOptionListMixin, ModalScreen[None]):
 class _TodoEditScreen(ModalScreen[str | None]):
     """Single-line input pre-filled with existing text."""
     BINDINGS = [
-        Binding("backspace", "go_back", "^H back"),
+        Binding("backspace,ctrl+h", "go_back", "^H back"),
         Binding("escape", "go_back", "Esc back", priority=True),
     ]
 
@@ -667,7 +667,7 @@ class _TodoEditScreen(ModalScreen[str | None]):
 class _TodoContextScreen(ModalScreen[None]):
     """TextArea editor for a todo item's context field."""
     BINDINGS = [
-        Binding("backspace", "go_back", "^H back"),
+        Binding("backspace,ctrl+h", "go_back", "^H back"),
         Binding("escape", "go_back", "Esc back", priority=True),
     ]
 
@@ -716,7 +716,7 @@ class LinksScreen(_VimOptionListMixin, ModalScreen[None]):
     _option_list_id = "links-list"
     BINDINGS = [
         Binding("escape", "dismiss", "Back"),
-        Binding("backspace", "go_back", "^H back"),
+        Binding("backspace,ctrl+h", "go_back", "^H back"),
         Binding("enter", "open_link", "Open"),
     ] + _VimOptionListMixin.VIM_BINDINGS
 
@@ -767,7 +767,7 @@ class LinksScreen(_VimOptionListMixin, ModalScreen[None]):
 
 class AddScreen(ModalScreen[Workstream | None]):
     BINDINGS = [
-        Binding("backspace", "go_back", "^H back"),
+        Binding("backspace,ctrl+h", "go_back", "^H back"),
         Binding("escape", "go_back", "Esc back"),
     ]
 
@@ -826,7 +826,7 @@ class AddScreen(ModalScreen[Workstream | None]):
 
 class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
     BINDINGS = [
-        Binding("backspace", "go_back", "^H back"),
+        Binding("backspace,ctrl+h", "go_back", "^H back"),
         Binding("ctrl+l", "go_forward", "^L resume"),
         Binding("s", "cycle_status", "Status"),
         Binding("S", "cycle_status_back", "Status\u2190"),
@@ -1873,7 +1873,7 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
 class BrainDumpScreen(ModalScreen[str | None]):
     BINDINGS = [
         Binding("ctrl+s", "submit", "Submit", priority=True),
-        Binding("backspace", "go_back", "^H back"),
+        Binding("backspace,ctrl+h", "go_back", "^H back"),
         Binding("escape", "go_back", "Esc back", priority=True),
     ]
 
@@ -1923,7 +1923,7 @@ class BrainPreviewScreen(ModalScreen[bool]):
     BINDINGS = [
         Binding("enter,y", "confirm", "Add all"),
         Binding("escape,n", "cancel", "Cancel"),
-        Binding("backspace", "go_back", "^H back"),
+        Binding("backspace,ctrl+h", "go_back", "^H back"),
     ]
 
     def action_go_back(self):
@@ -1971,7 +1971,7 @@ class BrainPreviewScreen(ModalScreen[bool]):
 
 class AddLinkScreen(ModalScreen[Link | None]):
     BINDINGS = [
-        Binding("backspace", "go_back", "^H back"),
+        Binding("backspace,ctrl+h", "go_back", "^H back"),
         Binding("escape", "go_back", "Esc back"),
     ]
 
@@ -2036,7 +2036,7 @@ class LinkSessionScreen(_VimOptionListMixin, ModalScreen[Workstream | None]):
     _option_list_id = "linksession-list"
     BINDINGS = [
         Binding("escape", "cancel", "Cancel"),
-        Binding("backspace", "go_back", "^H back"),
+        Binding("backspace,ctrl+h", "go_back", "^H back"),
         Binding("enter", "confirm", "Link"),
     ] + _VimOptionListMixin.VIM_BINDINGS
 
@@ -2097,7 +2097,7 @@ class SessionPickerScreen(_VimOptionListMixin, ModalScreen[ClaudeSession | None]
     _option_list_id = "threadpick-list"
     BINDINGS = [
         Binding("escape", "cancel", "Cancel"),
-        Binding("backspace", "go_back", "^H back"),
+        Binding("backspace,ctrl+h", "go_back", "^H back"),
         Binding("enter", "confirm", "Resume"),
     ] + _VimOptionListMixin.VIM_BINDINGS
 
@@ -2202,7 +2202,7 @@ class RepoPickerScreen(_VimOptionListMixin, ModalScreen[str | None]):
     _option_list_id = "repopick-list"
     BINDINGS = [
         Binding("escape", "cancel", "Cancel"),
-        Binding("backspace", "go_back", "^H back"),
+        Binding("backspace,ctrl+h", "go_back", "^H back"),
         Binding("enter", "confirm", "Select"),
     ] + _VimOptionListMixin.VIM_BINDINGS
 
@@ -2275,7 +2275,7 @@ class WorkstreamPickerScreen(_VimOptionListMixin, ModalScreen[Workstream | str |
     _option_list_id = "wspick-list"
     BINDINGS = [
         Binding("escape", "cancel", "Cancel"),
-        Binding("backspace", "go_back", "^H back"),
+        Binding("backspace,ctrl+h", "go_back", "^H back"),
         Binding("enter", "confirm", "Select"),
     ] + _VimOptionListMixin.VIM_BINDINGS
 
@@ -2346,7 +2346,7 @@ class ConfirmScreen(ModalScreen[bool]):
     BINDINGS = [
         Binding("y", "confirm", "Yes"),
         Binding("n,escape", "deny", "No"),
-        Binding("backspace", "go_back", "^H back"),
+        Binding("backspace,ctrl+h", "go_back", "^H back"),
     ]
 
     def action_go_back(self):

@@ -753,6 +753,39 @@ class TestHierarchyNavigation:
             assert not isinstance(pilot.app.screen, DetailScreen)
 
 
+@pytest.mark.asyncio
+class TestCtrlHNavigation:
+    """Ctrl+H (0x08) is distinct from backspace (0x7f) in Textual.
+
+    In alacritty + tmux, Ctrl+H sends 0x08 which Textual maps to 'ctrl+h',
+    not 'backspace'. Both must be bound for navigation to work.
+    """
+
+    async def test_ctrl_h_dismisses_detail_screen(self, app_with_store):
+        """Ctrl+H key event should dismiss DetailScreen back to main."""
+        async with app_with_store.run_test(size=(120, 40)) as pilot:
+            await pilot.press("ctrl+l")
+            from screens import DetailScreen
+            assert isinstance(pilot.app.screen, DetailScreen)
+            await pilot.press("ctrl+h")
+            assert not isinstance(pilot.app.screen, DetailScreen)
+
+    async def test_ctrl_h_dismisses_help_screen(self, app_with_store):
+        """Ctrl+H key event should dismiss HelpScreen."""
+        async with app_with_store.run_test(size=(120, 40)) as pilot:
+            await pilot.press("question_mark")
+            assert pilot.app.screen.__class__.__name__ == "HelpScreen"
+            await pilot.press("ctrl+h")
+            assert pilot.app.screen.__class__.__name__ != "HelpScreen"
+
+    async def test_ctrl_h_at_root_does_nothing(self, app_with_store):
+        """Ctrl+H at root screen should not crash or change screen."""
+        async with app_with_store.run_test(size=(120, 40)) as pilot:
+            screen_before = pilot.app.screen.__class__.__name__
+            await pilot.press("ctrl+h")
+            assert pilot.app.screen.__class__.__name__ == screen_before
+
+
 class TestBackspaceBindingOnScreens:
     """Regression: backspace must be a screen-level BINDING, not just app.on_key().
 
@@ -780,6 +813,27 @@ class TestBackspaceBindingOnScreens:
                 binding_keys.append(b.key)
         assert any("backspace" in k for k in binding_keys), \
             f"{screen_cls_name} missing backspace in BINDINGS"
+
+    @pytest.mark.parametrize("screen_cls_name", [
+        "HelpScreen", "QuickNoteScreen", "TodoScreen",
+        "_TodoEditScreen", "_TodoContextScreen", "LinksScreen",
+        "AddScreen", "DetailScreen", "BrainDumpScreen",
+        "BrainPreviewScreen", "AddLinkScreen", "LinkSessionScreen",
+        "SessionPickerScreen", "RepoPickerScreen",
+        "WorkstreamPickerScreen", "ConfirmScreen",
+    ])
+    def test_screen_has_ctrl_h_binding(self, screen_cls_name):
+        """Every modal screen must also have ctrl+h (0x08) alongside backspace."""
+        import screens as screens_module
+        cls = getattr(screens_module, screen_cls_name)
+        binding_keys = []
+        for b in cls.BINDINGS:
+            if isinstance(b, tuple):
+                binding_keys.append(b[0])
+            else:
+                binding_keys.append(b.key)
+        assert any("ctrl+h" in k for k in binding_keys), \
+            f"{screen_cls_name} missing ctrl+h in BINDINGS"
 
 
 class TestRichMarkupEscaping:
