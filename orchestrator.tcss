@@ -51,6 +51,9 @@ OptionList {
     border: none;
     background: #000000;
 }
+OptionList > .option-list--option {
+    background: transparent;
+}
 OptionList > .option-list--option-highlighted {
     background: #161b22;
     text-style: bold;
@@ -90,6 +93,14 @@ Select:focus {
 SelectOverlay {
     background: #0d1117;
     border: round #161b22;
+}
+
+/* ── App chrome ── */
+Header {
+    background: #000000;
+}
+Footer {
+    background: #000000;
 }
 
 /* ── Modal scrim ── */
