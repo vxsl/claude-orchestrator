@@ -399,6 +399,26 @@ def open_link(link, ws: Workstream | None = None, app=None):
             )
 
 
+# ─── File Picker ─────────────────────────────────────────────────────
+
+def open_file_picker(cwd: str) -> None:
+    """Open fzedit file picker in the given directory.
+
+    Suspends the TUI and runs fzedit interactively.  If fzedit is not
+    found on PATH the call is silently skipped (caller should notify).
+    """
+    import shutil
+
+    fzedit = shutil.which("fzedit")
+    if not fzedit:
+        log.warning("open_file_picker: fzedit not found on PATH")
+        return
+    try:
+        subprocess.run([fzedit], cwd=cwd)
+    except Exception as e:
+        log.error("open_file_picker: %s", e)
+
+
 # ─── Liveness Refresh ────────────────────────────────────────────────
 
 def refresh_liveness(sessions: list[ClaudeSession]) -> None:
