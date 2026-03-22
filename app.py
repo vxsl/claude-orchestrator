@@ -1334,11 +1334,29 @@ class OrchestratorApp(App):
 
     # ── Command palette ──
 
+    def _active_detail_screen(self) -> DetailScreen | None:
+        """Return the active DetailScreen, or None if on home screen."""
+        for screen in reversed(self.screen_stack):
+            if isinstance(screen, DetailScreen):
+                return screen
+        return None
+
+    def _context_ws(self) -> Workstream | None:
+        """Get the contextually correct workstream.
+
+        Returns the DetailScreen's ws when a detail view is active,
+        otherwise falls back to the home-screen selection.
+        """
+        detail = self._active_detail_screen()
+        if detail:
+            return detail.ws
+        return self._selected_ws()
+
     def action_command_palette(self):
         from state import get_command_items
         from widgets import FuzzyPickerScreen
 
-        has_ws = self._selected_ws() is not None
+        has_ws = self._context_ws() is not None
         items = get_command_items(has_ws)
 
         def on_cmd(cmd_name: str | None):
@@ -1351,14 +1369,19 @@ class OrchestratorApp(App):
         self.push_screen(screen, callback=on_cmd)
 
     def _execute_command(self, cmd_text: str):
-        ws = self._selected_ws()
+        ws = self._context_ws()
         result = self.state.execute_command(cmd_text, ws.id if ws else None)
 
         action = result.get("action", "noop")
         msg = result.get("msg", "")
 
+        # When DetailScreen is active, delegate ws-specific commands to it
+        detail = self._active_detail_screen()
+
         if action == "refresh":
             self._refresh_ws_table()
+            if detail:
+                detail._refresh()
             if msg:
                 self.notify(msg, timeout=2)
         elif action == "notify":
@@ -1368,13 +1391,25 @@ class OrchestratorApp(App):
         elif action == "add":
             self.action_add()
         elif action == "rename":
-            self.action_rename()
+            if detail:
+                self.notify("Use 'E' to rename from detail view", timeout=2)
+            else:
+                self.action_rename()
         elif action == "open":
-            self.action_open_links()
+            if detail:
+                detail.action_open_links()
+            else:
+                self.action_open_links()
         elif action == "spawn":
-            self.action_spawn()
+            if detail:
+                detail.action_spawn()
+            else:
+                self.action_spawn()
         elif action == "resume":
-            self.action_resume()
+            if detail:
+                detail.action_resume()
+            else:
+                self.action_resume()
         elif action == "export":
             output, count = self.state.do_export(result.get("path", ""))
             self.notify(f"Exported {count} workstreams to {output}", timeout=3)
