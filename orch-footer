@@ -1,49 +1,62 @@
 #!/usr/bin/env bash
-# orch-footer — 1-line action bar for Claude sessions launched from orch
+# orch-footer — 1-line status/action bar for Claude sessions launched from orch
 #
-# Shows: session ID, working dir, action hints
+# Shows: workstream name, session ID, cwd, git branch, keybinding hints
 set -euo pipefail
 
-# ─── Mellow palette ─────────────────────────────────────────────
-C_BLUE=$'\033[38;5;109m'
-C_GOLD=$'\033[38;5;179m'
-C_DIM=$'\033[38;5;244m'
-C_RESET=$'\033[0m'
-C_BG=$'\033[48;5;234m'
+# ─── ANSI palette (same dark BG as header) ────────────────────
+BG=$'\033[48;5;234m'
+X=$'\033[22;23;24m\033[48;5;234m'  # reset attrs, keep BG
+B=$'\033[38;5;109m'    # blue
+P=$'\033[38;5;141m'    # purple
+G=$'\033[38;5;179m'    # gold
+D=$'\033[38;5;244m'    # dim
+F=$'\033[38;5;239m'    # faint
+RST=$'\033[0m'
+EL=$'\033[K'           # erase to EOL (uses current BG)
 
 # ─── Parse arguments ────────────────────────────────────────────
-SESSION_ID="" CWD=""
+SESSION_ID="" CWD="" WS_NAME=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --session-id) SESSION_ID="$2"; shift 2;;
         --cwd)        CWD="$2"; shift 2;;
+        --ws-name)    WS_NAME="$2"; shift 2;;
         # Accept and ignore legacy args
         --ws-notes)   shift 2;;
         *)            shift;;
     esac
 done
 
-# Abbreviate CWD
 SHORT_CWD="${CWD/#$HOME/~}"
-
-# Session ID prefix
 SHORT_SID="${SESSION_ID:0:8}"
+
+# Git branch (one-shot, doesn't need refresh)
+GIT_BRANCH=""
+if [[ -n "$CWD" && -d "$CWD/.git" ]]; then
+    GIT_BRANCH=$(git -C "$CWD" branch --show-current 2>/dev/null) || true
+fi
 
 # Hide cursor
 printf '\033[?25l'
 trap 'printf "\033[?25h"' EXIT
 
 # ─── Render ─────────────────────────────────────────────────────
-LINE="${C_BG}"
-LINE+=" ${C_BLUE}${SHORT_SID}${C_RESET}${C_BG}"
-LINE+="  ${C_DIM}${SHORT_CWD}${C_RESET}${C_BG}"
+LINE="${BG} "
+LINE+="${B}${SHORT_SID}${X}"
+LINE+="  ${D}${SHORT_CWD}${X}"
 
-# Action bar
-LINE+="  ${C_DIM}│${C_RESET}${C_BG}"
-LINE+="  ${C_GOLD}C-e${C_RESET}${C_BG} ${C_DIM}extract${C_RESET}${C_BG}"
-LINE+="  ${C_DIM}C-h${C_RESET}${C_BG} ${C_DIM}orch${C_RESET}${C_BG}"
-LINE+="  ${C_DIM}C-\\\\${C_RESET}${C_BG} ${C_DIM}last window${C_RESET}${C_BG}"
+if [[ -n "$GIT_BRANCH" ]]; then
+    LINE+="  ${P}${GIT_BRANCH}${X}"
+fi
+
+# Keybinding hints
+LINE+="  ${D}│${X}"
+LINE+="  ${G}C-e${X} ${D}extract${X}"
+LINE+="  ${G}C-h${X} ${D}orch${X}"
+
+LINE+=" ${EL}${RST}"
 
 printf '\033[2K%s' "$LINE"
 

@@ -149,8 +149,8 @@ FOOTER_ARGS=(
     "${ORCH_DIR}/orch-footer"
     --session-id "$SESSION_ID"
     --cwd "$CWD"
+    --ws-name "$WS_NAME"
 )
-[[ -n "$WS_NOTES" ]] && FOOTER_ARGS+=(--ws-notes "$WS_NOTES")
 
 FOOTER_PANE=$(tmux split-window -l 1 -P -F '#{pane_id}' "${FOOTER_ARGS[@]}")
 
