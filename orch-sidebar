@@ -1,5 +1,74 @@
 #!/usr/bin/env bash
-# orch-sidebar — placeholder (gutted for performance)
-# Previously ran discover_sessions() every 5s in a fresh python process per
-# session window.  With ~60 windows that meant ~12 full 293MB JSONL parses/sec.
-exec sleep infinity
+# orch-sidebar — tig status + commit log in a 36-column pane
+#
+# Splits itself into two sub-panes:
+#   top:    tig status  (modified/staged files)
+#   bottom: tig         (commit log)
+#
+# Both run with periodic refresh enabled so they stay current
+# without relying on the user's global tigrc setting.
+set -euo pipefail
+
+# ─── Parse arguments ──────────────────────────────────────────
+WS_ID="" SESSION_ID="" CWD=""
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --ws-id)       WS_ID="$2"; shift 2;;
+        --session-id)  SESSION_ID="$2"; shift 2;;
+        --cwd)         CWD="$2"; shift 2;;
+        *)             shift;;
+    esac
+done
+
+CWD="${CWD:-$HOME}"
+cd "$CWD" || exit 1
+
+# ─── Build a temp tigrc that layers refresh on top of user config ─
+SIDEBAR_TIGRC=$(mktemp "${TMPDIR:-/tmp}/orch-tigrc.XXXXXX")
+# Cleanup trap is set after we know the bottom pane ID (below)
+
+# Copy user's existing config (if any), then append refresh overrides
+if [[ -f "${TIGRC_USER:-$HOME/.tigrc}" ]]; then
+    cat "${TIGRC_USER:-$HOME/.tigrc}" > "$SIDEBAR_TIGRC"
+fi
+cat >> "$SIDEBAR_TIGRC" <<'TIGRC'
+
+# orch-sidebar overrides — compact for 36-column pane
+set refresh-mode = periodic
+set refresh-interval = 3
+
+# Compact main view (commit log)
+set main-view-date = custom
+set main-view-date-format = "%m/%d"
+set main-view-author = no
+set main-view-id = yes
+set main-view-id-width = 7
+set main-view-line-number = no
+set line-graphics = utf-8
+
+# Compact status view
+set status-view-show-untracked-dirs = no
+TIGRC
+
+export TIGRC_USER="$SIDEBAR_TIGRC"
+
+# ─── Split this pane: top = tig status, bottom = tig log ──────
+# We're running inside the sidebar pane already.
+# Split horizontally (top/bottom), bottom half gets tig log.
+# Then this script execs into tig status in the top half.
+
+CURRENT_PANE=$(tmux display-message -p '#{pane_id}')
+
+# Bottom pane: tig (commit log), 50% height
+TIG_LOG_PANE=$(tmux split-window -v -l 50% -c "$CWD" -t "$CURRENT_PANE" \
+    -P -F '#{pane_id}' \
+    env TIGRC_USER="$SIDEBAR_TIGRC" tig)
+
+# When tig status exits (top pane), kill the bottom pane too
+trap 'rm -f "$SIDEBAR_TIGRC"; tmux kill-pane -t "$TIG_LOG_PANE" 2>/dev/null || true' EXIT
+
+# Top pane (this one): tig status
+tig status
+
+# After tig status exits, the trap handles cleanup

@@ -161,7 +161,8 @@ tmux select-pane -U
 SIDEBAR_PANE=$(tmux split-window -h -l 36 -P -F '#{pane_id}' \
     "${ORCH_DIR}/orch-sidebar" \
     --ws-id "$WS_ID" \
-    --session-id "$SESSION_ID")
+    --session-id "$SESSION_ID" \
+    --cwd "$CWD")
 
 # Focus back to the main pane (left of sidebar)
 tmux select-pane -L
