@@ -289,7 +289,7 @@ class ClaudeSessionScreen(Screen):
         self._cwd = cwd or self._resolve_cwd()
         self._is_new = session_id is None
         self._session_id = session_id or str(uuid.uuid4())
-        self._context = self._build_context()
+        self._claude_context = self._build_context()
         self._tigrc_path: str | None = None
         self._active_panel = "cs-terminal"
         self._start_time = time.time()
@@ -342,7 +342,7 @@ class ClaudeSessionScreen(Screen):
             args += ["--session-id", self._session_id]
         else:
             args += ["--resume", self._session_id]
-        args += ["--append-system-prompt", self._context]
+        args += ["--append-system-prompt", self._claude_context]
         args += ["-n", f"orch:{self._ws.name}"]
         if self._prompt:
             args.append(self._prompt)
@@ -490,8 +490,8 @@ set status-view-show-untracked-dirs = no
     # ── Post-session handling ─────────────────────────────────────
 
     def on_terminal_widget_finished(self, event: TerminalWidget.Finished) -> None:
-        sender = event._sender
-        if not hasattr(sender, "id") or sender.id != "cs-terminal":
+        sender = getattr(event, "_sender", None)
+        if not isinstance(sender, TerminalWidget) or sender.id != "cs-terminal":
             return  # A sidebar terminal exited, ignore
 
         # Auto-link session to workstream

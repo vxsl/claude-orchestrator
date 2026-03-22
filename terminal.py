@@ -171,14 +171,19 @@ class TerminalWidget(Widget, can_focus=True):
 
         self._pid, self._fd = pty.fork()
         if self._pid == 0:
-            # Child — exec the command
-            if self._cwd:
-                os.chdir(self._cwd)
-            argv = shlex.split(self._command)
-            env = os.environ.copy()
-            env.update(TERM="xterm-256color", COLORTERM="truecolor")
-            env.update(self._extra_env)
-            os.execvpe(argv[0], argv, env)
+            # Child — exec the command.
+            # Safety: if exec fails, _exit immediately so we never
+            # fall through into the parent's Textual event loop.
+            try:
+                if self._cwd:
+                    os.chdir(self._cwd)
+                argv = shlex.split(self._command)
+                env = os.environ.copy()
+                env.update(TERM="xterm-256color", COLORTERM="truecolor")
+                env.update(self._extra_env)
+                os.execvpe(argv[0], argv, env)
+            except Exception:
+                os._exit(127)
 
         self._p_out = os.fdopen(self._fd, "w+b", 0)
         self._set_pty_size(self._nrow, self._ncol)
