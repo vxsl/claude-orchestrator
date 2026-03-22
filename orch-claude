@@ -97,15 +97,49 @@ fi
 # ─── Record start time for elapsed calculation ─────────────────
 SESSION_START=$(date +%s)
 
+# ─── Resolve initial thread title (from cache, for resumed sessions) ──
+INITIAL_TITLE=""
+if [[ "$IS_NEW" == false && -f "$JSONL_PATH" ]]; then
+    INITIAL_TITLE=$(python3 -c "
+import sys
+sys.path.insert(0, '$ORCH_DIR')
+from sessions import parse_session
+from pathlib import Path
+s = parse_session(Path('$JSONL_PATH'))
+if s:
+    from thread_namer import get_session_title
+    t = get_session_title(s)
+    if t:
+        print(t)
+    else:
+        from threads import _extract_first_message
+        msg = _extract_first_message(s)
+        if msg:
+            line = msg.split(chr(10))[0].strip()
+            if line.startswith('#'):
+                line = line.lstrip('# ')
+            if len(line) > 60:
+                line = line[:57] + '...'
+            print(line)
+" 2>/dev/null) || true
+elif [[ -n "$PROMPT" ]]; then
+    # For new sessions with a prompt, use the prompt as initial title
+    INITIAL_TITLE="${PROMPT:0:60}"
+fi
+
 # ─── Launch header pane (2 lines, above main) ──────────────────
-HEADER_PANE=$(tmux split-window -b -l 2 -P -F '#{pane_id}' \
-    "${ORCH_DIR}/orch-header" \
-    --ws-name "$WS_NAME" \
-    --ws-status "$WS_STATUS" \
-    --ws-category "$WS_CATEGORY" \
-    --ws-desc "$WS_DESC" \
-    --session-id "$SESSION_ID" \
-    --jsonl "$JSONL_PATH")
+HEADER_ARGS=(
+    "${ORCH_DIR}/orch-header"
+    --ws-name "$WS_NAME"
+    --ws-status "$WS_STATUS"
+    --ws-category "$WS_CATEGORY"
+    --ws-desc "$WS_DESC"
+    --session-id "$SESSION_ID"
+    --jsonl "$JSONL_PATH"
+)
+[[ -n "$INITIAL_TITLE" ]] && HEADER_ARGS+=(--title "$INITIAL_TITLE")
+
+HEADER_PANE=$(tmux split-window -b -l 2 -P -F '#{pane_id}' "${HEADER_ARGS[@]}")
 
 # Focus back to the main pane (below the header)
 tmux select-pane -D

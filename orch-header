@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # orch-header — 2-line status bar for Claude sessions launched from orch
 #
-# Line 1: ORCH  workstream  status  category  │  model  elapsed
-# Line 2: description...  │  msgs  tokens  cost
+# Line 1: thread title (prominent)          model  ⏱ elapsed  cost
+# Line 2: ORCH  workstream  status  category  │  msgs  tokens
 set -euo pipefail
 
 # ─── Mellow palette (ANSI 256) ──────────────────────────────────
@@ -14,6 +14,7 @@ C_YELLOW=$'\033[38;5;221m'
 C_RED=$'\033[38;5;167m'
 C_ORANGE=$'\033[38;5;215m'
 C_DIM=$'\033[38;5;244m'
+C_WHITE=$'\033[38;5;252m'
 C_RESET=$'\033[0m'
 C_BOLD=$'\033[1m'
 C_BG=$'\033[48;5;234m'
@@ -69,6 +70,7 @@ format_elapsed() {
 
 # ─── Parse arguments ────────────────────────────────────────────
 WS_NAME="" WS_STATUS="" WS_CATEGORY="" WS_DESC="" SESSION_ID="" JSONL_PATH=""
+INITIAL_TITLE=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -78,6 +80,7 @@ while [[ $# -gt 0 ]]; do
         --ws-desc)     WS_DESC="$2"; shift 2;;
         --session-id)  SESSION_ID="$2"; shift 2;;
         --jsonl)       JSONL_PATH="$2"; shift 2;;
+        --title)       INITIAL_TITLE="$2"; shift 2;;
         *)             shift;;
     esac
 done
@@ -91,9 +94,10 @@ trap 'printf "\033[?25h"' EXIT
 
 # ─── Render loop ────────────────────────────────────────────────
 while true; do
-    MSGS=0 TOKENS="—" COST="—" MODEL="—"
+    MSGS=0 TOKENS="—" COST="—" MODEL="—" TITLE=""
 
     if [[ -f "$JSONL_PATH" ]]; then
+        # Fetch stats + session title in one Python call
         read -r MSGS TOKENS COST MODEL < <(python3 -c "
 import sys
 sys.path.insert(0, '$ORCH_DIR')
@@ -105,45 +109,68 @@ if s:
 else:
     print('0 — — —')
 " 2>/dev/null) || true
+
+        # Fetch title separately (tab-delimited to handle spaces)
+        TITLE=$(python3 -c "
+import sys
+sys.path.insert(0, '$ORCH_DIR')
+from sessions import parse_session
+from pathlib import Path
+s = parse_session(Path('$JSONL_PATH'))
+if s:
+    from thread_namer import get_session_title
+    t = get_session_title(s)
+    if t:
+        print(t)
+    else:
+        from threads import _extract_first_message
+        msg = _extract_first_message(s)
+        if msg:
+            line = msg.split(chr(10))[0].strip()
+            if line.startswith('#'):
+                line = line.lstrip('# ')
+            if len(line) > 60:
+                line = line[:57] + '...'
+            print(line)
+" 2>/dev/null) || true
+    fi
+
+    # Fall back to initial title or workstream name
+    if [[ -z "$TITLE" ]]; then
+        TITLE="${INITIAL_TITLE:-$WS_NAME}"
     fi
 
     ELAPSED=$(format_elapsed $(($(date +%s) - START_TIME)))
     SC=$(status_color "$WS_STATUS")
     CC=$(cat_color "$WS_CATEGORY")
     CCOST=$(cost_color "$COST")
-
-    # ── Line 1: identity + model + elapsed ──────────────────────
-    L1="${C_BG}${C_BOLD}${C_BLUE} ORCH ${C_RESET}${C_BG}"
-    L1+=" ${C_PURPLE}${WS_NAME}${C_RESET}${C_BG}"
-    L1+="  ${SC}${WS_STATUS}${C_RESET}${C_BG}"
-    L1+="  ${CC}${WS_CATEGORY}${C_RESET}${C_BG}"
-    L1+="  ${C_DIM}│${C_RESET}${C_BG}"
-    [[ "$MODEL" != "—" ]] && L1+="  ${C_CYAN}${MODEL}${C_RESET}${C_BG}"
-    L1+="  ${C_DIM}⏱ ${ELAPSED}${C_RESET}${C_BG}"
-
-    # ── Line 2: description + stats ─────────────────────────────
     COLS=$(tput cols 2>/dev/null || echo 120)
 
-    # Build stats string (right side of line 2)
-    R2=""
-    if [[ "$MSGS" -gt 0 ]]; then
-        R2+="${C_DIM}│${C_RESET}${C_BG}"
-        R2+="  ${C_DIM}${MSGS} msgs${C_RESET}${C_BG}"
-        R2+="  ${C_DIM}${TOKENS}${C_RESET}${C_BG}"
-        R2+="  ${CCOST}${COST}${C_RESET}${C_BG}"
+    # ── Line 1: thread title (prominent) + right-aligned stats ──
+    L1="${C_BG} ${C_BOLD}${C_WHITE}${TITLE}${C_RESET}${C_BG}"
+
+    # Right side: model + elapsed + cost
+    R1=""
+    [[ "$MODEL" != "—" ]] && R1+="${C_CYAN}${MODEL}${C_RESET}${C_BG}  "
+    R1+="${C_DIM}⏱ ${ELAPSED}${C_RESET}${C_BG}"
+    if [[ "$COST" != "—" ]]; then
+        R1+="  ${CCOST}${COST}${C_RESET}${C_BG}"
     fi
 
-    # Truncate description to fit
-    DESC_MAX=$((COLS - 45))
-    (( DESC_MAX < 10 )) && DESC_MAX=10
-    DESC_TRUNC="${WS_DESC:0:$DESC_MAX}"
-    [[ ${#WS_DESC} -gt $DESC_MAX ]] && DESC_TRUNC+="…"
+    # ── Line 2: workstream meta + message stats ─────────────────
+    L2="${C_BG} ${C_BLUE}ORCH${C_RESET}${C_BG}"
+    L2+="  ${C_PURPLE}${WS_NAME}${C_RESET}${C_BG}"
+    L2+="  ${SC}${WS_STATUS}${C_RESET}${C_BG}"
+    L2+="  ${CC}${WS_CATEGORY}${C_RESET}${C_BG}"
+    if [[ "$MSGS" -gt 0 ]]; then
+        L2+="  ${C_DIM}│${C_RESET}${C_BG}"
+        L2+="  ${C_DIM}${MSGS} msgs${C_RESET}${C_BG}"
+        L2+="  ${C_DIM}${TOKENS}${C_RESET}${C_BG}"
+    fi
 
-    L2="${C_BG} ${C_DIM}${DESC_TRUNC}${C_RESET}${C_BG}"
-    L2+="  ${R2}"
-
-    # Render both lines
-    printf '\033[H\033[2K%s\n\033[2K%s' "$L1" "$L2"
+    # Render both lines (L1 left, R1 right-aligned)
+    # For simplicity, just append R1 after some spacing
+    printf '\033[H\033[2K%s  %s\n\033[2K%s' "$L1" "$R1" "$L2"
 
     sleep 5
 done
