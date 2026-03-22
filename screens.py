@@ -826,6 +826,7 @@ class AddScreen(ModalScreen[Workstream | None]):
 
 class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
     BINDINGS = [
+        Binding("escape", "dismiss", "Back", priority=True),
         Binding("backspace,ctrl+h", "go_back", "^H back"),
         Binding("ctrl+l", "go_forward", "^L resume"),
         Binding("s", "cycle_status", "Status"),
