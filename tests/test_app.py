@@ -466,14 +466,14 @@ class TestQuickNote:
     async def test_note_adds_to_workstream(self, app_with_store):
         async with app_with_store.run_test(size=(120, 40)) as pilot:
             ws_before = pilot.app._selected_ws()
-            assert ws_before.notes == ""
+            assert len(ws_before.todos) == 0
             await pilot.press("n")
             # Type a note
             for char in "test note":
                 await pilot.press(char)
             await pilot.press("enter")
             ws_after = pilot.app.store.get(ws_before.id)
-            assert "test note" in ws_after.notes
+            assert any(t.text == "test note" for t in ws_after.todos)
 
 
 @pytest.mark.asyncio
@@ -893,3 +893,229 @@ class TestRichMarkupEscaping:
         # This is the call that actually crashed — Rich parses the markup
         text = Text.from_markup(markup)
         assert text  # didn't raise
+
+
+# ─── E2E: Command Palette (Step 5) ──────────────────────────────────
+
+
+@pytest.mark.asyncio
+class TestCommandPaletteE2E:
+    """Command palette opens with : and dispatches commands correctly."""
+
+    async def test_colon_opens_fuzzy_picker(self, app_with_store):
+        """Pressing : should push a FuzzyPickerScreen onto the screen stack."""
+        async with app_with_store.run_test(size=(120, 40)) as pilot:
+            await pilot.press("colon")
+            from widgets import FuzzyPickerScreen
+            assert isinstance(pilot.app.screen, FuzzyPickerScreen)
+
+    async def test_palette_has_items(self, app_with_store):
+        """The command palette should show all commands from the registry."""
+        async with app_with_store.run_test(size=(120, 40)) as pilot:
+            await pilot.press("colon")
+            from widgets import FuzzyPicker
+            picker = pilot.app.screen.query_one("#fpscreen-picker", FuzzyPicker)
+            from state import COMMAND_REGISTRY
+            assert len(picker._all_items) >= len(COMMAND_REGISTRY)
+
+    async def test_palette_escape_cancels(self, app_with_store):
+        async with app_with_store.run_test(size=(120, 40)) as pilot:
+            await pilot.press("colon")
+            from widgets import FuzzyPickerScreen
+            assert isinstance(pilot.app.screen, FuzzyPickerScreen)
+            await pilot.press("escape")
+            assert not isinstance(pilot.app.screen, FuzzyPickerScreen)
+
+
+# ─── E2E: Tab Bar (CHANGES.md: ctrl+tab, ctrl+shift+tab, x) ────────
+
+
+@pytest.mark.asyncio
+class TestTabBarE2E:
+    """Tab bar appears, can be navigated with ctrl+tab, and tabs close with x."""
+
+    async def test_tab_bar_renders(self, app_with_store):
+        """Tab bar widget is present and rendering."""
+        async with app_with_store.run_test(size=(120, 40)) as pilot:
+            from widgets import TabBar
+            bar = pilot.app.query_one("#tab-bar", TabBar)
+            assert bar is not None
+            assert bar.tab_count >= 1  # At least "Home"
+
+    async def test_open_detail_creates_tab(self, app_with_store):
+        """Opening a workstream detail adds a tab."""
+        async with app_with_store.run_test(size=(120, 40)) as pilot:
+            # Enter opens detail / creates tab
+            await pilot.press("enter")
+            assert len(pilot.app.tabs.tabs) >= 2
+
+    async def test_x_closes_tab(self, app_with_store):
+        """x on the home screen should close a non-Home tab."""
+        async with app_with_store.run_test(size=(120, 40)) as pilot:
+            # Open a detail tab then go back to home
+            await pilot.press("enter")
+            tab_count_after_open = len(pilot.app.tabs.tabs)
+            assert tab_count_after_open >= 2
+            await pilot.press("escape")  # back to home
+            # Switch to the detail tab via tab manager, then close
+            pilot.app.tabs.switch_to(1)
+            pilot.app.action_close_tab()
+            assert len(pilot.app.tabs.tabs) == tab_count_after_open - 1
+
+    async def test_x_cannot_close_home(self, app_with_store):
+        """x on Home tab should not close it."""
+        async with app_with_store.run_test(size=(120, 40)) as pilot:
+            assert pilot.app.tabs.is_home
+            await pilot.press("x")
+            assert pilot.app.tabs.is_home
+            assert len(pilot.app.tabs.tabs) == 1
+
+
+# ─── E2E: Filter Keys 1-6 ──────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+class TestFilterKeysE2E:
+    """Filter keys 1-6 change the active filter, especially 6=archived."""
+
+    async def test_filter_1_all(self, app_with_store):
+        async with app_with_store.run_test(size=(120, 40)) as pilot:
+            await pilot.press("1")
+            assert pilot.app.filter_mode == "all"
+
+    async def test_filter_2_work(self, app_with_store):
+        async with app_with_store.run_test(size=(120, 40)) as pilot:
+            await pilot.press("2")
+            assert pilot.app.filter_mode == "work"
+
+    async def test_filter_3_personal(self, app_with_store):
+        async with app_with_store.run_test(size=(120, 40)) as pilot:
+            await pilot.press("3")
+            assert pilot.app.filter_mode == "personal"
+
+    async def test_filter_4_active(self, app_with_store):
+        async with app_with_store.run_test(size=(120, 40)) as pilot:
+            await pilot.press("4")
+            assert pilot.app.filter_mode == "active"
+
+    async def test_filter_5_stale(self, app_with_store):
+        async with app_with_store.run_test(size=(120, 40)) as pilot:
+            await pilot.press("5")
+            assert pilot.app.filter_mode == "stale"
+
+    async def test_filter_6_archived(self, app_with_store):
+        """Key 6 shows archived — this replaced the old ViewMode.ARCHIVED view."""
+        async with app_with_store.run_test(size=(120, 40)) as pilot:
+            await pilot.press("6")
+            assert pilot.app.filter_mode == "archived"
+
+
+# ─── E2E: Enrichment Rendering ──────────────────────────────────────
+
+
+class TestEnrichmentRendering:
+    """Enrichment badges (Jira/MR/ticket-solve) render on workstream rows."""
+
+    def test_jira_status_renders(self):
+        """Workstream with ticket_key and ticket_status shows Jira badge."""
+        from rendering import _render_ws_option
+        ws = Workstream(name="Test WS", category=Category.WORK, status=Status.IN_PROGRESS)
+        ws.ticket_key = "UB-1234"
+        ws.ticket_status = "In Progress"
+        result = _render_ws_option(ws, [], {})
+        assert "UB-1234" in result
+        assert "In Progress" in result
+
+    def test_mr_badge_renders(self):
+        """Workstream with mr_url shows MR badge."""
+        from rendering import _render_ws_option
+        ws = Workstream(name="Test WS", category=Category.WORK, status=Status.IN_PROGRESS)
+        ws.mr_url = "https://gitlab.com/mr/1"
+        result = _render_ws_option(ws, [], {})
+        assert "MR" in result
+
+    def test_ticket_solve_badge_renders(self):
+        """Workstream with ticket_solve_status shows solving badge."""
+        from rendering import _render_ws_option
+        ws = Workstream(name="Test WS", category=Category.WORK, status=Status.IN_PROGRESS)
+        ws.ticket_solve_status = "running"
+        result = _render_ws_option(ws, [], {})
+        assert "solving" in result
+
+    def test_no_enrichment_renders_clean(self):
+        """Workstream without enrichment data renders without badges."""
+        from rendering import _render_ws_option
+        ws = Workstream(name="Clean WS", category=Category.PERSONAL, status=Status.QUEUED)
+        result = _render_ws_option(ws, [], {})
+        assert "MR" not in result
+        assert "solving" not in result
+        # Should still have category and time
+        assert "personal" in result
+
+    def test_enrichment_badges_parse_as_rich_markup(self):
+        """Rendered enrichment markup must be valid Rich markup (no crashes)."""
+        from rich.text import Text
+        from rendering import _render_ws_option
+        ws = Workstream(name="Full WS", category=Category.WORK, status=Status.IN_PROGRESS)
+        ws.ticket_key = "UB-9999"
+        ws.ticket_status = "Done"
+        ws.mr_url = "https://gitlab.com/mr/42"
+        ws.ticket_solve_status = "complete"
+        result = _render_ws_option(ws, [], {})
+        # Should not raise
+        text = Text.from_markup(result)
+        assert text
+
+
+# ─── E2E: Worktree Discovery Integration ────────────────────────────
+
+
+class TestWorktreeDiscoveryIntegration:
+    """Test worktree discovery against real git repos on this machine."""
+
+    def test_discover_real_worktrees(self):
+        """discover_worktrees finds worktrees in this very repo."""
+        from actions import discover_worktrees
+        repo = str(Path(__file__).parent.parent)
+        results = discover_worktrees([repo])
+        # This repo has .claude/worktrees/* and a .performance worktree
+        branches = [wt["branch"] for wt in results]
+        assert len(results) >= 1
+        # Should not include 'master' or 'main'
+        assert "master" not in branches
+        assert "main" not in branches
+
+    def test_known_repos_finds_real_repos(self):
+        """known_repos() returns real directories that exist on disk."""
+        from state import AppState
+        from models import Store
+        store = Store()
+        st = AppState(store)
+        repos = st.known_repos()
+        for r in repos:
+            assert Path(r).is_dir(), f"known_repos returned non-existent: {r}"
+
+    def test_jira_cache_parses(self):
+        """Jira cache file parses without error (if it exists)."""
+        from actions import get_jira_cache, _JIRA_CACHE_PATH
+        if not _JIRA_CACHE_PATH.exists():
+            pytest.skip("No Jira cache on this machine")
+        cache = get_jira_cache()
+        assert len(cache) > 0
+        for key, info in cache.items():
+            assert key  # non-empty key
+            assert hasattr(info, "summary")
+
+    def test_mr_cache_parses(self):
+        """MR cache file parses without error (if it exists)."""
+        from actions import get_mr_cache, _MR_CACHE_PATH
+        if not _MR_CACHE_PATH.exists():
+            pytest.skip("No MR cache on this machine")
+        cache = get_mr_cache()
+        assert len(cache) > 0
+        for key, info in cache.items():
+            assert key
+            # Should have a URL field (either 'url' or 'web_url')
+            assert info.get("url") or info.get("web_url"), (
+                f"MR entry {key} has no url: {info}"
+            )

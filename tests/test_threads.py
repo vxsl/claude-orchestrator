@@ -86,11 +86,11 @@ class TestThread:
                    ])
         assert t.last_user_activity == "2026-03-20T10:05:00Z"
 
-    def test_last_user_activity_falls_back_to_last_activity(self):
-        """When no user messages tracked, falls back to last_activity."""
+    def test_last_user_activity_falls_back_to_started_at(self):
+        """When no user messages tracked, falls back to started_at."""
         t = Thread(thread_id="t1", name="test", project_path="/p",
                    sessions=[self._make_session(last_user_message_at="")])
-        assert t.last_user_activity == t.last_activity
+        assert t.last_user_activity == t.started_at
 
     def test_last_user_activity_empty_sessions(self):
         t = Thread(thread_id="t1", name="test", project_path="/p", sessions=[])

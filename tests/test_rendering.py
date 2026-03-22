@@ -37,10 +37,9 @@ class TestTokenColor:
 
 
 class TestActivityIcons:
-    def test_thinking_animated(self):
-        icon0 = _activity_icon(ThreadActivity.THINKING, 0)
-        icon1 = _activity_icon(ThreadActivity.THINKING, 1)
-        assert icon0 != icon1  # Different frames
+    def test_thinking_icon(self):
+        icon = _activity_icon(ThreadActivity.THINKING, 0)
+        assert "◉" in icon  # Static thinking indicator
 
     def test_awaiting_input(self):
         icon = _activity_icon(ThreadActivity.AWAITING_INPUT)
