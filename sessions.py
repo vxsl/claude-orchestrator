@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import copy
 import json
 import os
+import time
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -516,15 +518,28 @@ def _get_resumed_session_id(pid: int) -> str:
     return ""
 
 
+_live_ids_cache: tuple[float, str, set[str]] = (0.0, "", set())
+
+
 def get_live_session_ids() -> set[str]:
     """Read ~/.claude/sessions/*.json to find currently-running session IDs.
 
     Each file contains a JSON object with pid, sessionId, cwd, startedAt.
     We verify the PID is still alive before considering it live.
     Also resolves --resume arguments so the original session ID is included.
+
+    Results are cached for 2 seconds to avoid redundant /proc scans when
+    called multiple times within the same poll cycle.
     """
+    global _live_ids_cache
+    now = time.monotonic()
+    dir_str = str(CLAUDE_SESSIONS_DIR)
+    if now - _live_ids_cache[0] < 2.0 and _live_ids_cache[1] == dir_str:
+        return _live_ids_cache[2]
+
     live: set[str] = set()
     if not CLAUDE_SESSIONS_DIR.exists():
+        _live_ids_cache = (now, dir_str, live)
         return live
 
     for f in CLAUDE_SESSIONS_DIR.iterdir():
@@ -549,7 +564,12 @@ def get_live_session_ids() -> set[str]:
         except (OSError, json.JSONDecodeError):
             continue
 
+    _live_ids_cache = (time.monotonic(), dir_str, live)
     return live
+
+
+# Module-level mtime cache: path_str -> (mtime, ClaudeSession)
+_parsed_session_cache: dict[str, tuple[float, ClaudeSession]] = {}
 
 
 def discover_sessions(
@@ -565,12 +585,14 @@ def discover_sessions(
         min_messages: Minimum number of assistant messages to include.
 
     Returns sorted by last_activity (most recent first).
+    Uses an mtime-based cache to avoid re-parsing unchanged JSONL files.
     """
     if not CLAUDE_PROJECTS_DIR.exists():
         return []
 
     live_ids = get_live_session_ids()
     sessions: list[ClaudeSession] = []
+    seen_paths: set[str] = set()
 
     for proj_dir in CLAUDE_PROJECTS_DIR.iterdir():
         if not proj_dir.is_dir():
@@ -581,7 +603,21 @@ def discover_sessions(
         for jsonl_file in proj_dir.glob("*.jsonl"):
             if jsonl_file.name.endswith(".wakatime"):
                 continue
-            session = parse_session(jsonl_file)
+            path_str = str(jsonl_file)
+            seen_paths.add(path_str)
+            try:
+                mtime = jsonl_file.stat().st_mtime
+            except OSError:
+                continue
+            cached = _parsed_session_cache.get(path_str)
+            if cached and cached[0] == mtime:
+                session = copy.copy(cached[1])
+                # Reset mutable fields that get set per-call
+                session.is_live = False
+            else:
+                session = parse_session(jsonl_file)
+                if session:
+                    _parsed_session_cache[path_str] = (mtime, session)
             if session and session.message_count >= min_messages:
                 # Match against all session IDs (handles resumed sessions
                 # where session file has a new ID but JSONL has the original)
@@ -589,6 +625,11 @@ def discover_sessions(
                     live_ids & (set(session.all_session_ids) | {session.session_id})
                 )
                 sessions.append(session)
+
+    # Prune cache entries for deleted files
+    stale = set(_parsed_session_cache) - seen_paths
+    for k in stale:
+        del _parsed_session_cache[k]
 
     # Sort: live sessions first, then by last activity (most recent first)
     sessions.sort(key=lambda s: (not s.is_live, s.last_activity or ""), reverse=False)

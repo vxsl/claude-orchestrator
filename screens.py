@@ -875,9 +875,9 @@ class AddScreen(ModalScreen[Workstream | None]):
 
 # ─── Detail Screen ──────────────────────────────────────────────────
 
-class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
+class DetailScreen(ModalScreen[None]):
     BINDINGS = [
-        Binding("escape", "dismiss", "Back", priority=True),
+        Binding("escape", "noop", show=False, priority=True),  # consume escape to prevent accidental exit
         Binding("backspace,ctrl+h", "go_back", "^H back"),
         Binding("ctrl+l", "go_forward", "^L resume"),
         Binding("s", "cycle_status", "Status"),
@@ -889,13 +889,8 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         Binding("e", "open_todos", "Todos"),
         Binding("o", "open_links", "Open links"),
         Binding("x", "archive", "Archive"),
-        Binding("p", "peek_session", "Peek", priority=True),
         Binding("h", "go_back", show=False),
-        Binding("enter,l", "select_session", show=False),
-        Binding("d", "dismiss_notification", "Dismiss", show=False),
-        Binding("D", "dismiss_all_notifications", "Dismiss all", show=False),
-        Binding("/", "search", "Search", show=False, priority=True),
-    ] + _VimOptionListMixin.VIM_BINDINGS
+    ]
 
     DEFAULT_CSS = f"""
     DetailScreen {{ align: center middle; }}
@@ -911,91 +906,11 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
     #detail-title {{ text-style: bold; }}
     #detail-meta {{ color: {C_DIM}; }}
     #detail-desc {{ padding-top: 1; }}
-    #detail-lists {{
-        height: auto; max-height: 50%;
-    }}
-    .detail-list-pane {{
-        width: 1fr;
-        border: blank;
-    }}
-    .detail-list-pane.pane-focused {{
-        border: round {C_BLUE};
-        background: {BG_SURFACE};
-    }}
-    .detail-list-label {{
-        padding: 0 3;
-        color: {C_BLUE};
-        text-style: bold;
-    }}
-    #detail-sessions, #detail-archived {{
-        height: auto;
-        margin: 0 1; padding: 0;
-        border: none;
-        background: {BG_BASE};
-    }}
-    #detail-sessions > .option-list--option-highlighted,
-    #detail-archived > .option-list--option-highlighted {{
-        background: #101010;
-    }}
-    #detail-search-input {{
-        display: none;
-        margin: 0 1;
-        height: auto;
-        background: {BG_BASE};
-        border: none;
-        padding: 0 2;
-    }}
-    #detail-search-input.visible {{
-        display: block;
-    }}
-    #detail-search-input:focus {{
-        border: none;
-    }}
-    #detail-no-sessions, #detail-no-archived {{
-        padding: 1 3;
-        color: {C_DIM};
-    }}
-    #detail-archived-pane {{
-        display: none;
-    }}
-    #detail-lower {{
-        height: 1fr;
-    }}
     #detail-scroll {{
-        width: 3fr;
-        border: blank;
-    }}
-    #detail-scroll.pane-focused {{
-        border: round {C_BLUE};
-        background: {BG_SURFACE};
+        width: 1fr; height: 1fr;
     }}
     #detail-body {{
         padding: 1 3;
-    }}
-    #detail-feed-pane {{
-        display: none;
-    }}
-    #detail-feed-pane.pane-focused {{
-        border: round {C_BLUE};
-        background: {BG_SURFACE};
-    }}
-    .detail-feed-label {{
-        padding: 0 3;
-        color: {C_BLUE};
-        text-style: bold;
-    }}
-    #detail-feed {{
-        height: auto;
-        margin: 0 1; padding: 0;
-        border: none;
-        background: {BG_BASE};
-    }}
-    #detail-feed > .option-list--option-highlighted {{
-        background: #101010;
-    }}
-    #detail-no-feed {{
-        padding: 1 3;
-        color: {C_DIM};
     }}
     #detail-help {{
         height: 1;
@@ -1006,29 +921,10 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
     }}
     """
 
-    _option_list_id = "detail-sessions"
-
     def __init__(self, ws: Workstream, store: Store):
         super().__init__()
         self.ws = ws
         self.store = store
-        self._detail_sessions: list[ClaudeSession] = []
-        self._archived_sessions: list[ClaudeSession] = []
-        self._feed_notifications: list[Notification] = []
-        self._session_notifications: dict[str, Notification] = {}  # session_id -> latest notif
-        self._throbber_frame: int = 0
-        self._last_seen_cache: dict[str, str] = {}
-        self._active_pane: str = "sessions"
-        self._animating_sessions: list[tuple[int, ThreadActivity]] = []
-        self._animating_archived: list[tuple[int, ThreadActivity]] = []
-        self._content_cache: dict[str, list] = {}  # session_id -> list[SessionMessage]
-        self._content_ready: bool = False
-        self._content_results: list[SessionSearchResult] = []
-        self._content_search_active: bool = False
-        # Full unfiltered lists (set once sessions are loaded)
-        self._all_sessions: list[ClaudeSession] = []
-        self._all_archived: list[ClaudeSession] = []
-        self._peek_mode: bool = False
 
     def compose(self) -> ComposeResult:
         with Vertical(id="detail-container"):
@@ -1038,708 +934,41 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
                 if self.ws.description:
                     yield Static(self.ws.description, id="detail-desc")
 
-            with Horizontal(id="detail-lists"):
-                with Vertical(id="detail-sessions-pane", classes="detail-list-pane"):
-                    yield Static(f"[bold {C_BLUE}]Sessions[/bold {C_BLUE}]", id="detail-sessions-label", classes="detail-list-label")
-                    yield _SearchInput(placeholder="search...", id="detail-search-input")
-                    yield OptionList(id="detail-sessions")
-                    yield Static(f"[{C_DIM}]No sessions[/{C_DIM}]", id="detail-no-sessions")
-                with Vertical(id="detail-archived-pane", classes="detail-list-pane"):
-                    yield Static(f"[{C_DIM}]Archived[/{C_DIM}]", id="detail-archived-label", classes="detail-list-label")
-                    yield OptionList(id="detail-archived")
-                    yield Static(f"[{C_DIM}]Empty[/{C_DIM}]", id="detail-no-archived")
-
-            with Horizontal(id="detail-lower"):
-                with VerticalScroll(id="detail-scroll"):
-                    yield Static(self._render_body(), id="detail-body")
-                # Feed pane kept in DOM but hidden — notifications now inline in session list
-                with Vertical(id="detail-feed-pane"):
-                    yield Static(self._render_feed_label(), id="detail-feed-label", classes="detail-feed-label")
-                    yield OptionList(id="detail-feed")
-                    yield Static(f"[{C_DIM}]No notifications[/{C_DIM}]", id="detail-no-feed")
+            with VerticalScroll(id="detail-scroll"):
+                yield Static(self._render_body(), id="detail-body")
 
             yield Static(self._render_help(), id="detail-help")
 
     def on_mount(self):
-        self._last_seen_cache = load_last_seen()
-        self._mark_all_seen()
-        self._load_feed()  # must run before _load_detail_sessions so notification map is ready
-        self._load_detail_sessions()
-        self.query_one("#detail-sessions", OptionList).focus()
-        self._update_pane_labels()
-        self.set_interval(10, self._schedule_liveness_refresh)
-        self.set_interval(10, self._poll_feed)
-
-    def _mark_all_seen(self):
-        """Mark all sessions in this workstream as seen right now."""
-        app = self.app
-        if hasattr(app, 'state'):
-            sessions = app.state.sessions_for_ws(self.ws, include_archived_sessions=True)
-        else:
-            sessions = self._detail_sessions + self._archived_sessions
-        for s in sessions:
-            mark_thread_seen(s.session_id)
-        self._last_seen_cache = load_last_seen()
-
-    def _schedule_liveness_refresh(self):
-        self._do_liveness_refresh()
-
-    @work(thread=True, exclusive=True, group="detail_liveness")
-    def _do_liveness_refresh(self):
-        from actions import refresh_liveness
-        from sessions import refresh_session_tail
-        refresh_liveness(self._detail_sessions)
-        refresh_liveness(self._archived_sessions)
-        for s in self._detail_sessions:
-            if s.is_live:
-                refresh_session_tail(s)
-        for s in self._archived_sessions:
-            if s.is_live:
-                refresh_session_tail(s)
-        self.app.call_from_thread(self._rebuild_all_options)
-
-    def _session_line_width(self, olist_id: str = "#detail-sessions") -> int:
-        """Return usable character width for session rows, or 0 for default."""
-        try:
-            olist = self.query_one(olist_id, OptionList)
-            w = olist.size.width
-            return w - 2 if w > 20 else 0  # subtract padding/scrollbar; 0 = use default
-        except Exception:
-            return 0
-
-    def _focused_olist(self) -> OptionList:
-        if self._active_pane == "archived":
-            return self.query_one("#detail-archived", OptionList)
-        return self.query_one("#detail-sessions", OptionList)
-
-    def _olist(self) -> OptionList:
-        return self._focused_olist()
-
-    def action_focus_sessions(self):
-        self._active_pane = "sessions"
-        olist = self.query_one("#detail-sessions", OptionList)
-        olist.focus()
-        self._update_pane_labels()
-
-    def action_focus_archived(self):
-        if not self._archived_sessions:
-            return
-        self._active_pane = "archived"
-        olist = self.query_one("#detail-archived", OptionList)
-        olist.focus()
-        self._update_pane_labels()
-
-    # Map pane names to the container widget that should get the focus border
-    _PANE_BORDER_CONTAINERS = {
-        "sessions": "#detail-sessions-pane",
-        "archived": "#detail-archived-pane",
-        "body": "#detail-scroll",
-        "feed": "#detail-feed-pane",
-    }
-
-    def _update_pane_labels(self):
-        sess_label = self.query_one("#detail-sessions-label", Static)
-        arch_label = self.query_one("#detail-archived-label", Static)
-        n_active = len(self._detail_sessions)
-        n_archived = len(self._archived_sessions)
-        n_notified = len(self._session_notifications)
-
-        legend = tool_bar_legend()
-        notif_badge = f" [{C_GREEN}]({n_notified} new)[/{C_GREEN}]" if n_notified else ""
-        if self._active_pane == "sessions":
-            left = f"[bold {C_BLUE}]Sessions[/bold {C_BLUE}] [{C_DIM}]({n_active})[/{C_DIM}]{notif_badge}"
-        else:
-            left = f"[{C_DIM}]Sessions ({n_active})[/{C_DIM}]{notif_badge}"
-        sess_label.update(_label_with_legend(left, legend))
-
-        if self._active_pane == "archived":
-            arch_label.update(f"[bold {C_BLUE}]Archived[/bold {C_BLUE}] [{C_DIM}]({n_archived})[/{C_DIM}]")
-        else:
-            arch_label.update(f"[{C_DIM}]Archived ({n_archived})[/{C_DIM}]")
-
-        # Toggle focus border on pane containers
-        for pane_name, selector in self._PANE_BORDER_CONTAINERS.items():
-            try:
-                container = self.query_one(selector)
-                if pane_name == self._active_pane:
-                    container.add_class("pane-focused")
-                else:
-                    container.remove_class("pane-focused")
-            except Exception:
-                pass
-
-    # _refresh_session_liveness replaced by _schedule_liveness_refresh + _do_liveness_refresh above
-
-    def on_sessions_changed(self, event: SessionsChanged):
-        self._refresh()
-
-    def _update_animating_cache(self):
-        anim_types = (ThreadActivity.THINKING, ThreadActivity.AWAITING_INPUT)
-        self._animating_sessions = []
-        for i, s in enumerate(self._detail_sessions):
-            act = session_activity(s, self._last_seen_cache)
-            if act in anim_types:
-                self._animating_sessions.append((i, act))
-        self._animating_archived = []
-        for i, s in enumerate(self._archived_sessions):
-            act = session_activity(s, self._last_seen_cache)
-            if act in anim_types:
-                self._animating_archived.append((i, act))
-
-    def _rebuild_all_options(self):
-        """Re-render every session option in place (preserves highlight)."""
-        if self._content_search_active or self._peek_mode:
-            return  # Don't overwrite search results or peek content
-        olist = self.query_one("#detail-sessions", OptionList)
-
-        # Rebuild respecting the notified/elevated/separator/quiet structure
-        notified = []
-        elevated = []
-        quiet = []
-        for s in self._detail_sessions:
-            if s.session_id in self._session_notifications:
-                notified.append(s)
-            else:
-                act = session_activity(s, self._last_seen_cache)
-                seen = _is_session_seen(s, self._last_seen_cache)
-                if not seen and act in (ThreadActivity.AWAITING_INPUT, ThreadActivity.RESPONSE_READY):
-                    elevated.append(s)
-                else:
-                    quiet.append(s)
-        notified.sort(key=lambda s: self._session_notifications[s.session_id].dt, reverse=True)
-        all_elevated = notified + elevated
-
-        lw = self._session_line_width("#detail-sessions")
-        idx = 0
-        for s in notified:
-            if idx < olist.option_count:
-                act = session_activity(s, self._last_seen_cache)
-                seen = _is_session_seen(s, self._last_seen_cache)
-                notif = self._session_notifications[s.session_id]
-                prompt = _render_notified_session_option(
-                    s, act, notif, self._throbber_frame,
-                    ws_repo_path=self.ws.repo_path, seen=seen,
-                    line_width=lw,
-                )
-                olist.replace_option_prompt_at_index(idx, prompt)
-            idx += 1
-
-        for s in elevated:
-            if idx < olist.option_count:
-                act = session_activity(s, self._last_seen_cache)
-                seen = _is_session_seen(s, self._last_seen_cache)
-                prompt = _render_notified_session_option(
-                    s, act, None, self._throbber_frame,
-                    ws_repo_path=self.ws.repo_path, seen=seen,
-                    line_width=lw,
-                )
-                olist.replace_option_prompt_at_index(idx, prompt)
-            idx += 1
-
-        if all_elevated and quiet:
-            idx += 1  # skip separator
-
-        for s in quiet:
-            if idx < olist.option_count:
-                act = session_activity(s, self._last_seen_cache)
-                seen = _is_session_seen(s, self._last_seen_cache)
-                prompt = _render_session_option(s, act, self._throbber_frame, ws_repo_path=self.ws.repo_path, seen=seen, line_width=lw)
-                olist.replace_option_prompt_at_index(idx, prompt)
-            idx += 1
-
-        alw = self._session_line_width("#detail-archived")
-        arch_olist = self.query_one("#detail-archived", OptionList)
-        for i, s in enumerate(self._archived_sessions):
-            if i < arch_olist.option_count:
-                act = session_activity(s, self._last_seen_cache)
-                seen = _is_session_seen(s, self._last_seen_cache)
-                prompt = _render_session_option(s, act, self._throbber_frame, ws_repo_path=self.ws.repo_path, seen=seen, line_width=alw)
-                arch_olist.replace_option_prompt_at_index(i, prompt)
-
-
-    @staticmethod
-    def _parse_ts(ts: str) -> datetime:
-        """Parse a timestamp string, returning a UTC-aware datetime."""
-        ts = ts.replace("Z", "+00:00")
-        try:
-            dt = datetime.fromisoformat(ts)
-            if dt.tzinfo is None:
-                dt = dt.replace(tzinfo=timezone.utc)
-            return dt
-        except (ValueError, TypeError):
-            return datetime.min.replace(tzinfo=timezone.utc)
-
-    def _load_detail_sessions(self):
-        app = self.app
-        if hasattr(app, 'state'):
-            all_sessions = app.state.sessions_for_ws(self.ws, include_archived_sessions=True)
-            archived = self.ws.archived_sessions
-            log.debug("load_detail: ws=%s all=%d archived_map=%s",
-                      self.ws.name, len(all_sessions),
-                      {k: v for k, v in archived.items()})
-            revived = set()
-            for s in all_sessions:
-                if s.session_id in archived:
-                    archived_at = archived[s.session_id]
-                    last_act = s.last_activity or ""
-                    if last_act and archived_at and self._parse_ts(last_act) > self._parse_ts(archived_at):
-                        revived.add(s.session_id)
-            if revived:
-                log.debug("load_detail: reviving %s", revived)
-                for sid in revived:
-                    del self.ws.archived_sessions[sid]
-                self.store.update(self.ws)
-            hidden = set(self.ws.archived_sessions)
-            self._all_sessions = [s for s in all_sessions if s.session_id not in hidden]
-            self._all_archived = [s for s in all_sessions if s.session_id in hidden]
-            log.debug("load_detail: active=%d archived=%d",
-                      len(self._all_sessions), len(self._all_archived))
-        else:
-            from actions import find_sessions_for_ws
-            self._all_sessions = find_sessions_for_ws(self.ws, getattr(app, 'sessions', []))
-            self._all_archived = []
-
-        # If search is active, just update backing data silently — don't
-        # rebuild the results list mid-search (it resets scroll/highlight and
-        # causes visual disruption).  The next keystroke will re-search with
-        # the freshly updated _all_sessions/_all_archived.
-        if self._search_text:
-            return
-
-        # Stable merge when the user is focused on that pane (avoid jarring
-        # reorders mid-interaction); fresh sorted order otherwise so active
-        # threads float to the top when the user looks back.
-        if self._active_pane == "sessions":
-            self._detail_sessions = self._stable_merge(self._detail_sessions, self._all_sessions)
-        else:
-            self._detail_sessions = list(self._all_sessions)
-        if self._active_pane == "archived":
-            self._archived_sessions = self._stable_merge(self._archived_sessions, self._all_archived)
-        else:
-            self._archived_sessions = list(self._all_archived)
-
-        # Don't rebuild OptionLists while peek is open — backing data is updated
-        # but the visible list stays showing the conversation.
-        if self._peek_mode:
-            return
-
-        olist = self.query_one("#detail-sessions", OptionList)
-        no_sess = self.query_one("#detail-no-sessions", Static)
-        if self._detail_sessions:
-            olist.display = True
-            no_sess.display = False
-            old_sid = self._highlighted_session_id(olist)
-            old_idx = olist.highlighted
-            self._build_session_list()
-            self._restore_highlight_by_sid(olist, self._detail_sessions, old_sid, old_idx)
-        else:
-            olist.display = False
-            no_sess.display = True
-
-        arch_olist = self.query_one("#detail-archived", OptionList)
-        no_arch = self.query_one("#detail-no-archived", Static)
-        arch_pane = self.query_one("#detail-archived-pane")
-        arch_pane.display = True
-        if self._archived_sessions:
-            arch_olist.display = True
-            no_arch.display = False
-            old_sid = self._highlighted_session_id(arch_olist)
-            old_arch_idx = arch_olist.highlighted
-            self._build_archived_list()
-            self._restore_highlight_by_sid(arch_olist, self._archived_sessions, old_sid, old_arch_idx)
-        else:
-            arch_olist.display = False
-            no_arch.display = True
-            if self._active_pane == "archived":
-                self._active_pane = "sessions"
-                self.query_one("#detail-sessions", OptionList).focus()
-
-        self._update_pane_labels()
-
-    @staticmethod
-    def _highlighted_session_id(olist: OptionList) -> str | None:
-        """Get the session_id of the currently highlighted option via its option ID."""
-        if olist.highlighted is not None and olist.option_count > 0:
-            try:
-                oid = olist.get_option_at_index(olist.highlighted).id
-                if oid:
-                    return oid.removeprefix("a:")
-            except Exception:
-                pass
-        return None
-
-    @staticmethod
-    def _restore_highlight_by_sid(olist: OptionList, sessions: list, sid: str | None, old_idx: int | None = None):
-        """Restore highlight to the session with the given ID, or clamp to old position."""
-        if not olist.option_count:
-            return
-        if sid:
-            # Search by option ID since option list may have separators
-            for i in range(olist.option_count):
-                try:
-                    oid = olist.get_option_at_index(i).id
-                    if oid and oid.removeprefix("a:") == sid:
-                        olist.highlighted = i
-                        return
-                except Exception:
-                    continue
-        # Session was removed — keep cursor at same position, clamped.
-        if old_idx is not None:
-            olist.highlighted = min(old_idx, olist.option_count - 1)
-        else:
-            olist.highlighted = 0
-
-    @staticmethod
-    def _stable_merge(existing: list[ClaudeSession], fresh: list[ClaudeSession]) -> list[ClaudeSession]:
-        """Merge fresh session data into existing order.
-
-        Preserves the position of sessions already in the list (updating their
-        data), prepends genuinely new sessions at the top, and drops sessions
-        no longer present in fresh.  This prevents the list from re-sorting
-        every time active sessions receive new responses.
-        """
-        fresh_by_id = {s.session_id: s for s in fresh}
-        fresh_ids = set(fresh_by_id)
-
-        # Keep existing order for sessions still present, with updated objects
-        merged = []
-        seen = set()
-        for s in existing:
-            if s.session_id in fresh_ids:
-                merged.append(fresh_by_id[s.session_id])
-                seen.add(s.session_id)
-
-        # Prepend any new sessions (not previously in the list) at the top
-        new_sessions = [s for s in fresh if s.session_id not in seen]
-        return new_sessions + merged
-
-    def _build_session_list(self):
-        olist = self.query_one("#detail-sessions", OptionList)
-        olist.clear_options()
-        animating = []
-
-        # Split into notified, elevated (unseen your-turn without notification), and quiet
-        notified = []
-        elevated = []
-        quiet = []
-        for s in self._detail_sessions:
-            if s.session_id in self._session_notifications:
-                notified.append(s)
-            else:
-                act = session_activity(s, self._last_seen_cache)
-                seen = _is_session_seen(s, self._last_seen_cache)
-                if not seen and act in (ThreadActivity.AWAITING_INPUT, ThreadActivity.RESPONSE_READY):
-                    elevated.append(s)
-                else:
-                    quiet.append(s)
-
-        # Sort notified by notification recency (newest first)
-        notified.sort(key=lambda s: self._session_notifications[s.session_id].dt, reverse=True)
-
-        # Build the unified list: notified first, then elevated, separator, then quiet
-        all_elevated = notified + elevated
-        self._notified_count = len(all_elevated)
-        lw = self._session_line_width("#detail-sessions")
-        idx = 0
-        for s in notified:
-            act = session_activity(s, self._last_seen_cache)
-            if act in (ThreadActivity.THINKING, ThreadActivity.AWAITING_INPUT):
-                animating.append((idx, act))
-            seen = _is_session_seen(s, self._last_seen_cache)
-            notif = self._session_notifications[s.session_id]
-            prompt = _render_notified_session_option(
-                s, act, notif, self._throbber_frame,
-                ws_repo_path=self.ws.repo_path, seen=seen,
-                line_width=lw,
-            )
-            olist.add_option(Option(prompt, id=s.session_id))
-            idx += 1
-
-        for s in elevated:
-            act = session_activity(s, self._last_seen_cache)
-            if act in (ThreadActivity.THINKING, ThreadActivity.AWAITING_INPUT):
-                animating.append((idx, act))
-            seen = _is_session_seen(s, self._last_seen_cache)
-            prompt = _render_notified_session_option(
-                s, act, None, self._throbber_frame,
-                ws_repo_path=self.ws.repo_path, seen=seen,
-                line_width=lw,
-            )
-            olist.add_option(Option(prompt, id=s.session_id))
-            idx += 1
-
-        if all_elevated and quiet:
-            olist.add_option(Option(QUIET_SEPARATOR_LABEL, id="__separator__", disabled=True))
-            idx += 1
-
-        for s in quiet:
-            act = session_activity(s, self._last_seen_cache)
-            if act in (ThreadActivity.THINKING, ThreadActivity.AWAITING_INPUT):
-                animating.append((idx, act))
-            seen = _is_session_seen(s, self._last_seen_cache)
-            prompt = _render_session_option(s, act, self._throbber_frame, ws_repo_path=self.ws.repo_path, seen=seen, line_width=lw)
-            olist.add_option(Option(prompt, id=s.session_id))
-            idx += 1
-
-        self._animating_sessions = animating
-        log.debug("build_session_list: %d notified + %d elevated + %d quiet, option_count=%d",
-                  len(notified), len(elevated), len(quiet), olist.option_count)
-
-    def _build_archived_list(self):
-        olist = self.query_one("#detail-archived", OptionList)
-        olist.clear_options()
-        animating = []
-        alw = self._session_line_width("#detail-archived")
-        for i, s in enumerate(self._archived_sessions):
-            act = session_activity(s, self._last_seen_cache)
-            if act in (ThreadActivity.THINKING, ThreadActivity.AWAITING_INPUT):
-                animating.append((i, act))
-            seen = _is_session_seen(s, self._last_seen_cache)
-            prompt = _render_session_option(s, act, self._throbber_frame, ws_repo_path=self.ws.repo_path, seen=seen, line_width=alw)
-            olist.add_option(Option(prompt, id=f"a:{s.session_id}"))
-        self._animating_archived = animating
-
-    # ── Feed (notification) panel ──
-
-    def _render_feed_label(self) -> str:
-        n = len([n for n in self._feed_notifications if not n.dismissed])
-        if n:
-            return f"[bold {C_BLUE}]Feed[/bold {C_BLUE}] [{C_DIM}]({n})[/{C_DIM}]"
-        return f"[bold {C_BLUE}]Feed[/bold {C_BLUE}]"
-
-    def _load_feed(self):
-        app = self.app
-        if hasattr(app, 'state'):
-            self._feed_notifications = app.state.notifications_for_ws(self.ws)
-        else:
-            self._feed_notifications = []
-
-        # Build session_id -> latest (non-dismissed) notification map.
-        # Match by session_id when available, otherwise by cwd proximity.
-        notif_map: dict[str, Notification] = {}
-        unmatched: list[Notification] = []
-        for n in self._feed_notifications:
-            if n.dismissed:
-                continue
-            if n.session_id:
-                existing = notif_map.get(n.session_id)
-                if not existing or n.dt > existing.dt:
-                    notif_map[n.session_id] = n
-            else:
-                unmatched.append(n)
-
-        # Fallback: match unmatched notifications to sessions by cwd + timestamp
-        if unmatched and self._detail_sessions:
-            for n in unmatched:
-                if not n.cwd:
-                    continue
-                cwd_norm = n.cwd.rstrip("/")
-                best_sid = None
-                best_gap = None
-                for s in self._detail_sessions:
-                    if not s.project_path or s.project_path.rstrip("/") != cwd_norm:
-                        continue
-                    if s.last_activity:
-                        s_dt = _parse_iso(s.last_activity)
-                        if s_dt:
-                            gap = abs((n.dt - s_dt).total_seconds())
-                            if best_gap is None or gap < best_gap:
-                                best_gap = gap
-                                best_sid = s.session_id
-                    elif best_sid is None:
-                        best_sid = s.session_id
-                if best_sid:
-                    existing = notif_map.get(best_sid)
-                    if not existing or n.dt > existing.dt:
-                        notif_map[best_sid] = n
-
-        self._session_notifications = notif_map
-
-        # Feed pane is now hidden — notifications are inline with sessions
-        try:
-            olist = self.query_one("#detail-feed", OptionList)
-            olist.display = False
-            self.query_one("#detail-no-feed", Static).display = False
-        except Exception:
-            pass
-
-    def _build_feed_list(self):
-        olist = self.query_one("#detail-feed", OptionList)
-        olist.clear_options()
-        for notif in self._feed_notifications:
-            prompt = _render_notification_option(notif)
-            olist.add_option(Option(prompt, id=f"notif:{notif.id}"))
-
-    def _poll_feed(self):
-        old_notif_sids = set(self._session_notifications.keys())
-        self._load_feed()
-        new_notif_sids = set(self._session_notifications.keys())
-        # If notification-to-session mapping changed, rebuild the session list
-        if old_notif_sids != new_notif_sids:
-            self._load_detail_sessions()
-
-    def action_dismiss_notification(self):
-        """Dismiss the notification on the currently highlighted session."""
-        if self._active_pane != "sessions":
-            return
-        olist = self.query_one("#detail-sessions", OptionList)
-        idx = olist.highlighted
-        if idx is None:
-            return
-        try:
-            oid = olist.get_option_at_index(idx).id
-        except Exception:
-            return
-        if not oid or oid == "__separator__":
-            return
-        sid = oid.removeprefix("a:")
-        notif = self._session_notifications.get(sid)
-        if not notif:
-            return
-        dismiss_notification(notif.id)
-        notif.dismissed = True
-        del self._session_notifications[sid]
-        self._load_detail_sessions()
-
-    def action_dismiss_all_notifications(self):
-        """Dismiss all notifications for this workstream."""
-        dirs = set()
-        if hasattr(self.app, 'state'):
-            dirs = self.app.state._ws_dirs(self.ws)
-        if dirs:
-            dismiss_all_for_dirs(self._feed_notifications, dirs)
-        for n in self._feed_notifications:
-            n.dismissed = True
-        self._session_notifications.clear()
-        self._load_detail_sessions()
-
-    # ── Panel navigation (Ctrl+j/k) ──
-
-    def _panel_ids(self) -> list[str]:
-        """Focusable panel widget IDs, skipping empty ones."""
-        panels = ["detail-sessions"]
-        if self._archived_sessions:
-            panels.append("detail-archived")
-        panels.append("detail-scroll")
-        # Feed pane no longer in cycle — notifications are inline in sessions
-        return panels
-
-    _PANEL_ID_TO_NAME = {
-        "detail-sessions": "sessions",
-        "detail-archived": "archived",
-        "detail-scroll": "body",
-        "detail-feed": "feed",
-    }
-    _PANEL_NAME_TO_ID = {v: k for k, v in _PANEL_ID_TO_NAME.items()}
-
-    def action_next_panel(self):
-        panels = self._panel_ids()
-        current_id = self._PANEL_NAME_TO_ID.get(self._active_pane, "detail-sessions")
-        idx = panels.index(current_id) if current_id in panels else 0
-        next_id = panels[(idx + 1) % len(panels)]
-        self._active_pane = self._PANEL_ID_TO_NAME.get(next_id, "sessions")
-        try:
-            self.query_one(f"#{next_id}").focus()
-        except Exception:
-            pass
-        self._update_pane_labels()
-
-    def action_prev_panel(self):
-        panels = self._panel_ids()
-        current_id = self._PANEL_NAME_TO_ID.get(self._active_pane, "detail-sessions")
-        idx = panels.index(current_id) if current_id in panels else 0
-        prev_id = panels[(idx - 1) % len(panels)]
-        self._active_pane = self._PANEL_ID_TO_NAME.get(prev_id, "sessions")
-        try:
-            self.query_one(f"#{prev_id}").focus()
-        except Exception:
-            pass
-        self._update_pane_labels()
-
-    def _find_session_by_id(self, sid: str) -> ClaudeSession | None:
-        for s in self._detail_sessions:
-            if s.session_id == sid:
-                return s
-        for s in self._archived_sessions:
-            if s.session_id == sid:
-                return s
-        return None
-
-    def action_select_session(self):
-        """Vim-style l to select the highlighted session (same as enter)."""
-        if self._peek_mode:
-            return
-        olist = self._focused_olist()
-        if olist.highlighted is not None and olist.option_count > 0:
-            olist.action_select()
-
-    def on_option_list_option_selected(self, event: OptionList.OptionSelected):
-        if self._peek_mode:
-            return
-        oid = event.option_id
-        log.debug("option_selected: option_id=%r option_index=%r widget_id=%s",
-                  oid, event.option_index, event.option_list.id if hasattr(event, 'option_list') else "?")
-
-        # Feed notification selected — jump to the matching session
-        if oid and oid.startswith("notif:"):
-            notif_id = oid.removeprefix("notif:")
-            notif = next((n for n in self._feed_notifications if n.id == notif_id), None)
-            if notif and notif.session_id:
-                session = self._find_session_by_id(notif.session_id)
-                if session:
-                    mark_thread_seen(session.session_id)
-                    self._last_seen_cache = load_last_seen()
-                    dirs = ws_directories(self.ws)
-                    resume_session_now(self.ws, session, dirs, self.app)
-                    return
-            # No session to jump to — dismiss instead
-            if notif and not notif.dismissed:
-                dismiss_notification(notif.id)
-                notif.dismissed = True
-                self._load_feed()
-            return
-
-        if oid is None or oid == "__separator__":
-            if oid is None:
-                log.warning("option_selected: option_id is None!")
-            return
-        sid = oid.removeprefix("a:")  # archived IDs are "a:<session_id>"
-        session = self._find_session_by_id(sid)
-        log.debug("option_selected: sid=%s found=%s", sid, session is not None)
-        if session:
-            mark_thread_seen(session.session_id)
-            self._last_seen_cache = load_last_seen()
-            # Auto-dismiss all notifications that could match this session.
-            # Dismiss by session_id match AND by cwd match, so the cwd fallback
-            # doesn't resurface older notifications on the next poll.
-            session_cwd = (session.project_path or "").rstrip("/")
-            for n in self._feed_notifications:
-                if n.dismissed:
-                    continue
-                if (n.session_id and n.session_id == sid) or \
-                   (not n.session_id and n.cwd and n.cwd.rstrip("/") == session_cwd):
-                    dismiss_notification(n.id)
-                    n.dismissed = True
-            self._session_notifications.pop(sid, None)
-            dirs = ws_directories(self.ws)
-            resume_session_now(self.ws, session, dirs, self.app)
-        else:
-            log.warning("option_selected: session not found for sid=%s, detail_sids=%s, archived_sids=%s",
-                        sid, [s.session_id for s in self._detail_sessions],
-                        [s.session_id for s in self._archived_sessions])
+        self.query_one("#detail-scroll").focus()
+
+    def on_sessions_changed(self, event):
+        """Update meta when sessions change (pushed by main app)."""
+        self.query_one("#detail-meta", Static).update(self._render_meta())
+        self.query_one("#detail-body", Static).update(self._render_body())
 
     def _render_title(self) -> str:
         return f"[bold {C_PURPLE}]{_rich_escape(self.ws.name)}[/bold {C_PURPLE}]"
 
+    def _get_sessions(self) -> list:
+        """Get sessions for this workstream from app state (cheap, no I/O)."""
+        app = self.app
+        if hasattr(app, 'state'):
+            return app.state.sessions_for_ws(self.ws)
+        return []
+
     def _render_meta(self) -> str:
         parts = [_status_markup(self.ws.status), _category_markup(self.ws.category)]
-        if self._detail_sessions:
-            n = len(self._detail_sessions)
-            total_tok = sum(s.total_input_tokens + s.total_output_tokens for s in self._detail_sessions)
-            total_msgs = sum(s.message_count for s in self._detail_sessions)
+        sessions = self._get_sessions()
+        if sessions:
+            n = len(sessions)
+            n_live = sum(1 for s in sessions if s.is_live)
+            total_tok = sum(s.total_input_tokens + s.total_output_tokens for s in sessions)
+            total_msgs = sum(s.message_count for s in sessions)
             _tk = f"{total_tok / 1_000_000:.1f}M" if total_tok > 1_000_000 else f"{total_tok / 1_000:.0f}k" if total_tok > 1_000 else str(total_tok)
+            live_str = f", {n_live} live" if n_live else ""
             parts.append(
-                f"[{C_DIM}]{n} sessions \u00b7 {total_msgs} msgs \u00b7 "
+                f"[{C_DIM}]{n} sessions{live_str} \u00b7 {total_msgs} msgs \u00b7 "
                 f"{_token_color_markup(_tk, total_tok)}[/{C_DIM}]"
             )
         return "  ".join(parts)
@@ -1782,336 +1011,25 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
             ("^L", "resume"), ("s/S", "status"), ("c", "spawn"),
             ("n", "+todo"), ("e", "todos"), ("L", "+link"),
             ("o", "open"), ("x", "archive ws"),
-            ("space", "archive/restore"),
-            ("p", "peek"),
-            ("^j/^k", "panels"), ("/", "search"),
             ("^H", "back"),
         ]
         return "  ".join(f"[{C_YELLOW}]{k}[/{C_YELLOW}] {v}" for k, v in pairs)
 
-    # ── Content search ──
-
-    def _search_is_active(self) -> bool:
-        """Return True if the search input is visible (search mode)."""
-        try:
-            return self.query_one("#detail-search-input", _SearchInput).has_class("visible")
-        except Exception:
-            return False
-
-    def action_dismiss(self) -> None:
-        """Override dismiss: close peek, then search, then screen."""
-        if self._peek_mode:
-            self._close_peek()
-        elif self._search_is_active():
-            self._cancel_search()
-        else:
-            super().action_dismiss(None)
+    def action_noop(self):
+        """Consume escape without doing anything."""
+        pass
 
     def action_go_back(self):
-        """Ctrl+H/Backspace: close peek, then search, then dismiss."""
-        if self._peek_mode:
-            self._close_peek()
-        elif self._search_is_active():
-            self._cancel_search()
-        else:
-            self.dismiss(None)
+        self.dismiss(None)
 
     def action_go_forward(self):
-        """Ctrl+L: resume the highlighted session."""
+        """Ctrl+L: resume a session."""
         self.action_resume()
-
-    def _update_help_bar(self):
-        help_bar = self.query_one("#detail-help", Static)
-        search_input = self.query_one("#detail-search-input", _SearchInput)
-        if search_input.has_class("visible") and not search_input.has_focus:
-            # Viewing search results — show navigation hints
-            pairs = [
-                ("j/k", "navigate"), ("^L", "resume"),
-                ("/", "refine"), ("^H", "clear/back"),
-            ]
-            help_bar.update("  ".join(f"[{C_YELLOW}]{k}[/{C_YELLOW}] {v}" for k, v in pairs))
-        else:
-            help_bar.update(self._render_help())
-
-    @property
-    def _search_text(self) -> str:
-        """Current search query from the Input widget."""
-        try:
-            return self.query_one("#detail-search-input", _SearchInput).value
-        except Exception:
-            return ""
-
-    def action_search(self):
-        """Show the search input and focus it."""
-        search_input = self.query_one("#detail-search-input", _SearchInput)
-        search_input.add_class("visible")
-        search_input.focus()
-        # Hide archived pane so search results get full width
-        self.query_one("#detail-archived-pane").display = False
-        # Start warming the content cache in background
-        if not self._content_ready:
-            self._warm_content_cache()
-
-    def _cancel_search(self):
-        """Hide search input and restore normal session lists."""
-        search_input = self.query_one("#detail-search-input", _SearchInput)
-        search_input.value = ""
-        search_input.remove_class("visible")
-        self._content_search_active = False
-        self._content_results = []
-        # Restore normal session lists and archived pane
-        self._detail_sessions = list(self._all_sessions)
-        self._archived_sessions = list(self._all_archived)
-        if self._archived_sessions:
-            self.query_one("#detail-archived-pane").display = True
-        self._rebuild_session_lists()
-        self._update_help_bar()
-        # Return focus to the sessions list
-        self.query_one("#detail-sessions", OptionList).focus()
-
-    def _focus_search_results(self):
-        """Shift focus from search input to results list."""
-        olist = self.query_one("#detail-sessions", OptionList)
-        if olist.option_count > 0:
-            olist.highlighted = 0
-            olist.focus()
-            self._active_pane = "sessions"
-            self._update_pane_labels()
-            self._update_help_bar()
-
-    @on(Input.Changed, "#detail-search-input")
-    def _on_search_input_changed(self, event: Input.Changed) -> None:
-        """Live filter as user types in the search input."""
-        query = event.value
-        if not query:
-            self._content_search_active = False
-            self._content_results = []
-            self._detail_sessions = list(self._all_sessions)
-            self._archived_sessions = list(self._all_archived)
-            if self._archived_sessions:
-                self.query_one("#detail-archived-pane").display = True
-            self._rebuild_session_lists()
-            return
-        if self._content_ready:
-            self._run_content_search_sync()
-        else:
-            self._apply_title_filter()
-
-    @on(Input.Submitted, "#detail-search-input")
-    def _on_search_input_submitted(self, event: Input.Submitted) -> None:
-        """Enter in search input shifts focus to results."""
-        self._focus_search_results()
-
-    def on_key(self, event) -> None:
-        """Handle backspace navigation and special keys in search input."""
-        if event.key in ("backspace", "ctrl+h"):
-            event.stop()
-            event.prevent_default()
-            self.action_go_back()
-            return
-        search_input = self.query_one("#detail-search-input", _SearchInput)
-        if search_input.has_focus:
-            if event.key == "down":
-                event.stop()
-                event.prevent_default()
-                self._focus_search_results()
-            return
-        # Space = archive/unarchive session
-        if event.key == "space" and self._active_pane in ("sessions", "archived"):
-            event.stop()
-            event.prevent_default()
-            self.action_archive_session()
-
-    # ── Session peek (replaces OptionList content in-place) ──
-
-    def _open_peek(self):
-        """Replace session options with conversation messages in the same OptionList."""
-        if self._peek_mode:
-            self._close_peek()
-            return
-        olist = self.query_one("#detail-sessions", OptionList)
-        idx = olist.highlighted
-        if idx is None:
-            return
-        try:
-            oid = olist.get_option_at_index(idx).id
-        except Exception:
-            return
-        if not oid or oid == "__separator__":
-            return
-        sid = oid.removeprefix("a:")
-        session = self._find_session_by_id(sid)
-        if not session:
-            return
-        from sessions import extract_session_content
-        if session.session_id in self._content_cache:
-            messages = self._content_cache[session.session_id]
-        else:
-            messages = extract_session_content(session.jsonl_path) if session.jsonl_path else []
-            self._content_cache[session.session_id] = messages
-        if not messages:
-            return
-        title_text = _session_title(session)
-        header = (
-            f"[bold {C_BLUE}]{_rich_escape(title_text)}[/bold {C_BLUE}]  "
-            f"[{C_DIM}]{session.age} · {_short_model(session.model)} · "
-            f"{session.message_count} msgs · {session.tokens_display}[/{C_DIM}]\n"
-            f"[{C_DIM}]p[/{C_DIM}] close  [{C_DIM}]j/k[/{C_DIM}] scroll"
-        )
-        olist.clear_options()
-        olist.add_option(Option(header, id="peek-header"))
-        for i, msg in enumerate(messages):
-            if msg.role == "user":
-                role_fmt = f"[bold {C_CYAN}]you[/bold {C_CYAN}]"
-            else:
-                role_fmt = f"[bold {C_PURPLE}]claude[/bold {C_PURPLE}]"
-            text = msg.text
-            if len(text) > 2000:
-                text = text[:2000] + "\n…(truncated)"
-            prompt = f"{role_fmt}\n[{C_LIGHT}]{_rich_escape(text)}[/{C_LIGHT}]"
-            olist.add_option(Option(prompt, id=f"peek-msg-{i}"))
-        if olist.option_count > 0:
-            olist.highlighted = olist.option_count - 1
-        self._peek_mode = True
-        sess_label = self.query_one("#detail-sessions-label", Static)
-        sess_label.update(
-            f"[bold {C_BLUE}]Conversation[/bold {C_BLUE}] "
-            f"[{C_DIM}]({len(messages)} messages)[/{C_DIM}]"
-        )
-
-    def _close_peek(self):
-        """Restore the normal session list."""
-        self._peek_mode = False
-        self._build_session_list()
-        olist = self.query_one("#detail-sessions", OptionList)
-        if olist.option_count > 0:
-            olist.highlighted = 0
-        self._update_pane_labels()
-
-    @work(thread=True, exclusive=True, group="content_cache")
-    def _warm_content_cache(self):
-        """Background: extract conversation content from all session JSONLs."""
-        from sessions import extract_session_content
-        all_sessions = self._all_sessions + self._all_archived
-        for s in all_sessions:
-            if s.session_id not in self._content_cache and s.jsonl_path:
-                self._content_cache[s.session_id] = extract_session_content(s.jsonl_path)
-        self._content_ready = True
-        # If user already typed a query while we were loading, run search now
-        self.app.call_from_thread(self._on_cache_ready)
-
-    def _on_cache_ready(self):
-        """Called on main thread when content cache is warm."""
-        if self._search_text:
-            self._run_content_search_sync()
-
-    def _run_content_search_sync(self):
-        """Run content search synchronously (cache must be warm)."""
-        all_sessions = self._all_sessions + self._all_archived
-        results = content_search(self._search_text, all_sessions, self._content_cache)
-        self._content_results = results
-        self._content_search_active = True
-        self._show_content_results()
-
-    def _show_content_results(self):
-        """Update the sessions OptionList with content search results."""
-        olist = self.query_one("#detail-sessions", OptionList)
-        no_sess = self.query_one("#detail-no-sessions", Static)
-        olist.clear_options()
-
-        if self._content_results:
-            olist.display = True
-            no_sess.display = False
-            for r in self._content_results:
-                prompt = _render_content_search_result(r, ws_repo_path=self.ws.repo_path)
-                olist.add_option(Option(prompt, id=r.session.session_id))
-            if olist.option_count > 0:
-                olist.highlighted = 0
-            # Update the session list to match results for selection handling
-            self._detail_sessions = [r.session for r in self._content_results]
-        else:
-            olist.display = False
-            no_sess.update(f"[{C_DIM}]No matches[/{C_DIM}]")
-            no_sess.display = True
-            self._detail_sessions = []
-
-        # Hide archived pane during search (results span full width)
-        self.query_one("#detail-archived-pane").display = False
-        arch_olist = self.query_one("#detail-archived", OptionList)
-        arch_olist.clear_options()
-        self._archived_sessions = []
-
-        # Update labels
-        sess_label = self.query_one("#detail-sessions-label", Static)
-        n = len(self._content_results)
-        sess_label.update(
-            f"[bold {C_BLUE}]Search[/bold {C_BLUE}] "
-            f"[{C_DIM}]({n} result{'s' if n != 1 else ''})[/{C_DIM}]"
-        )
-        self._update_pane_labels()
-
-    def _apply_title_filter(self):
-        """Fallback: fuzzy filter on session titles while content cache loads."""
-        scored = []
-        for s in self._all_sessions + self._all_archived:
-            searchable = " ".join(filter(None, [s.display_name, s.last_message_text, s.model]))
-            sc = fuzzy_match(self._search_text, searchable)
-            if sc is not None:
-                scored.append((s, sc))
-        scored.sort(key=lambda t: t[1], reverse=True)
-        self._detail_sessions = [s for s, _ in scored]
-        self._archived_sessions = []
-        self._content_search_active = False
-        self._rebuild_session_lists()
-
-    def _rebuild_session_lists(self):
-        """Rebuild both session OptionLists from current state."""
-        olist = self.query_one("#detail-sessions", OptionList)
-        no_sess = self.query_one("#detail-no-sessions", Static)
-        if self._detail_sessions:
-            olist.display = True
-            no_sess.display = False
-            self._build_session_list()
-            if olist.option_count > 0:
-                olist.highlighted = 0
-        else:
-            olist.display = False
-            if self._search_text:
-                no_sess.update(f"[{C_DIM}]No matches[/{C_DIM}]")
-            else:
-                no_sess.update(f"[{C_DIM}]No sessions[/{C_DIM}]")
-            no_sess.display = True
-
-        arch_olist = self.query_one("#detail-archived", OptionList)
-        no_arch = self.query_one("#detail-no-archived", Static)
-        if self._archived_sessions:
-            arch_olist.display = True
-            no_arch.display = False
-            self._build_archived_list()
-            if arch_olist.option_count > 0:
-                arch_olist.highlighted = 0
-        else:
-            arch_olist.display = False
-            no_arch.display = True
-
-        # Restore sessions label when not in content search
-        if not self._content_search_active:
-            n = len(self._detail_sessions)
-            sess_label = self.query_one("#detail-sessions-label", Static)
-            if self._active_pane == "sessions":
-                sess_label.update(f"[bold {C_BLUE}]Sessions[/bold {C_BLUE}] [{C_DIM}]({n})[/{C_DIM}]")
-            else:
-                sess_label.update(f"[{C_DIM}]Sessions ({n})[/{C_DIM}]")
-
-        self._update_pane_labels()
-        self._update_animating_cache()
 
     def _refresh(self):
         self.query_one("#detail-title", Static).update(self._render_title())
         self.query_one("#detail-meta", Static).update(self._render_meta())
         self.query_one("#detail-body", Static).update(self._render_body())
-        self._load_detail_sessions()
-        self._load_feed()
 
     def action_cycle_status(self):
         statuses = list(Status)
@@ -2153,91 +1071,35 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         else:
             self.app.notify("No links to open", timeout=2)
 
-    def action_peek_session(self):
-        """p = peek into session conversation."""
-        if self._active_pane in ("sessions", "archived"):
-            self._open_peek()
-
     def action_archive(self):
         self.ws.archived = True
         self.store.update(self.ws)
         self.app.notify(f"Archived: {self.ws.name}", timeout=2)
         self.dismiss()
 
-    def action_archive_session(self):
-        olist = self._focused_olist()
-        idx = olist.highlighted
-        log.debug("archive_session: pane=%s idx=%s option_count=%d detail=%d archived=%d",
-                  self._active_pane, idx, olist.option_count,
-                  len(self._detail_sessions), len(self._archived_sessions))
-        if idx is None:
-            return
-        try:
-            oid = olist.get_option_at_index(idx).id
-        except Exception:
-            return
-        if not oid or oid == "__separator__":
-            return
-        if self._active_pane == "archived":
-            sid = oid.removeprefix("a:")
-            log.debug("archive_session: unarchiving sid=%s", sid)
-            self.ws.archived_sessions.pop(sid, None)
-            self.store.update(self.ws)
-        else:
-            sid = oid
-            log.debug("archive_session: archiving sid=%s", sid)
-            if sid not in self.ws.archived_sessions:
-                self.ws.archived_sessions[sid] = datetime.now(timezone.utc).isoformat()
-                self.store.update(self.ws)
-        self._refresh()
-
     def action_spawn(self):
-        # If there's a live tmux window for this ws whose session hasn't
-        # appeared in our session list yet (still composing first prompt),
-        # switch to it instead of spawning a fresh one.
-        wid = self._find_composing_window()
-        if wid and switch_to_tmux_window(wid):
-            return
         ok, err = launch_orch_claude(self.ws, store=self.store)
         if ok:
             self.app.notify("Session spawned", timeout=2)
-            self._add_spawning_placeholder()
         else:
             self.app.notify(f"Spawn failed: {err}", severity="error", timeout=4)
 
-    def _find_composing_window(self) -> str | None:
-        """Find a tmux window for this ws where the user hasn't submitted yet."""
-        from actions import find_tmux_windows_for_ws
-        all_sessions = self._all_sessions + self._all_archived
-        known_sids = {s.session_id for s in all_sessions}
-        known_sids |= {sid for s in all_sessions for sid in s.all_session_ids}
-        for sid, wid in find_tmux_windows_for_ws(self.ws.name):
-            if sid not in known_sids:
-                return wid
-        return None
-
-    def _add_spawning_placeholder(self):
-        olist = self.query_one("#detail-sessions", OptionList)
-        no_sess = self.query_one("#detail-no-sessions", Static)
-        olist.display = True
-        no_sess.display = False
-        line1 = f" [bold {C_CYAN}]◉[/bold {C_CYAN}]  [bold]Starting session…[/bold]"
-        line2 = f"      [{C_DIM}]waiting for Claude to initialize[/{C_DIM}]"
-        olist.add_option(Option(f"{line1}\n{line2}", id="spawning"))
-        self._refresh()
-
     def action_resume(self):
-        """Resume the currently highlighted session (same as Enter)."""
-        olist = self._focused_olist()
-        idx = olist.highlighted
-        if self._active_pane in ("sessions", "archived"):
-            sessions = self._archived_sessions if self._active_pane == "archived" else self._detail_sessions
-            if idx is not None and idx < len(sessions):
-                session = sessions[idx]
-                mark_thread_seen(session.session_id)
-                self._last_seen_cache = load_last_seen()
-                dirs = ws_directories(self.ws)
-                resume_session_now(self.ws, session, dirs, self.app)
+        """Resume most recent session, or pick if multiple live."""
+        sessions = self._get_sessions()
+        if not sessions:
+            self.app.notify("No sessions", timeout=2)
+            return
+        live = [s for s in sessions if s.is_live]
+        if len(live) == 1:
+            target = live[0]
+        elif len(live) > 1:
+            self.app.push_screen(SessionPickerScreen(self.ws, live))
+            return
+        else:
+            target = sessions[0]  # most recent
+        dirs = ws_directories(self.ws)
+        resume_session_now(self.ws, target, dirs, self.app)
 
     def action_add_link(self):
         def on_link(link: Link | None):

@@ -464,9 +464,13 @@ class OrchestratorApp(App):
         pane.display = self.state.preview_visible
 
     def _on_session_file_change(self):
-        """Watcher callback for JSONL content changes: liveness + full poll."""
+        """Watcher callback for JSONL content changes: liveness only.
+
+        Full session discovery runs on the 30s timer.  Triggering it on every
+        JSONL write was causing excessive I/O (each active session writes
+        frequently, and discover_sessions re-parses all files).
+        """
         self._refresh_session_liveness()
-        self._poll_sessions()
 
     def _refresh_session_liveness(self):
         self._do_refresh_liveness()
