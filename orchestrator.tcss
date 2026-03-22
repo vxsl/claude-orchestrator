@@ -19,33 +19,7 @@ Screen {
     scrollbar-corner-color: transparent;
 }
 
-/* ── DataTable: flat, cursor pops ── */
-DataTable {
-    scrollbar-size: 1 1;
-    background: #000000;
-    color: #b1bac4;
-}
-DataTable > .datatable--header {
-    text-style: bold;
-    color: #58a6ff;
-    background: #000000;
-}
-DataTable > .datatable--cursor {
-    background: #101010;
-    color: #e6edf3;
-    text-style: bold;
-}
-DataTable > .datatable--hover {
-    background: #0d1117;
-}
-DataTable > .datatable--even-row {
-    background: #000000;
-}
-DataTable > .datatable--odd-row {
-    background: #000000;
-}
-
-/* ── OptionList: flat ── */
+/* ── OptionList: flat, cursor subtly lifted ── */
 OptionList {
     scrollbar-size: 1 1;
     border: none;
@@ -56,10 +30,9 @@ OptionList > .option-list--option {
 }
 OptionList > .option-list--option-highlighted {
     background: #101010;
-    text-style: bold;
 }
 OptionList > .option-list--option-hover {
-    background: #0d1117;
+    background: #080808;
 }
 
 /* ── Inputs ── */
