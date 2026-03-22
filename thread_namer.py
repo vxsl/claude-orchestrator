@@ -27,7 +27,7 @@ SESSION_TITLE_CACHE = CACHE_DIR / "session-titles.json"
 TITLE_EVAL_CACHE = CACHE_DIR / "thread-title-evals.json"
 
 # Minimum time between title re-evaluations per thread
-TITLE_REFRESH_COOLDOWN = timedelta(hours=6)
+TITLE_REFRESH_COOLDOWN = timedelta(minutes=10)
 
 # Max threads to title in one batch (to limit cost/latency)
 BATCH_SIZE = 15
