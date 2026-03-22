@@ -117,8 +117,8 @@ class HelpScreen(FuzzyPickerScreen):
         ("nav-drill", f"[{C_YELLOW}]Ctrl+L[/{C_YELLOW}]  Drill in / resume"),
         ("nav-back", f"[{C_YELLOW}]Ctrl+H[/{C_YELLOW}]  Back / close"),
         ("nav-enter", f"[{C_YELLOW}]Enter[/{C_YELLOW}]  Confirm / open"),
-        ("nav-tab", f"[{C_YELLOW}]Tab[/{C_YELLOW}]  Next tab"),
-        ("nav-closetab", f"[{C_YELLOW}]Ctrl+W[/{C_YELLOW}]  Close tab"),
+        ("nav-tab", f"[{C_YELLOW}]Ctrl+Tab[/{C_YELLOW}]  Next tab"),
+        ("nav-closetab", f"[{C_YELLOW}]x[/{C_YELLOW}]  Close tab"),
         # Workstream actions
         ("ws-add", f"[{C_YELLOW}]a[/{C_YELLOW}]  Add new workstream"),
         ("ws-brain", f"[{C_YELLOW}]b[/{C_YELLOW}]  Brain dump (multi-line)"),

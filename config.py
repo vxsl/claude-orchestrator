@@ -21,8 +21,8 @@ DEFAULT_KEYS: dict[str, tuple[str, str, bool, bool]] = {
     "half_page_up": ("ctrl+u", "½PgUp", False, False),
     "select_item": ("enter,l", "Open", True, False),
     # Tab switching
-    "next_tab": ("tab", "Tab", True, True),
-    "prev_tab": ("shift+tab", "", False, True),
+    "next_tab": ("ctrl+tab", "Tab›", True, True),
+    "prev_tab": ("ctrl+shift+tab", "‹Tab", False, True),
     # Actions
     "add": ("a", "Add", True, False),
     "brain_dump": ("b", "Brain", False, False),
@@ -52,7 +52,7 @@ DEFAULT_KEYS: dict[str, tuple[str, str, bool, bool]] = {
     "sort('category')": ("f4", "", False, False),
     "sort('name')": ("f5", "", False, False),
     # Tabs
-    "close_tab": ("ctrl+w", "", False, True),
+    "close_tab": ("x", "", False, False),
     # Dev-workflow
     "ship": ("P", "", False, False),
     "ticket": ("T", "", False, False),
