@@ -46,11 +46,21 @@ ORCH_DIR = str(Path(__file__).parent)
 # ── Session helpers ───────────────────────────────────────────────────
 
 def auto_link_session(store: Store, ws_id: str, session_id: str) -> None:
-    """Link a claude-session to a workstream if not already linked."""
+    """Link a claude-session to a workstream if not already linked.
+
+    Skips linking if the ws already has directory links (worktree/file) that would
+    auto-discover this session. Session links are only useful as fallback for ws
+    that lack directory-based discovery.
+    """
     if not ws_id:
         return
     ws = store.get(ws_id)
     if not ws:
+        return
+    # If this ws has directory links, sessions are discovered automatically —
+    # no need to accumulate session links (they grow unboundedly).
+    has_dir_links = any(l.kind in ("worktree", "file") for l in ws.links)
+    if has_dir_links:
         return
     for link in ws.links:
         if link.kind == "claude-session" and link.value == session_id:
