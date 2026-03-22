@@ -276,12 +276,12 @@ class VTermBackend:
 
     def cell_char(self, cell: VTermScreenCell) -> str:
         cp = cell.chars[0]
-        if cp == 0:
+        if cp == 0 or cp > 0x10FFFF:
             return " "
         parts = [chr(cp)]
         for i in range(1, 6):
             cp = cell.chars[i]
-            if cp == 0:
+            if cp == 0 or cp > 0x10FFFF:
                 break
             parts.append(chr(cp))
         return "".join(parts)
