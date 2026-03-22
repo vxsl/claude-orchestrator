@@ -990,8 +990,7 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         # Full unfiltered lists (set once sessions are loaded)
         self._all_sessions: list[ClaudeSession] = []
         self._all_archived: list[ClaudeSession] = []
-        # Peek overlay state
-        self._peek_timer = None
+        # Peek state
         self._peek_visible: bool = False
 
     def compose(self) -> ComposeResult:
@@ -1564,15 +1563,19 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
             return False
 
     def action_dismiss(self) -> None:
-        """Override dismiss: if search is active, cancel search first."""
-        if self._search_is_active():
+        """Override dismiss: close peek, then search, then screen."""
+        if self._peek_visible:
+            self._hide_peek()
+        elif self._search_is_active():
             self._cancel_search()
         else:
             super().action_dismiss(None)
 
     def action_go_back(self):
-        """Ctrl+H/Backspace: cancel search if active, otherwise dismiss."""
-        if self._search_is_active():
+        """Ctrl+H/Backspace: close peek, then search, then dismiss."""
+        if self._peek_visible:
+            self._hide_peek()
+        elif self._search_is_active():
             self._cancel_search()
         else:
             self.dismiss(None)
@@ -1677,36 +1680,29 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
                 event.prevent_default()
                 self._focus_search_results()
             return
-        # Space hold = peek into session
+        # Space = toggle peek into session conversation
         if event.key == "space" and self._active_pane in ("sessions", "archived"):
             event.stop()
             event.prevent_default()
-            self._peek_hold()
+            self._toggle_peek()
 
-    # ── Session peek (hold space) ──
+    # ── Session peek (space to toggle) ──
 
-    def _peek_hold(self):
-        """Called on each space keypress. Shows peek and resets the release timer."""
-        if not self._peek_visible:
+    def _toggle_peek(self):
+        """Toggle between session list and conversation view."""
+        if self._peek_visible:
+            self._hide_peek()
+        else:
             self._show_peek()
-        # Just reset the dismiss timer — don't re-render on repeats
-        if self._peek_timer is not None:
-            self._peek_timer.stop()
-        self._peek_timer = self.set_timer(0.8, self._peek_release)
-
-    def _peek_release(self):
-        """Timer fired — user released space."""
-        self._hide_peek()
 
     def _show_peek(self):
-        """Show session content inline in the sessions pane."""
+        """Show session conversation inline in the sessions pane."""
         olist = self._focused_olist()
         idx = olist.highlighted
         sessions = self._archived_sessions if self._active_pane == "archived" else self._detail_sessions
         if idx is None or idx >= len(sessions):
             return
         session = sessions[idx]
-        self._peek_session_id = session.session_id
 
         title = _session_title(session)
         header = (
@@ -1721,15 +1717,13 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
             self._content_cache[session.session_id] = messages
         body = self._render_peek_messages(messages)
 
-        # Populate, then swap visibility
         content = self.query_one("#detail-peek-content", Static)
         content.update(f"{header}\n\n{body}")
         peek_scroll = self.query_one("#detail-peek-scroll", VerticalScroll)
-        peek_scroll.scroll_end(animate=False)
 
-        # Hide session list, show peek
         olist.display = False
         peek_scroll.add_class("visible")
+        peek_scroll.scroll_end(animate=False)
         self._peek_visible = True
 
     def _hide_peek(self):
@@ -1739,10 +1733,6 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         olist = self._focused_olist()
         olist.display = True
         self._peek_visible = False
-        self._peek_session_id = None
-        if self._peek_timer is not None:
-            self._peek_timer.stop()
-            self._peek_timer = None
 
     @staticmethod
     def _render_peek_messages(messages) -> str:
