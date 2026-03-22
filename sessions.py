@@ -242,6 +242,7 @@ class ClaudeSession:
     files_mutated: list[str] = field(default_factory=list)      # basenames, ordered by first touch
     git_branch: str = ""         # Git branch from first few lines (for thread clustering)
     first_message: str = ""      # First user message snippet (for thread naming)
+    context_tokens: int = 0      # Last API call's context window fill (input + cache_read + cache_creation)
 
     @property
     def duration_display(self) -> str:
@@ -264,6 +265,30 @@ class ClaudeSession:
             return f"{hours}h"
         except (ValueError, TypeError):
             return ""
+
+    @property
+    def context_window_size(self) -> int:
+        """Infer context window size: 1M if usage exceeds 200K, else 200K."""
+        if self.context_tokens > 200_000:
+            return 1_000_000
+        return 200_000
+
+    @property
+    def context_pct(self) -> float:
+        """Context window fill percentage (0–100)."""
+        if self.context_tokens <= 0:
+            return 0.0
+        return min(100.0, self.context_tokens / self.context_window_size * 100)
+
+    @property
+    def context_display(self) -> str:
+        """Human-readable context token count."""
+        t = self.context_tokens
+        if t > 1_000_000:
+            return f"{t / 1_000_000:.1f}M"
+        if t > 1_000:
+            return f"{t / 1_000:.0f}k"
+        return str(t)
 
     @property
     def model_short(self) -> str:
@@ -505,10 +530,13 @@ def parse_session(jsonl_path: Path) -> Optional[ClaudeSession]:
                 if msg_type == "assistant" and "message" in data:
                     msg = data["message"]
                     usage = msg.get("usage", {})
-                    session.total_input_tokens += usage.get("input_tokens", 0)
-                    session.total_input_tokens += usage.get("cache_creation_input_tokens", 0)
-                    session.total_input_tokens += usage.get("cache_read_input_tokens", 0)
+                    inp = usage.get("input_tokens", 0)
+                    cache_create = usage.get("cache_creation_input_tokens", 0)
+                    cache_read = usage.get("cache_read_input_tokens", 0)
+                    session.total_input_tokens += inp + cache_create + cache_read
                     session.total_output_tokens += usage.get("output_tokens", 0)
+                    # Context window fill = total input tokens for this API call
+                    session.context_tokens = inp + cache_create + cache_read
                     session.last_stop_reason = msg.get("stop_reason") or ""
                     session.last_tool_name = _last_tool_name(msg) or ""
                     # Track if this assistant message ends with a git commit
@@ -607,6 +635,13 @@ def refresh_session_tail(session: ClaudeSession, tail_bytes: int = 8192) -> bool
                 session.last_stop_reason = data["message"].get("stop_reason") or ""
                 session.last_tool_name = _last_tool_name(data["message"]) or ""
                 _pending_commit = _last_bash_has_commit(data["message"])
+                usage = data["message"].get("usage", {})
+                if usage:
+                    ctx = (usage.get("input_tokens", 0)
+                           + usage.get("cache_creation_input_tokens", 0)
+                           + usage.get("cache_read_input_tokens", 0))
+                    if ctx > 0:
+                        session.context_tokens = ctx
             if (msg_type == "system" and data.get("subtype") in (
                     "turn_duration", "stop_hook_summary")
                     or msg_type in ("last-prompt", "custom-title",

@@ -18,8 +18,7 @@ def _rich_escape(text: str) -> str:
     return text.replace("[", r"\[")
 
 from models import (
-    Category, Status, TodoItem, Workstream,
-    STATUS_ICONS, STATUS_ORDER,
+    Category, TodoItem, Workstream,
     _relative_time,
 )
 from sessions import ClaudeSession
@@ -50,14 +49,6 @@ BG_RAISED = "#0d1117"    # bars, headers, inputs
 
 
 # ─── Theme maps ─────────────────────────────────────────────────────
-
-STATUS_THEME = {
-    Status.QUEUED: C_DIM,
-    Status.IN_PROGRESS: C_CYAN,
-    Status.AWAITING_REVIEW: C_PURPLE,
-    Status.DONE: C_GREEN,
-    Status.BLOCKED: C_RED,
-}
 
 CATEGORY_THEME = {
     Category.WORK: C_CYAN,
@@ -105,12 +96,50 @@ def _colored_tokens(session_or_thread) -> str:
     return f"[{color}]{session_or_thread.tokens_display}[/{color}]"
 
 
+# ─── Context window bar ────────────────────────────────────────────
+
+def _context_color(pct: float) -> str:
+    """Color for context window fill percentage."""
+    if pct >= 90:
+        return C_RED
+    if pct >= 75:
+        return C_ORANGE
+    if pct >= 50:
+        return C_YELLOW
+    return C_GREEN
+
+
+def _context_bar(context_tokens: int, window_size: int = 200_000, width: int = 12) -> str:
+    """Render a context window fill bar: ████░░░░ 52%
+
+    Color transitions green→yellow→orange→red as the window fills.
+    Returns empty string if no context data.
+    """
+    if context_tokens <= 0:
+        return ""
+    pct = min(100.0, context_tokens / window_size * 100)
+    filled = round(pct / 100 * width)
+    filled = max(0, min(width, filled))
+    empty = width - filled
+    color = _context_color(pct)
+    bar = f"[{color}]{'█' * filled}[/{color}][{C_DIM}]{'░' * empty}[/{C_DIM}]"
+    label = f"[{color}]{pct:.0f}%[/{color}]"
+    return f"{bar} {label}"
+
+
+def _context_bar_compact(context_tokens: int, window_size: int = 200_000, width: int = 6) -> str:
+    """Compact context bar for inline session display (no percentage label)."""
+    if context_tokens <= 0:
+        return ""
+    pct = min(100.0, context_tokens / window_size * 100)
+    filled = round(pct / 100 * width)
+    filled = max(0, min(width, filled))
+    empty = width - filled
+    color = _context_color(pct)
+    return f"[{color}]{'█' * filled}[/{color}][{C_DIM}]{'░' * empty}[/{C_DIM}]"
+
+
 # ─── Rich Markup Helpers ────────────────────────────────────────────
-
-def _status_markup(status: Status) -> str:
-    c = STATUS_THEME[status]
-    return f"[{c}]{STATUS_ICONS[status]} {status.value}[/{c}]"
-
 
 def _category_markup(cat: Category) -> str:
     c = CATEGORY_THEME[cat]
@@ -126,7 +155,7 @@ def _ws_indicators(ws: Workstream, tmux_check=None) -> str:
     parts = []
     if tmux_check and tmux_check(ws):
         parts.append("\u26a1")
-    if ws.is_stale and ws.status != Status.DONE:
+    if ws.is_stale:
         parts.append("\u23f0")
     link_types = set(lnk.kind for lnk in ws.links)
     if link_types:
@@ -337,7 +366,7 @@ def _render_ws_option(
 
     Layout:
       {icon} {name}  {indicators}  {branch}
-         {status} · {category} · {worktree} · {N sess} · {tokens} · {updated}
+         {category} · {worktree} · {N sess} · {tokens} · {updated}
          {description}
     """
     IND = "     "
@@ -621,14 +650,15 @@ def _render_session_option(
 
     lines = [line1, line2]
 
-    # Line 3: tool usage bar + file touchpoints + project path (always rendered)
+    # Line 3: context bar + tool usage bar + file touchpoints + project path
+    ctx_bar = _context_bar_compact(s.context_tokens, s.context_window_size)
     bar = _tool_bar(s.tool_counts)
     files = _file_touchpoints(s.files_mutated)
     proj_label = ""
     if ws_repo_path and s.project_path and s.project_path.rstrip("/") != ws_repo_path.rstrip("/"):
         proj_label = f"[{C_FAINT}]{Path(s.project_path).name}[/{C_FAINT}]"
 
-    left = "  ".join(p for p in (bar, files) if p)
+    left = "  ".join(p for p in (ctx_bar, bar, files) if p)
     if not left:
         left = f"[{C_FAINT}]{'─' * 6}[/{C_FAINT}]"
     if proj_label:
@@ -737,14 +767,15 @@ def _render_content_search_result(
 
     lines = [line1, line2]
 
-    # Line 3: tool usage bar + file touchpoints + project path (always rendered)
+    # Line 3: context bar + tool usage bar + file touchpoints + project path
+    ctx_bar = _context_bar_compact(s.context_tokens, s.context_window_size)
     bar = _tool_bar(s.tool_counts)
     files = _file_touchpoints(s.files_mutated)
     proj_label = ""
     if ws_repo_path and s.project_path and s.project_path.rstrip("/") != ws_repo_path.rstrip("/"):
         proj_label = f"[{C_FAINT}]{Path(s.project_path).name}[/{C_FAINT}]"
 
-    left = "  ".join(p for p in (bar, files) if p)
+    left = "  ".join(p for p in (ctx_bar, bar, files) if p)
     if not left:
         left = f"[{C_FAINT}]{'─' * 6}[/{C_FAINT}]"
     if proj_label:
