@@ -963,7 +963,7 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         layer: peek;
         align: center middle;
         width: 100%; height: 100%;
-        background: rgba(0, 0, 0, 0.6);
+        background: black 60%;
     }}
     #detail-peek-overlay.visible {{
         display: block;
