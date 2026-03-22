@@ -321,22 +321,43 @@ _BADGE_WIDTHS = {
 }
 
 
-def _tool_glyphs(tool_counts: dict[str, int]) -> str:
-    """Render non-zero tool categories as colored glyph+count pairs."""
-    # Ordered by impact
-    _GLYPH_MAP = [
-        ("mutate", "\u270e", C_ORANGE),   # ✎
-        ("bash",   "$",      C_LIGHT),
-        ("read",   "\u25c9", C_DIM),       # ◉
-        ("search", "\u2315", C_DIM),       # ⌕
-        ("agent",  "\u25c7", C_PURPLE),    # ◇
+def _tool_bar(tool_counts: dict[str, int], width: int = 14) -> str:
+    """Render a mini stacked bar chart of tool usage by category.
+
+    Colors: coding=orange, bash=light, research=dim, agent=purple.
+    Returns empty string if no tool usage.
+    """
+    # Collapse to display categories
+    _BAR_CATS = [
+        ("mutate", C_ORANGE),
+        ("bash",   C_LIGHT),
+        ("read",   C_DIM),
+        ("search", C_DIM),
+        ("agent",  C_PURPLE),
     ]
+    # Merge read+search into one visual bucket (both dim)
+    total = sum(tool_counts.values())
+    if total == 0:
+        return ""
     parts: list[str] = []
-    for cat, glyph, color in _GLYPH_MAP:
+    used = 0
+    for cat, color in _BAR_CATS:
         n = tool_counts.get(cat, 0)
-        if n:
-            parts.append(f"[{color}]{glyph}{n}[/{color}]")
-    return " ".join(parts)
+        if n == 0:
+            continue
+        chars = max(1, round(n / total * width))
+        # Don't exceed remaining width
+        chars = min(chars, width - used)
+        if chars > 0:
+            parts.append(f"[{color}]{'█' * chars}[/{color}]")
+            used += chars
+    # Fill remainder with other
+    other = tool_counts.get("other", 0)
+    if used < width and other:
+        parts.append(f"[{C_DIM}]{'░' * (width - used)}[/{C_DIM}]")
+    elif used < width:
+        parts.append(f"[{C_DIM}]{'░' * (width - used)}[/{C_DIM}]")
+    return "".join(parts)
 
 
 def _file_touchpoints(files: list[str]) -> str:
@@ -358,8 +379,8 @@ def _render_session_option(
 
     Layout — 4 lines with tool/file metadata:
       {icon} {title}                                     {badge}
-         {model}  {msgs}  {tokens}  {duration}  {age}    {sid}
-         ✎7 $12 ◉3  app.py sessions.py +4               {project}
+         {model}  {msgs}  {duration}  {age}              {sid}
+         ████████░░░░░░  app.py sessions.py +4           {project}
          {role}: {snippet}
     """
     INDENT = "    "  # 4 spaces — nested under title
@@ -372,7 +393,6 @@ def _render_session_option(
     title_raw = _session_title(s)[:title_width]
     title_esc = _rich_escape(title_raw)
     sid = s.session_id[:8]
-    tokens_plain = s.tokens_display
     msgs_str = f"{s.message_count} msgs"
     duration = s.duration_display
     age_str = s.age
@@ -391,19 +411,14 @@ def _render_session_option(
     else:
         line1 = f" {icon} {title_fmt}"
 
-    # Line 2: fixed-width columns, sid right-aligned to LINE_WIDTH
-    # Columns: model(8) + msgs(10) + tokens(8) + duration(8) + age
+    # Line 2: model, msgs, duration, age — no tokens/cost
     dur_str = f"{duration:<8}" if duration else ""
     dur_len = 8 if duration else 0
-    meta_left_len = 4 + 8 + 10 + 8 + dur_len + len(age_str)  # indent + cols
+    meta_left_len = 4 + 8 + 10 + dur_len + len(age_str)  # indent + cols
     sid_gap = max(2, LINE_WIDTH - meta_left_len - 8)
 
-    tokens_fmt = _colored_tokens(s)
-    tok_pad = " " * max(1, 8 - len(tokens_plain))
     line2 = (
-        f"{INDENT}[{C_DIM}]{model:<8}{msgs_str:<10}[/{C_DIM}]"
-        f"{tokens_fmt}"
-        f"[{C_DIM}]{tok_pad}"
+        f"{INDENT}[{C_DIM}]{model:<8}{msgs_str:<10}"
         f"{dur_str}"
         f"{age_str}"
         f"{' ' * sid_gap}{sid}[/{C_DIM}]"
@@ -411,20 +426,18 @@ def _render_session_option(
 
     lines = [line1, line2]
 
-    # Line 3: tool glyphs + file touchpoints + project path (when differs)
-    glyphs = _tool_glyphs(s.tool_counts)
+    # Line 3: tool usage bar + file touchpoints + project path (when differs)
+    bar = _tool_bar(s.tool_counts)
     files = _file_touchpoints(s.files_mutated)
     # Project path: show only when it differs from workstream repo
     proj_label = ""
     if ws_repo_path and s.project_path and s.project_path.rstrip("/") != ws_repo_path.rstrip("/"):
         proj_label = f"[{C_DIM}]{Path(s.project_path).name}[/{C_DIM}]"
 
-    tool_parts = [p for p in (glyphs, files) if p]
+    tool_parts = [p for p in (bar, files) if p]
     if tool_parts or proj_label:
         left = "  ".join(tool_parts)
         if proj_label:
-            # Right-align project label
-            # Estimate left width for padding (strip markup for length)
             import re
             left_plain = re.sub(r"\[/?[^\]]*\]", "", left)
             proj_plain = re.sub(r"\[/?[^\]]*\]", "", proj_label)
@@ -484,8 +497,8 @@ def _render_content_search_result(
 
     Same visual structure as _render_session_option:
       {✸} {title}                                    {hit count}
-         {model}  {msgs}  {tokens}  {duration}  {age} {sid}
-         ✎7 $12 ◉3  app.py sessions.py +4             {project}
+         {model}  {msgs}  {duration}  {age}           {sid}
+         ████████░░░░░░  app.py sessions.py +4        {project}
          {role}: {highlighted snippet}
     """
     INDENT = "    "
@@ -495,7 +508,6 @@ def _render_content_search_result(
     title_raw = _session_title(s)[:title_width]
     title = _rich_escape(title_raw)
     model = _short_model(s.model)
-    tokens_plain = s.tokens_display
     hits_str = f"{result.hit_count} hit{'s' if result.hit_count != 1 else ''}"
     msgs_str = f"{s.message_count} msgs"
     duration = s.duration_display
@@ -507,18 +519,14 @@ def _render_content_search_result(
     fill = max(2, LINE_WIDTH - prefix_w - len(title_raw) - len(hits_str))
     line1 = f" \u2738 {title}{' ' * fill}[{C_YELLOW}]{hits_str}[/{C_YELLOW}]"
 
-    # Line 2: same columnar layout as session options
+    # Line 2: no tokens/cost
     dur_str = f"{duration:<8}" if duration else ""
     dur_len = 8 if duration else 0
-    meta_left_len = 4 + 8 + 10 + 8 + dur_len + len(age_str)
+    meta_left_len = 4 + 8 + 10 + dur_len + len(age_str)
     sid_gap = max(2, LINE_WIDTH - meta_left_len - 8)
 
-    tokens_fmt = _colored_tokens(s)
-    tok_pad = " " * max(1, 8 - len(tokens_plain))
     line2 = (
-        f"{INDENT}[{C_DIM}]{model:<8}{msgs_str:<10}[/{C_DIM}]"
-        f"{tokens_fmt}"
-        f"[{C_DIM}]{tok_pad}"
+        f"{INDENT}[{C_DIM}]{model:<8}{msgs_str:<10}"
         f"{dur_str}"
         f"{age_str}"
         f"{' ' * sid_gap}{sid}[/{C_DIM}]"
@@ -526,14 +534,14 @@ def _render_content_search_result(
 
     lines = [line1, line2]
 
-    # Line 3: tool glyphs + file touchpoints + project path
-    glyphs = _tool_glyphs(s.tool_counts)
+    # Line 3: tool usage bar + file touchpoints + project path
+    bar = _tool_bar(s.tool_counts)
     files = _file_touchpoints(s.files_mutated)
     proj_label = ""
     if ws_repo_path and s.project_path and s.project_path.rstrip("/") != ws_repo_path.rstrip("/"):
         proj_label = f"[{C_DIM}]{Path(s.project_path).name}[/{C_DIM}]"
 
-    tool_parts = [p for p in (glyphs, files) if p]
+    tool_parts = [p for p in (bar, files) if p]
     if tool_parts or proj_label:
         import re
         left = "  ".join(tool_parts)
