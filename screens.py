@@ -978,43 +978,21 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         self._all_archived: list[ClaudeSession] = []
 
     def compose(self) -> ComposeResult:
+        # === DEBUG: stripped-down compose for backspace diagnosis ===
         with Vertical(id="detail-container"):
-            with Vertical(id="detail-header"):
-                yield Static(self._render_title(), id="detail-title")
-                yield Static(self._render_meta(), id="detail-meta")
-                if self.ws.description:
-                    yield Static(self.ws.description, id="detail-desc")
-
-            with Horizontal(id="detail-lists"):
-                with Vertical(id="detail-sessions-pane", classes="detail-list-pane"):
-                    yield Static(f"[bold {C_BLUE}]Sessions[/bold {C_BLUE}]", id="detail-sessions-label", classes="detail-list-label")
-                    yield _SearchInput(placeholder="search...", id="detail-search-input")
-                    yield OptionList(id="detail-sessions")
-                    yield Static(f"[{C_DIM}]No sessions[/{C_DIM}]", id="detail-no-sessions")
-                with Vertical(id="detail-archived-pane", classes="detail-list-pane"):
-                    yield Static(f"[{C_DIM}]Archived[/{C_DIM}]", id="detail-archived-label", classes="detail-list-label")
-                    yield OptionList(id="detail-archived")
-                    yield Static(f"[{C_DIM}]Empty[/{C_DIM}]", id="detail-no-archived")
-
-            with Horizontal(id="detail-lower"):
-                with VerticalScroll(id="detail-scroll"):
-                    yield Static(self._render_body(), id="detail-body")
-                with Vertical(id="detail-feed-pane"):
-                    yield Static(self._render_feed_label(), id="detail-feed-label", classes="detail-feed-label")
-                    yield OptionList(id="detail-feed")
-                    yield Static(f"[{C_DIM}]No notifications[/{C_DIM}]", id="detail-no-feed")
-
-            yield Static(self._render_help(), id="detail-help")
+            yield Static(f"[bold]DEBUG: {_rich_escape(self.ws.name)}[/bold]  — press ^H / backspace to go back", id="detail-title")
 
     def on_mount(self):
-        self._last_seen_cache = load_last_seen()
-        self._load_detail_sessions()
-        self._load_feed()
-        self.query_one("#detail-sessions", OptionList).focus()
-        self._update_pane_labels()
-        self._throbber_timer = self.set_interval(0.3, self._tick_throbber)
-        self.set_interval(3, self._refresh_session_liveness)
-        self.set_interval(10, self._poll_feed)
+        pass
+        # === DEBUG: original on_mount commented out ===
+        # self._last_seen_cache = load_last_seen()
+        # self._load_detail_sessions()
+        # self._load_feed()
+        # self.query_one("#detail-sessions", OptionList).focus()
+        # self._update_pane_labels()
+        # self._throbber_timer = self.set_interval(0.3, self._tick_throbber)
+        # self.set_interval(3, self._refresh_session_liveness)
+        # self.set_interval(10, self._poll_feed)
 
     def _focused_olist(self) -> OptionList:
         if self._active_pane == "archived":
