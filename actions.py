@@ -44,6 +44,33 @@ def _ensure_worker_session() -> None:
         )
 
 
+def find_tmux_windows_for_ws(ws_name: str) -> list[tuple[str, str]]:
+    """Find tmux windows tagged with an orch session ID whose name matches a workstream.
+
+    Returns list of (session_id, window_id) tuples for windows named ``orch:<ws_name>``.
+    """
+    try:
+        result = subprocess.run(
+            ["tmux", "list-windows", "-a", "-F",
+             "#{@orch_session_id}\t#{window_id}\t#{window_name}"],
+            capture_output=True, text=True, timeout=5,
+        )
+        if result.returncode != 0:
+            return []
+        target_name = f"orch:{ws_name}"
+        matches = []
+        for line in result.stdout.strip().split("\n"):
+            parts = line.split("\t")
+            if len(parts) < 3:
+                continue
+            sid, wid, wname = parts[0], parts[1], parts[2]
+            if sid and wname == target_name:
+                matches.append((sid, wid))
+        return matches
+    except Exception:
+        return []
+
+
 def find_tmux_window_for_session(session_id: str) -> str | None:
     """Find a tmux window already running a Claude session (via @orch_session_id tag).
 
