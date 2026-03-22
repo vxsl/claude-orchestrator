@@ -61,6 +61,7 @@ from actions import (
 )
 from notifications import Notification, dismiss_notification, dismiss_all_for_dirs
 from state import fuzzy_match, content_search, SessionSearchResult
+from widgets import FuzzyPicker, FuzzyPickerScreen
 
 
 def _label_with_legend(left: str, legend: str) -> RichTable:
@@ -2422,63 +2423,28 @@ class AddLinkScreen(ModalScreen[Link | None]):
 
 # ─── Link Session Screen ────────────────────────────────────────────
 
-class LinkSessionScreen(_VimOptionListMixin, ModalScreen[Workstream | None]):
-    """Select a workstream to link a session to."""
-
-    _option_list_id = "linksession-list"
-    BINDINGS = [
-        Binding("escape", "cancel", "Cancel"),
-        Binding("backspace,ctrl+h", "go_back", "^H back"),
-        Binding("enter", "confirm", "Link"),
-    ] + _VimOptionListMixin.VIM_BINDINGS
-
-    def action_go_back(self):
-        self.dismiss(None)
-
-    DEFAULT_CSS = f"""
-    LinkSessionScreen {{ align: center middle; }}
-    #linksession-container {{
-        width: 70; height: auto; max-height: 80%;
-        padding: 1 2; background: {BG_BASE}; border: round $primary 30%;
-    }}
-    #linksession-title {{ text-style: bold; color: {C_PURPLE}; padding-bottom: 1; }}
-    #linksession-list {{ height: auto; max-height: 20; }}
-    #linksession-hint {{ text-align: center; color: {C_DIM}; padding-top: 1; }}
-    """
+class LinkSessionScreen(FuzzyPickerScreen):
+    """Select a workstream to link a session to — with fuzzy search."""
 
     def __init__(self, store: Store, session: ClaudeSession):
-        super().__init__()
-        self.store = store
-        self.session = session
+        self._store = store
+        self._session = session
+        title = session.display_name
+        super().__init__(title=f"Link session: {title}")
 
-    def compose(self) -> ComposeResult:
-        title = self.session.display_name
-        with Vertical(id="linksession-container"):
-            yield Label(f"Link session to workstream: {title}", id="linksession-title")
-            options = []
-            for ws in self.store.active:
-                options.append(Option(
-                    f"{STATUS_ICONS[ws.status]} {_rich_escape(ws.name)}  ({ws.category.value})",
-                    id=ws.id,
-                ))
-            if not options:
-                options.append(Option("(no workstreams)", id="none", disabled=True))
-            yield OptionList(*options, id="linksession-list")
-            yield Static(f"[{C_DIM}]Enter[/{C_DIM}] link  [{C_DIM}]^H[/{C_DIM}] back", id="linksession-hint")
+    def _get_items(self) -> list[tuple[str, str]]:
+        items = []
+        for ws in self._store.active:
+            label = f"{STATUS_ICONS[ws.status]} {_rich_escape(ws.name)}  [{C_DIM}]{ws.category.value}[/{C_DIM}]"
+            items.append((ws.id, label))
+        return items
 
-    def action_confirm(self):
-        option_list = self.query_one("#linksession-list", OptionList)
-        idx = option_list.highlighted
-        if idx is not None:
-            opt = option_list.get_option_at_index(idx)
-            ws = self.store.get(str(opt.id))
-            if ws:
-                self.dismiss(ws)
-                return
-        self.app.notify("No workstream selected", severity="error", timeout=2)
-
-    def action_cancel(self):
-        self.dismiss(None)
+    def _on_selected(self, item_id: str) -> None:
+        ws = self._store.get(item_id)
+        if ws:
+            self.dismiss(ws)
+        else:
+            self.dismiss(None)
 
 
 # ─── Session Picker Screen ────────────────────────────────────────────
@@ -2593,76 +2559,28 @@ class SessionPickerScreen(_VimOptionListMixin, ModalScreen[ClaudeSession | None]
 
 # ─── Repo Picker Screen ──────────────────────────────────────────────
 
-class RepoPickerScreen(ModalScreen[str | None]):
-    """fzf-style fuzzy repo picker with full home-dir scanning."""
 
-    BINDINGS = [
-        Binding("escape", "cancel", "Cancel", priority=True),
-    ]
-
-    DEFAULT_CSS = f"""
-    RepoPickerScreen {{ align: center middle; }}
-    #repopick-container {{
-        width: 80; height: auto; max-height: 80%;
-        padding: 1 2; background: {BG_BASE}; border: round $primary 30%;
-    }}
-    #repopick-input {{
-        dock: top; margin-bottom: 1;
-    }}
-    #repopick-list {{ height: auto; max-height: 24; }}
-    #repopick-list > .option-list--option-highlighted {{
-        background: $primary 15%;
-    }}
-    #repopick-hint {{ text-align: center; color: {C_DIM}; padding-top: 1; }}
-    """
+class RepoPickerScreen(FuzzyPickerScreen):
+    """fzf-style fuzzy repo picker — rebuilt on FuzzyPickerScreen."""
 
     def __init__(self, repos: list[str], ws_counts: dict[str, int]):
-        super().__init__()
         self.all_repos = repos
-        self.ws_counts = ws_counts  # repo_path -> number of workstreams
-        self._filtered: list[str] = []  # current filtered list shown
+        self.ws_counts = ws_counts
+        super().__init__(title="Select Repository")
 
-    def compose(self) -> ComposeResult:
-        with Vertical(id="repopick-container"):
-            yield Input(placeholder="Type to filter repos…", id="repopick-input")
-            yield OptionList(id="repopick-list")
-            yield Static("", id="repopick-hint")
-
-    def on_mount(self) -> None:
-        self._rebuild_list("")
-        self.query_one("#repopick-input", Input).focus()
-
-    def _rebuild_list(self, query: str) -> None:
-        """Recompute filtered repos and repopulate the OptionList."""
+    def _get_items(self) -> list[tuple[str, str]]:
         home_str = str(Path.home())
-
-        if query:
-            scored: list[tuple[int, str]] = []
-            for repo in self.all_repos:
-                basename = Path(repo).name
-                # Match against both basename and full path
-                s1 = fuzzy_match(query, basename)
-                s2 = fuzzy_match(query, repo)
-                best = max(s for s in (s1, s2) if s is not None) if (s1 is not None or s2 is not None) else None
-                if best is not None:
-                    scored.append((best, repo))
-            scored.sort(key=lambda t: -t[0])
-            self._filtered = [repo for _, repo in scored]
-        else:
-            # No query: repos with workstreams first, then alpha
-            with_ws = sorted(
-                (r for r in self.all_repos if self.ws_counts.get(r, 0) > 0),
-                key=lambda r: Path(r).name.lower(),
-            )
-            without_ws = sorted(
-                (r for r in self.all_repos if self.ws_counts.get(r, 0) == 0),
-                key=lambda r: Path(r).name.lower(),
-            )
-            self._filtered = with_ws + without_ws
-
-        ol = self.query_one("#repopick-list", OptionList)
-        ol.clear_options()
-        for repo in self._filtered:
+        # Repos with workstreams first, then alphabetical
+        with_ws = sorted(
+            (r for r in self.all_repos if self.ws_counts.get(r, 0) > 0),
+            key=lambda r: Path(r).name.lower(),
+        )
+        without_ws = sorted(
+            (r for r in self.all_repos if self.ws_counts.get(r, 0) == 0),
+            key=lambda r: Path(r).name.lower(),
+        )
+        items = []
+        for repo in with_ws + without_ws:
             name = Path(repo).name
             short = repo.replace(home_str, "~")
             n_ws = self.ws_counts.get(repo, 0)
@@ -2670,78 +2588,11 @@ class RepoPickerScreen(ModalScreen[str | None]):
                 label = f"[bold]{name}[/bold]  [dim]({n_ws} ws)[/dim]  [{C_DIM}]{short}[/{C_DIM}]"
             else:
                 label = f"[{C_DIM}]{name}  {short}[/{C_DIM}]"
-            ol.add_option(Option(label, id=repo))
+            items.append((repo, label))
+        return items
 
-        if not self._filtered:
-            ol.add_option(Option(f"[{C_DIM}](no matches)[/{C_DIM}]", id="__none__", disabled=True))
-
-        # Ensure first item is highlighted so arrow keys work even without focus
-        if self._filtered:
-            ol.highlighted = 0
-
-        # Status line
-        n_with = sum(1 for r in self._filtered if self.ws_counts.get(r, 0) > 0)
-        hint = self.query_one("#repopick-hint", Static)
-        hint.update(
-            f"[{C_DIM}]{len(self._filtered)} repos · {n_with} with workstreams  "
-            f"  Enter select  Esc cancel[/{C_DIM}]"
-        )
-
-    @on(Input.Changed, "#repopick-input")
-    def _on_filter_changed(self, event: Input.Changed) -> None:
-        self._rebuild_list(event.value)
-
-    @on(Input.Submitted, "#repopick-input")
-    def _on_input_submitted(self, event: Input.Submitted) -> None:
-        self.action_confirm()
-
-    def _ensure_highlighted(self, ol: OptionList) -> bool:
-        """Ensure the option list has a highlighted item. Returns False if empty."""
-        if ol.option_count == 0:
-            return False
-        if ol.highlighted is None:
-            ol.highlighted = 0
-        return True
-
-    def on_key(self, event) -> None:
-        """Route navigation keys to the option list while input stays focused."""
-        ol = self.query_one("#repopick-list", OptionList)
-        key = event.key
-        if key in ("down", "ctrl+n"):
-            if self._ensure_highlighted(ol) and ol.highlighted < ol.option_count - 1:
-                ol.action_cursor_down()
-            event.prevent_default()
-            event.stop()
-        elif key in ("up", "ctrl+p"):
-            if self._ensure_highlighted(ol) and ol.highlighted > 0:
-                ol.action_cursor_up()
-            event.prevent_default()
-            event.stop()
-        elif key == "ctrl+d":
-            if self._ensure_highlighted(ol):
-                ol.action_page_down()
-            event.prevent_default()
-            event.stop()
-        elif key == "ctrl+u":
-            if self._ensure_highlighted(ol):
-                ol.action_page_up()
-            event.prevent_default()
-            event.stop()
-        elif key == "backspace" and not self.query_one("#repopick-input", Input).value:
-            self.dismiss(None)
-            event.prevent_default()
-            event.stop()
-
-    def action_confirm(self):
-        ol = self.query_one("#repopick-list", OptionList)
-        idx = ol.highlighted
-        if idx is not None and idx < len(self._filtered):
-            self.dismiss(self._filtered[idx])
-            return
-        self.app.notify("No repo selected", severity="error", timeout=2)
-
-    def action_cancel(self):
-        self.dismiss(None)
+    def _on_selected(self, item_id: str) -> None:
+        self.dismiss(item_id)
 
 
 # ─── Workstream Picker Screen (for repo-spawn) ──────────────────────
@@ -2749,7 +2600,7 @@ class RepoPickerScreen(ModalScreen[str | None]):
 _SENTINEL_NEW = "__new__"
 
 
-class WorkstreamPickerScreen(_VimOptionListMixin, ModalScreen[Workstream | str | None]):
+class WorkstreamPickerScreen(FuzzyPickerScreen):
     """Pick a workstream for a repo, or create a new one.
 
     Dismisses with:
@@ -2758,71 +2609,28 @@ class WorkstreamPickerScreen(_VimOptionListMixin, ModalScreen[Workstream | str |
       - None if cancelled
     """
 
-    _option_list_id = "wspick-list"
-    BINDINGS = [
-        Binding("escape", "cancel", "Cancel"),
-        Binding("backspace,ctrl+h", "go_back", "^H back"),
-        Binding("enter", "confirm", "Select"),
-    ] + _VimOptionListMixin.VIM_BINDINGS
-
-    def action_go_back(self):
-        self.dismiss(None)
-
-    DEFAULT_CSS = f"""
-    WorkstreamPickerScreen {{ align: center middle; }}
-    #wspick-container {{
-        width: 70; height: auto; max-height: 80%;
-        padding: 1 2; background: {BG_BASE}; border: round $primary 30%;
-    }}
-    #wspick-title {{ text-style: bold; color: {C_PURPLE}; padding-bottom: 1; }}
-    #wspick-list {{ height: auto; max-height: 20; }}
-    #wspick-list > .option-list--option-highlighted {{
-        background: $primary 15%;
-    }}
-    #wspick-hint {{ text-align: center; color: {C_DIM}; padding-top: 1; }}
-    """
-
     def __init__(self, workstreams: list[Workstream], repo_path: str):
-        super().__init__()
         self.workstreams = workstreams
         self.repo_path = repo_path
+        repo_name = Path(repo_path).name
+        super().__init__(title=f"Workstreams in {repo_name}")
 
-    def compose(self) -> ComposeResult:
-        repo_name = Path(self.repo_path).name
-        with Vertical(id="wspick-container"):
-            yield Label(f"Workstreams in {repo_name}:", id="wspick-title")
-            options = []
-            for ws in self.workstreams:
-                options.append(Option(
-                    f"{STATUS_ICONS[ws.status]} {_rich_escape(ws.name)}  [{C_DIM}]{ws.category.value}[/{C_DIM}]",
-                    id=ws.id,
-                ))
-            options.append(Option(
-                f"[{C_GREEN}]+ Create new workstream[/{C_GREEN}]",
-                id=_SENTINEL_NEW,
-            ))
-            yield OptionList(*options, id="wspick-list")
-            yield Static(
-                f"[{C_DIM}]Enter[/{C_DIM}] select  [{C_DIM}]^H[/{C_DIM}] back",
-                id="wspick-hint",
-            )
+    def _get_items(self) -> list[tuple[str, str]]:
+        items = []
+        for ws in self.workstreams:
+            label = f"{STATUS_ICONS[ws.status]} {_rich_escape(ws.name)}  [{C_DIM}]{ws.category.value}[/{C_DIM}]"
+            items.append((ws.id, label))
+        items.append((_SENTINEL_NEW, f"[{C_GREEN}]+ Create new workstream[/{C_GREEN}]"))
+        return items
 
-    def action_confirm(self):
-        option_list = self.query_one("#wspick-list", OptionList)
-        idx = option_list.highlighted
-        if idx is not None:
-            opt = option_list.get_option_at_index(idx)
-            opt_id = str(opt.id)
-            if opt_id == _SENTINEL_NEW:
-                self.dismiss(_SENTINEL_NEW)
+    def _on_selected(self, item_id: str) -> None:
+        if item_id == _SENTINEL_NEW:
+            self.dismiss(_SENTINEL_NEW)
+            return
+        for ws in self.workstreams:
+            if ws.id == item_id:
+                self.dismiss(ws)
                 return
-            for ws in self.workstreams:
-                if ws.id == opt_id:
-                    self.dismiss(ws)
-                    return
-        self.app.notify("No selection", severity="error", timeout=2)
-
-    def action_cancel(self):
         self.dismiss(None)
 
 
