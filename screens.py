@@ -785,7 +785,7 @@ class LinksScreen(_VimOptionListMixin, ModalScreen[None]):
             options = []
             for i, lnk in enumerate(self.ws.links):
                 icon = _link_icon(lnk.kind)
-                options.append(Option(f"{icon}  [{_rich_escape(lnk.kind)}] {_rich_escape(lnk.label)}: {_rich_escape(lnk.value)}", id=str(i)))
+                options.append(Option(f"{icon}  [{_rich_escape(lnk.kind)}] {_rich_escape(lnk.value)}", id=str(i)))
             if not options:
                 options.append(Option("(no links)", id="none", disabled=True))
             yield OptionList(*options, id="links-list")
@@ -962,8 +962,7 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         padding: 1 3;
     }}
     #detail-feed-pane {{
-        width: 2fr; min-width: 28;
-        border: blank;
+        display: none;
     }}
     #detail-feed-pane.pane-focused {{
         border: round {C_BLUE};
@@ -1052,9 +1051,9 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
 
     def on_mount(self):
         self._last_seen_cache = load_last_seen()
+        self._mark_all_seen()
         self._load_feed()  # must run before _load_detail_sessions so notification map is ready
         self._load_detail_sessions()
-        self._mark_all_seen()
         self.query_one("#detail-sessions", OptionList).focus()
         self._update_pane_labels()
         self.set_interval(10, self._schedule_liveness_refresh)
@@ -1062,7 +1061,12 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
 
     def _mark_all_seen(self):
         """Mark all sessions in this workstream as seen right now."""
-        for s in self._detail_sessions + self._archived_sessions:
+        app = self.app
+        if hasattr(app, 'state'):
+            sessions = app.state.sessions_for_ws(self.ws, include_archived_sessions=True)
+        else:
+            sessions = self._detail_sessions + self._archived_sessions
+        for s in sessions:
             mark_thread_seen(s.session_id)
         self._last_seen_cache = load_last_seen()
 
@@ -1086,8 +1090,6 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
     def _focused_olist(self) -> OptionList:
         if self._active_pane == "archived":
             return self.query_one("#detail-archived", OptionList)
-        if self._active_pane == "feed":
-            return self.query_one("#detail-feed", OptionList)
         return self.query_one("#detail-sessions", OptionList)
 
     def _olist(self) -> OptionList:
@@ -1118,28 +1120,21 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
     def _update_pane_labels(self):
         sess_label = self.query_one("#detail-sessions-label", Static)
         arch_label = self.query_one("#detail-archived-label", Static)
-        feed_label = self.query_one("#detail-feed-label", Static)
         n_active = len(self._detail_sessions)
         n_archived = len(self._archived_sessions)
-        n_feed = len([n for n in self._feed_notifications if not n.dismissed])
+        n_notified = len(self._session_notifications)
 
         legend = f"  {tool_bar_legend()}"
+        notif_badge = f" [{C_GREEN}]({n_notified} new)[/{C_GREEN}]" if n_notified else ""
         if self._active_pane == "sessions":
-            sess_label.update(f"[bold {C_BLUE}]Sessions[/bold {C_BLUE}] [{C_DIM}]({n_active})[/{C_DIM}]{legend}")
+            sess_label.update(f"[bold {C_BLUE}]Sessions[/bold {C_BLUE}] [{C_DIM}]({n_active})[/{C_DIM}]{notif_badge}{legend}")
         else:
-            sess_label.update(f"[{C_DIM}]Sessions ({n_active})[/{C_DIM}]{legend}")
+            sess_label.update(f"[{C_DIM}]Sessions ({n_active})[/{C_DIM}]{notif_badge}{legend}")
 
         if self._active_pane == "archived":
             arch_label.update(f"[bold {C_BLUE}]Archived[/bold {C_BLUE}] [{C_DIM}]({n_archived})[/{C_DIM}]")
         else:
             arch_label.update(f"[{C_DIM}]Archived ({n_archived})[/{C_DIM}]")
-
-        if self._active_pane == "feed":
-            feed_label.update(f"[bold {C_BLUE}]Feed[/bold {C_BLUE}] [{C_DIM}]({n_feed})[/{C_DIM}]")
-        elif n_feed:
-            feed_label.update(f"[{C_DIM}]Feed[/{C_DIM}] [{C_GREEN}]({n_feed})[/{C_GREEN}]")
-        else:
-            feed_label.update(f"[{C_DIM}]Feed[/{C_DIM}]")
 
         # Toggle focus border on pane containers
         for pane_name, selector in self._PANE_BORDER_CONTAINERS.items():
@@ -1339,10 +1334,15 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         if not olist.option_count:
             return
         if sid:
-            for i, s in enumerate(sessions):
-                if s.session_id == sid:
-                    olist.highlighted = i
-                    return
+            # Search by option ID since option list may have separators
+            for i in range(olist.option_count):
+                try:
+                    oid = olist.get_option_at_index(i).id
+                    if oid and oid.removeprefix("a:") == sid:
+                        olist.highlighted = i
+                        return
+                except Exception:
+                    continue
         # Session was removed — keep cursor at same position, clamped.
         if old_idx is not None:
             olist.highlighted = min(old_idx, olist.option_count - 1)
@@ -1493,22 +1493,30 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
             self._load_detail_sessions()
 
     def action_dismiss_notification(self):
-        if self._active_pane != "feed":
+        """Dismiss the notification on the currently highlighted session."""
+        if self._active_pane != "sessions":
             return
-        olist = self.query_one("#detail-feed", OptionList)
+        olist = self.query_one("#detail-sessions", OptionList)
         idx = olist.highlighted
-        if idx is None or idx >= len(self._feed_notifications):
+        if idx is None:
             return
-        notif = self._feed_notifications[idx]
-        if notif.dismissed:
+        try:
+            oid = olist.get_option_at_index(idx).id
+        except Exception:
+            return
+        if not oid or oid == "__separator__":
+            return
+        sid = oid.removeprefix("a:")
+        notif = self._session_notifications.get(sid)
+        if not notif:
             return
         dismiss_notification(notif.id)
         notif.dismissed = True
-        self._load_feed()
+        del self._session_notifications[sid]
+        self._load_detail_sessions()
 
     def action_dismiss_all_notifications(self):
-        if self._active_pane != "feed":
-            return
+        """Dismiss all notifications for this workstream."""
         dirs = set()
         if hasattr(self.app, 'state'):
             dirs = self.app.state._ws_dirs(self.ws)
@@ -1516,7 +1524,8 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
             dismiss_all_for_dirs(self._feed_notifications, dirs)
         for n in self._feed_notifications:
             n.dismissed = True
-        self._load_feed()
+        self._session_notifications.clear()
+        self._load_detail_sessions()
 
     # ── Panel navigation (Ctrl+j/k) ──
 
@@ -1526,8 +1535,7 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         if self._archived_sessions:
             panels.append("detail-archived")
         panels.append("detail-scroll")
-        if self._feed_notifications:
-            panels.append("detail-feed")
+        # Feed pane no longer in cycle — notifications are inline in sessions
         return panels
 
     _PANEL_ID_TO_NAME = {
@@ -1604,18 +1612,9 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
                 self._load_feed()
             return
 
-        if oid is None:
-            log.warning("option_selected: option_id is None! Falling back to index lookup")
-            # Fallback: use index from the focused list
-            olist = self._focused_olist()
-            idx = olist.highlighted
-            sessions = self._archived_sessions if self._active_pane == "archived" else self._detail_sessions
-            if idx is not None and idx < len(sessions):
-                session = sessions[idx]
-                log.debug("option_selected: fallback found session %s (%s)", session.session_id, session.display_name)
-                mark_thread_seen(session.session_id)
-                dirs = ws_directories(self.ws)
-                resume_session_now(self.ws, session, dirs, self.app)
+        if oid is None or oid == "__separator__":
+            if oid is None:
+                log.warning("option_selected: option_id is None!")
             return
         sid = oid.removeprefix("a:")  # archived IDs are "a:<session_id>"
         session = self._find_session_by_id(sid)
@@ -1653,7 +1652,7 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
             lines.append(f"[bold {C_BLUE}]Links[/bold {C_BLUE}]")
             for lnk in ext_links:
                 icon = _link_icon(lnk.kind)
-                lines.append(f"  {icon} [{C_DIM}]{_rich_escape(lnk.label)}:[/{C_DIM}] {_rich_escape(lnk.value)}")
+                lines.append(f"  {icon} {_rich_escape(lnk.value)}")
             lines.append("")
         # Todo summary
         from state import AppState
@@ -2269,7 +2268,6 @@ class AddLinkScreen(ModalScreen[Link | None]):
             yield Label(f"Add Link: {self.ws_name}", id="addlink-title")
             yield Select([(k, k) for k in LINK_KINDS], value="url", id="addlink-kind")
             yield Input(placeholder="Value (URL, path, ticket ID, session ID...)", id="addlink-value")
-            yield Input(placeholder="Label (optional, defaults to kind)", id="addlink-label")
             yield Static(f"[{C_DIM}]Enter[/{C_DIM}] add  [{C_DIM}]^H[/{C_DIM}] back", id="addlink-hint")
 
     def on_mount(self):
@@ -2277,22 +2275,15 @@ class AddLinkScreen(ModalScreen[Link | None]):
 
     @on(Input.Submitted, "#addlink-value")
     def on_value_submitted(self):
-        self.query_one("#addlink-label", Input).focus()
-
-    @on(Input.Submitted, "#addlink-label")
-    def on_label_submitted(self):
         self._create()
 
     def _create(self):
         kind = self.query_one("#addlink-kind", Select).value
         value = self.query_one("#addlink-value", Input).value.strip()
-        label = self.query_one("#addlink-label", Input).value.strip()
         if not value:
             self.app.notify("Value cannot be empty", severity="error", timeout=2)
             return
-        if not label:
-            label = kind
-        self.dismiss(Link(kind=kind, label=label, value=value))
+        self.dismiss(Link(kind=kind, label=kind, value=value))
 
     def action_cancel(self):
         self.dismiss(None)
