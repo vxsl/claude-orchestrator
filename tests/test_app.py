@@ -667,14 +667,14 @@ class TestHierarchyNavigation:
             await pilot.press("backspace")
             assert pilot.app.screen.__class__.__name__ != "HelpScreen"
 
-    async def test_escape_does_not_dismiss_detail(self, app_with_store):
-        """Escape should not dismiss DetailScreen (no binding)."""
+    async def test_escape_dismisses_detail(self, app_with_store):
+        """Escape should dismiss DetailScreen (bound to action_dismiss)."""
         async with app_with_store.run_test(size=(120, 40)) as pilot:
             await pilot.press("ctrl+l")
             from screens import DetailScreen
             assert isinstance(pilot.app.screen, DetailScreen)
             await pilot.press("escape")
-            assert isinstance(pilot.app.screen, DetailScreen)
+            assert not isinstance(pilot.app.screen, DetailScreen)
 
     async def test_q_does_not_dismiss_detail(self, app_with_store):
         """q should not dismiss DetailScreen (binding removed)."""

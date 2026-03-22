@@ -1846,14 +1846,14 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         except Exception:
             return False
 
-    def action_dismiss(self) -> None:
+    async def action_dismiss(self) -> None:
         """Override dismiss: close peek, then search, then screen."""
         if self._peek_mode:
             self._close_peek()
         elif self._search_is_active():
             self._cancel_search()
         else:
-            super().action_dismiss(None)
+            await super().action_dismiss(None)
 
     def action_go_back(self):
         """Ctrl+H/Backspace: close peek, then search, then dismiss."""
