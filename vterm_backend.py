@@ -136,6 +136,8 @@ class VTermBackend:
     as a drop-in replacement for the pyte-based backend.
     """
 
+    MAX_SCROLLBACK = 10000  # ~32MB max at 80 cols
+
     def __init__(self, cols: int, rows: int) -> None:
         self._vt = _vterm_new(rows, cols)
         self._screen = _vterm_obtain_screen(self._vt)
@@ -146,14 +148,23 @@ class VTermBackend:
         self.cursor_x = 0
         self.mouse_tracking = False
 
+        # Scrollback buffer — list of rows, each row is a list of
+        # (char_str, fg_hex|None, bg_hex|None, attrs_int) tuples.
+        # Most recent scrollback line is at the END (index -1).
+        self.scrollback: list[list[tuple[str, str | None, str | None, int]]] = []
+
         # Prevent GC of callback pointers
         self._cb_damage = _damage_cb(self._on_damage)
         self._cb_movecursor = _movecursor_cb(self._on_movecursor)
         self._cb_settermprop = _settermprop_cb(self._on_settermprop)
+        self._cb_pushline = _sb_pushline_cb(self._on_sb_pushline)
+        self._cb_popline = _sb_popline_cb(self._on_sb_popline)
         self._callbacks = VTermScreenCallbacks(
             damage=self._cb_damage,
             movecursor=self._cb_movecursor,
             settermprop=self._cb_settermprop,
+            sb_pushline=self._cb_pushline,
+            sb_popline=self._cb_popline,
         )
         _vterm_screen_set_callbacks(
             self._screen, ctypes.byref(self._callbacks), None)
@@ -189,6 +200,58 @@ class VTermBackend:
         if prop == _PROP_MOUSE and val:
             self.mouse_tracking = ctypes.cast(val, POINTER(c_int))[0] > 0
         return 0
+
+    def _on_sb_pushline(self, cols, cells_ptr, user):
+        """Called when a line scrolls off the top of the screen."""
+        cells = ctypes.cast(cells_ptr, POINTER(VTermScreenCell))
+        row: list[tuple[str, str | None, str | None, int]] = []
+        for i in range(cols):
+            cell = cells[i]
+            # Extract character
+            cp = cell.chars[0]
+            if cp == 0:
+                ch = " "
+            else:
+                parts = [chr(cp)]
+                for j in range(1, 6):
+                    cp2 = cell.chars[j]
+                    if cp2 == 0:
+                        break
+                    parts.append(chr(cp2))
+                ch = "".join(parts)
+            # Extract colors — must convert now since screen ref may change
+            fg = self.color_to_rich(cell.fg)
+            bg = self.color_to_rich(cell.bg)
+            row.append((ch, fg, bg, cell.attrs))
+        self.scrollback.append(row)
+        # Cap buffer size
+        if len(self.scrollback) > self.MAX_SCROLLBACK:
+            del self.scrollback[0]
+        return 1
+
+    def _on_sb_popline(self, cols, cells_ptr, user):
+        """Called when libvterm wants to restore a scrollback line."""
+        if not self.scrollback:
+            return 0
+        row = self.scrollback.pop()
+        cells = ctypes.cast(cells_ptr, POINTER(VTermScreenCell))
+        for i in range(cols):
+            if i < len(row):
+                ch, _fg, _bg, _attrs = row[i]
+                cp = ord(ch[0]) if ch else 0x20
+                cells[i].chars[0] = c_uint32(cp)
+                for j in range(1, 6):
+                    if j < len(ch):
+                        cells[i].chars[j] = c_uint32(ord(ch[j]))
+                    else:
+                        cells[i].chars[j] = c_uint32(0)
+                cells[i].width = 1
+            else:
+                cells[i].chars[0] = c_uint32(0x20)
+                for j in range(1, 6):
+                    cells[i].chars[j] = c_uint32(0)
+                cells[i].width = 1
+        return 1
 
     # ── Public API ──
 

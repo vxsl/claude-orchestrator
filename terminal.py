@@ -306,6 +306,9 @@ class TerminalWidget(Widget, can_focus=True):
         self._mouse_tracking = False
         self._sync_output = False  # DEC private mode 2026 (synchronized output)
 
+        # Scrollback scroll offset (0 = live screen, >0 = scrolled up)
+        self._scroll_offset = 0
+
         # Terminal backend: libvterm (complete) or pyte (fallback)
         self._backend = VTermBackend(self._ncol, self._nrow) if _HAS_VTERM else None
         if not self._backend:
@@ -496,6 +499,9 @@ class TerminalWidget(Widget, can_focus=True):
             except OSError:
                 pass
         self._mouse_tracking = self._backend.mouse_tracking
+        # Snap to bottom on new output
+        if self._scroll_offset > 0:
+            self._scroll_offset = 0
 
     # ── Rendering ──────────────────────────────────────────────────
 
@@ -511,12 +517,71 @@ class TerminalWidget(Widget, can_focus=True):
             return self._render_line_vterm(y)
         return self._render_line_pyte(y)
 
+    def _render_scrollback_line(self, sb_index: int) -> Strip:
+        """Render a line from the scrollback buffer."""
+        backend = self._backend
+        row = backend.scrollback[sb_index]
+        segments: list[Segment] = []
+        run_text: list[str] = []
+        run_style: Style | None = None
+
+        def _flush():
+            nonlocal run_text, run_style
+            if run_text:
+                segments.append(Segment("".join(run_text), run_style or Style()))
+                run_text = []
+
+        for x in range(self._ncol):
+            if x < len(row):
+                ch, fg, bg, attrs = row[x]
+                style = Style(
+                    color=fg,
+                    bgcolor=bg,
+                    bold=bool(attrs & 0x01),
+                    italic=bool(attrs & 0x08),
+                    underline=bool((attrs >> 1) & 0x03),
+                    strike=bool(attrs & 0x80),
+                    reverse=bool(attrs & 0x20),
+                )
+            else:
+                ch = " "
+                style = Style()
+
+            if style != run_style:
+                _flush()
+                run_style = style
+            run_text.append(ch)
+
+        _flush()
+        return Strip(segments, self._ncol)
+
     def _render_line_vterm(self, y: int) -> Strip:
         backend = self._backend
         if y >= backend.lines:
             return Strip.blank(self._ncol)
 
+        # When scrolled up, some lines come from scrollback
+        if self._scroll_offset > 0 and backend.scrollback:
+            sb_len = len(backend.scrollback)
+            # Line index into the virtual buffer (scrollback + screen)
+            # scroll_offset = how many lines we've scrolled up
+            # Top of viewport maps to sb_len - scroll_offset
+            sb_start = sb_len - self._scroll_offset
+            virtual_line = sb_start + y
+            if virtual_line < 0:
+                return Strip.blank(self._ncol)
+            if virtual_line < sb_len:
+                return self._render_scrollback_line(virtual_line)
+            # Otherwise it's a live screen line
+            screen_y = virtual_line - sb_len
+            if screen_y >= backend.lines:
+                return Strip.blank(self._ncol)
+            y = screen_y
+
         cursor_x = backend.cursor_x if backend.cursor_y == y else -1
+        # Don't show cursor when scrolled up
+        if self._scroll_offset > 0:
+            cursor_x = -1
         segments: list[Segment] = []
         run_text: list[str] = []
         run_style: Style | None = None
@@ -589,6 +654,21 @@ class TerminalWidget(Widget, can_focus=True):
 
     # ── Input ──────────────────────────────────────────────────────
 
+    def _scroll_up(self, lines: int = 1) -> None:
+        """Scroll up into scrollback buffer."""
+        if not self._backend or not self._backend.scrollback:
+            return
+        max_offset = len(self._backend.scrollback)
+        self._scroll_offset = min(self._scroll_offset + lines, max_offset)
+        self.refresh()
+
+    def _scroll_down(self, lines: int = 1) -> None:
+        """Scroll down toward live screen."""
+        if self._scroll_offset <= 0:
+            return
+        self._scroll_offset = max(self._scroll_offset - lines, 0)
+        self.refresh()
+
     async def on_key(self, event: events.Key) -> None:
         if self._pid is None:
             return
@@ -600,6 +680,34 @@ class TerminalWidget(Widget, can_focus=True):
         event.prevent_default()
 
         key = event.key
+
+        # Scroll bindings (shift+pageup/down, shift+up/down)
+        if key == "shift+pageup":
+            self._scroll_up(self._nrow // 2)
+            return
+        if key == "shift+pagedown":
+            self._scroll_down(self._nrow // 2)
+            return
+        if key == "shift+up":
+            self._scroll_up(1)
+            return
+        if key == "shift+down":
+            self._scroll_down(1)
+            return
+        if key == "shift+home":
+            if self._backend and self._backend.scrollback:
+                self._scroll_offset = len(self._backend.scrollback)
+                self.refresh()
+            return
+        if key == "shift+end":
+            self._scroll_offset = 0
+            self.refresh()
+            return
+
+        # Any other key input snaps back to bottom
+        if self._scroll_offset > 0:
+            self._scroll_offset = 0
+            self.refresh()
 
         # ctrl+letter → control character
         if key.startswith("ctrl+") and len(key) == 6:
@@ -643,16 +751,22 @@ class TerminalWidget(Widget, can_focus=True):
         self._write_to_pty(f"\x1b[<0;{x};{y}m")
 
     async def on_mouse_scroll_down(self, event: events.MouseScrollDown) -> None:
-        if not self._mouse_tracking or self._pid is None:
+        if self._pid is None:
             return
-        x, y = event.x + 1, event.y + 1
-        self._write_to_pty(f"\x1b[<65;{x};{y}M")
+        if self._mouse_tracking:
+            x, y = event.x + 1, event.y + 1
+            self._write_to_pty(f"\x1b[<65;{x};{y}M")
+        else:
+            self._scroll_down(3)
 
     async def on_mouse_scroll_up(self, event: events.MouseScrollUp) -> None:
-        if not self._mouse_tracking or self._pid is None:
+        if self._pid is None:
             return
-        x, y = event.x + 1, event.y + 1
-        self._write_to_pty(f"\x1b[<64;{x};{y}M")
+        if self._mouse_tracking:
+            x, y = event.x + 1, event.y + 1
+            self._write_to_pty(f"\x1b[<64;{x};{y}M")
+        else:
+            self._scroll_up(3)
 
     # ── Messages ───────────────────────────────────────────────────
 
