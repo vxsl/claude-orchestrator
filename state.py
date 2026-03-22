@@ -95,6 +95,68 @@ from sessions import ClaudeSession, SessionMessage, extract_session_content, get
 from actions import get_git_remote_host
 
 
+# ── Command registry ──────────────────────────────────────────────
+
+@dataclass
+class CommandDef:
+    """A command available in the command palette."""
+    name: str
+    aliases: list[str]
+    description: str
+    requires_ws: bool = False
+
+
+COMMAND_REGISTRY: list[CommandDef] = [
+    # Core actions
+    CommandDef("add", ["new", "create"], "Create a new workstream"),
+    CommandDef("brain", ["braindump"], "Brain dump — capture scattered thoughts"),
+    CommandDef("spawn", ["session", "claude"], "Launch new Claude session", requires_ws=True),
+    CommandDef("resume", ["r"], "Resume the latest Claude session", requires_ws=True),
+    CommandDef("note", ["n", "todo", "t"], "Add a todo item", requires_ws=True),
+    CommandDef("rename", [], "Rename the selected workstream", requires_ws=True),
+    CommandDef("archive", ["a"], "Archive the selected workstream", requires_ws=True),
+    CommandDef("unarchive", ["ua"], "Restore an archived workstream"),
+    CommandDef("delete", ["del"], "Delete a workstream"),
+    CommandDef("link", ["ln"], "Add a link to the workstream", requires_ws=True),
+    CommandDef("open", ["o"], "Open workstream links", requires_ws=True),
+    CommandDef("help", ["?"], "Keyboard reference"),
+    CommandDef("refresh", [], "Reload data and sessions"),
+    CommandDef("export", [], "Export workstreams to markdown"),
+    # Filtering & sorting
+    CommandDef("search", [], "Fuzzy search workstreams"),
+    CommandDef("filter", ["f"], "Set filter (all/work/personal/active/stale/archived)"),
+    CommandDef("sort", [], "Set sort (updated/created/category/name/activity)"),
+    # Dev-workflow tools
+    CommandDef("ship", ["publish", "oneshot"], "Ship staged changes", requires_ws=True),
+    CommandDef("ticket", ["jira"], "Browse Jira tickets from cache"),
+    CommandDef("ticket-create", ["jira-create", "tc"], "Create a new Jira ticket"),
+    CommandDef("solve", [], "Run ticket-solve for a ticket", requires_ws=True),
+    CommandDef("branches", ["branch", "br", "worktree", "wt"], "Browse branches & worktrees", requires_ws=True),
+    CommandDef("files", ["file", "edit"], "Open file picker", requires_ws=True),
+    CommandDef("wip", [], "Quick WIP commit", requires_ws=True),
+    CommandDef("restage", [], "Unstage last 2 WIP commits", requires_ws=True),
+]
+
+
+def get_command_items(has_ws: bool = False) -> list[tuple[str, str]]:
+    """Build (id, display_markup) tuples for the command palette FuzzyPicker.
+
+    When *has_ws* is False, commands that require a selected workstream
+    are dimmed but still shown (so the user knows they exist).
+    """
+    from rendering import C_DIM
+    items: list[tuple[str, str]] = []
+    for cmd in COMMAND_REGISTRY:
+        aliases_str = ", ".join(cmd.aliases)
+        alias_part = f"  [{C_DIM}]{aliases_str}[/{C_DIM}]" if aliases_str else ""
+        if cmd.requires_ws and not has_ws:
+            label = f"[{C_DIM}]{cmd.name}{alias_part}  {cmd.description}[/{C_DIM}]"
+        else:
+            label = f"[bold]{cmd.name}[/bold]{alias_part}  [{C_DIM}]{cmd.description}[/{C_DIM}]"
+        items.append((cmd.name, label))
+    return items
+
+
 # ── Content search ─────────────────────────────────────────────────
 
 @dataclass

@@ -95,15 +95,6 @@ class SearchInput(Input):
         app._active_table().focus()
 
 
-class CommandInput(Input):
-    BINDINGS = [Binding("escape", "cancel_command", "Cancel", priority=True)]
-
-    def action_cancel_command(self):
-        self.value = ""
-        self.display = False
-        self.app._active_table().focus()
-
-
 class QuickNoteInput(Input):
     BINDINGS = [Binding("escape", "cancel_note", "Cancel", priority=True)]
 
@@ -153,10 +144,10 @@ class OrchestratorApp(App):
     #preview-sessions {{
         height: auto; max-height: 16; width: 100%; margin: 0; padding: 0;
     }}
-    #search-input, #command-input, #note-input, #rename-input {{
+    #search-input, #note-input, #rename-input {{
         dock: bottom; height: 1; display: none; border: none; background: {BG_BASE};
     }}
-    #search-input:focus, #command-input:focus, #note-input:focus, #rename-input:focus {{
+    #search-input:focus, #note-input:focus, #rename-input:focus {{
         border: none; background: {BG_BASE};
     }}
     """
@@ -299,7 +290,6 @@ class OrchestratorApp(App):
                 yield Static("", id="preview-content")
                 yield OptionList(id="preview-sessions")
         yield SearchInput(placeholder="Search...", id="search-input")
-        yield CommandInput(placeholder=":", id="command-input")
         yield QuickNoteInput(placeholder="note: ", id="note-input")
         yield RenameInput(placeholder="rename: ", id="rename-input")
         yield Static("", id="summary-bar")
@@ -995,7 +985,6 @@ class OrchestratorApp(App):
         if not ws:
             return
         self.query_one("#search-input").display = False
-        self.query_one("#command-input").display = False
         self.query_one("#note-input").display = False
         rename_input = self.query_one("#rename-input", RenameInput)
         rename_input.display = True
@@ -1290,7 +1279,6 @@ class OrchestratorApp(App):
         self._refresh_ws_table()
 
     def action_search(self):
-        self.query_one("#command-input", CommandInput).display = False
         search_input = self.query_one("#search-input", SearchInput)
         search_input.display = True
         search_input.value = self.state.search_text
@@ -1312,20 +1300,20 @@ class OrchestratorApp(App):
     # ── Command palette ──
 
     def action_command_palette(self):
-        self.query_one("#search-input", SearchInput).display = False
-        cmd_input = self.query_one("#command-input", CommandInput)
-        cmd_input.display = True
-        cmd_input.value = ""
-        cmd_input.focus()
+        from state import get_command_items
+        from widgets import FuzzyPickerScreen
 
-    @on(Input.Submitted, "#command-input")
-    def on_command_submitted(self, event: Input.Submitted):
-        cmd_text = event.value.strip()
-        cmd_input = self.query_one("#command-input", CommandInput)
-        cmd_input.display = False
-        self._active_table().focus()
-        if cmd_text:
-            self._execute_command(cmd_text)
+        has_ws = self._selected_ws() is not None
+        items = get_command_items(has_ws)
+
+        def on_cmd(cmd_name: str | None):
+            if cmd_name:
+                self._execute_command(cmd_name)
+
+        screen = FuzzyPickerScreen(title="Command Palette")
+        screen._get_items = lambda: items
+        screen._on_selected = lambda item_id: (screen.dismiss(item_id),)
+        self.push_screen(screen, callback=on_cmd)
 
     def _execute_command(self, cmd_text: str):
         ws = self._selected_ws()

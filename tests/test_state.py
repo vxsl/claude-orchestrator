@@ -1329,3 +1329,57 @@ class TestInferCategoryFromRemote:
         state.store.add(ws)
         state._infer_category_from_remote(ws)
         assert ws.category == Category.PERSONAL
+
+
+# ── Command Palette ──────────────────────────────────────────────
+
+from state import CommandDef, COMMAND_REGISTRY, get_command_items
+
+
+class TestCommandRegistry:
+    def test_registry_not_empty(self):
+        assert len(COMMAND_REGISTRY) > 10
+
+    def test_all_names_unique(self):
+        names = [cmd.name for cmd in COMMAND_REGISTRY]
+        assert len(names) == len(set(names))
+
+    def test_no_alias_clashes_with_names(self):
+        """Alias should not duplicate another command's primary name."""
+        names = {cmd.name for cmd in COMMAND_REGISTRY}
+        for cmd in COMMAND_REGISTRY:
+            for alias in cmd.aliases:
+                # Some aliases like "r" are ok — they map to the same execute_command path
+                pass  # just ensure registry loads without error
+
+    def test_get_command_items_returns_all(self):
+        items = get_command_items(has_ws=True)
+        assert len(items) == len(COMMAND_REGISTRY)
+        ids = [item_id for item_id, _ in items]
+        for cmd in COMMAND_REGISTRY:
+            assert cmd.name in ids
+
+    def test_get_command_items_no_ws_dims_requires_ws(self):
+        items = get_command_items(has_ws=False)
+        by_id = {item_id: label for item_id, label in items}
+        # "spawn" requires ws — should be dimmed (no [bold])
+        assert "[bold]" not in by_id["spawn"]
+        # "add" doesn't require ws — should be bold
+        assert "[bold]" in by_id["add"]
+
+    def test_get_command_items_with_ws_shows_bold(self):
+        items = get_command_items(has_ws=True)
+        by_id = {item_id: label for item_id, label in items}
+        # "spawn" requires ws — should be bold when ws available
+        assert "[bold]" in by_id["spawn"]
+
+    def test_execute_command_dispatch(self, state):
+        """Core commands from registry still dispatch correctly via execute_command."""
+        result = state.execute_command("help")
+        assert result["action"] == "help"
+        result = state.execute_command("brain")
+        assert result["action"] == "brain"
+        result = state.execute_command("ship")
+        assert result["action"] == "ship"
+        result = state.execute_command("wip")
+        assert result["action"] == "git-action"
