@@ -1204,8 +1204,17 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
                 self._apply_title_filter()
             return
 
-        self._detail_sessions = self._stable_merge(self._detail_sessions, self._all_sessions)
-        self._archived_sessions = self._stable_merge(self._archived_sessions, self._all_archived)
+        # Stable merge when the user is focused on that pane (avoid jarring
+        # reorders mid-interaction); fresh sorted order otherwise so active
+        # threads float to the top when the user looks back.
+        if self._active_pane == "sessions":
+            self._detail_sessions = self._stable_merge(self._detail_sessions, self._all_sessions)
+        else:
+            self._detail_sessions = list(self._all_sessions)
+        if self._active_pane == "archived":
+            self._archived_sessions = self._stable_merge(self._archived_sessions, self._all_archived)
+        else:
+            self._archived_sessions = list(self._all_archived)
 
         # Don't rebuild OptionLists while peek is open — backing data is updated
         # but the visible list stays showing the conversation.
