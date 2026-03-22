@@ -662,15 +662,21 @@ class OrchestratorApp(App):
 
     @on(FastTable.RowHighlighted, "#ws-table")
     def on_ws_highlighted(self, event: FastTable.RowHighlighted):
-        self._update_preview()
+        self._debounce_preview()
 
     @on(FastTable.RowHighlighted, "#sessions-table")
     def on_session_highlighted(self, event: FastTable.RowHighlighted):
-        self._update_preview()
+        self._debounce_preview()
 
     @on(FastTable.RowHighlighted, "#archived-table")
     def on_archived_highlighted(self, event: FastTable.RowHighlighted):
-        self._update_preview()
+        self._debounce_preview()
+
+    def _debounce_preview(self):
+        """Debounce preview updates during rapid cursor movement."""
+        if hasattr(self, '_preview_timer') and self._preview_timer:
+            self._preview_timer.stop()
+        self._preview_timer = self.set_timer(0.05, self._update_preview)
 
     # ── Bar rendering ──
 
