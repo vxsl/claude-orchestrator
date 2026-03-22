@@ -1673,12 +1673,18 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         if session:
             mark_thread_seen(session.session_id)
             self._last_seen_cache = load_last_seen()
-            # Auto-dismiss notification when entering the session
-            notif = self._session_notifications.get(sid)
-            if notif and not notif.dismissed:
-                dismiss_notification(notif.id)
-                notif.dismissed = True
-                self._session_notifications.pop(sid, None)
+            # Auto-dismiss all notifications that could match this session.
+            # Dismiss by session_id match AND by cwd match, so the cwd fallback
+            # doesn't resurface older notifications on the next poll.
+            session_cwd = (session.project_path or "").rstrip("/")
+            for n in self._feed_notifications:
+                if n.dismissed:
+                    continue
+                if (n.session_id and n.session_id == sid) or \
+                   (not n.session_id and n.cwd and n.cwd.rstrip("/") == session_cwd):
+                    dismiss_notification(n.id)
+                    n.dismissed = True
+            self._session_notifications.pop(sid, None)
             dirs = ws_directories(self.ws)
             resume_session_now(self.ws, session, dirs, self.app)
         else:
