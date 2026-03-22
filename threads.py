@@ -349,10 +349,17 @@ def _derive_thread_name(sessions: list[ClaudeSession],
             return s.title
 
     # Use non-default branch name if consistent
+    # Skip generic branch names that don't describe the work
+    _GENERIC_BRANCHES = frozenset({
+        "master", "main", "HEAD", "develop", "dev",
+        "wip", "temp", "tmp", "test", "testing",
+        "feature", "fix", "hotfix", "bugfix",
+        "prod", "production", "staging",
+    })
     branch_names = set()
     for s in sessions:
         b = branches.get(s.session_id, "")
-        if b and b not in ("master", "main", "HEAD"):
+        if b and b not in _GENERIC_BRANCHES:
             branch_names.add(b)
     if len(branch_names) == 1:
         branch = branch_names.pop()
@@ -394,10 +401,19 @@ def discover_threads(min_messages: int = 1) -> list[Thread]:
 
     last_seen = load_last_seen()
 
-    # Group sessions by project path
+    # Group sessions by project path.
+    # Normalize .claude/worktrees/agent-*/ paths to the parent project so
+    # subagent sessions fold into the main workstream instead of spawning
+    # orphan "worktree-agent-XXXX" workstreams.
     by_project: dict[str, list[ClaudeSession]] = {}
     for s in sessions:
-        by_project.setdefault(s.project_path, []).append(s)
+        path = s.project_path
+        # .claude/worktrees/agent-XXXX → parent project
+        if "/.claude/worktrees/" in path:
+            parent = path.split("/.claude/worktrees/")[0]
+            if parent:
+                path = parent
+        by_project.setdefault(path, []).append(s)
 
     # Extract git branches and first messages (cheap I/O)
     branches: dict[str, str] = {}
