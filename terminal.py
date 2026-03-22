@@ -499,9 +499,6 @@ class TerminalWidget(Widget, can_focus=True):
             except OSError:
                 pass
         self._mouse_tracking = self._backend.mouse_tracking
-        # Snap to bottom on new output
-        if self._scroll_offset > 0:
-            self._scroll_offset = 0
 
     # ── Rendering ──────────────────────────────────────────────────
 
