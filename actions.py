@@ -44,30 +44,6 @@ def _ensure_worker_session() -> None:
         )
 
 
-def find_tmux_windows_for_ws(ws_name: str) -> list[tuple[str, str]]:
-    """Find live tmux windows for a workstream. Returns [(session_id, window_id)]."""
-    expected = f"\U0001f916{ws_name[:18]}"
-    results: list[tuple[str, str]] = []
-    try:
-        result = subprocess.run(
-            ["tmux", "list-windows", "-a", "-F",
-             "#{window_name}\t#{@orch_session_id}\t#{window_id}"],
-            capture_output=True, text=True, timeout=5,
-        )
-        if result.returncode != 0:
-            return results
-        for line in result.stdout.strip().split("\n"):
-            parts = line.split("\t")
-            if len(parts) != 3:
-                continue
-            name, sid, wid = parts
-            if name == expected and sid:
-                results.append((sid, wid))
-    except Exception:
-        pass
-    return results
-
-
 def find_tmux_window_for_session(session_id: str) -> str | None:
     """Find a tmux window already running a Claude session (via @orch_session_id tag).
 
@@ -372,7 +348,7 @@ def open_link(link, ws: Workstream | None = None, app=None):
             launch_orch_claude(ws, session_id=link.value)
         elif has_tmux():
             subprocess.Popen(
-                ["tmux", "new-window", "-n", link.label,
+                ["tmux", "new-window", "-n", f"claude:{link.label}",
                  "claude", "--resume", link.value],
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             )
