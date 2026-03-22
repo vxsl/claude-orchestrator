@@ -418,6 +418,7 @@ class TodoScreen(_VimOptionListMixin, ModalScreen[None]):
         olist = self.query_one("#todo-active", OptionList)
         no_active = self.query_one("#todo-no-active", Static)
         old_id = self._highlighted_item_id(olist, self._active_items)
+        old_active_idx = olist.highlighted
         olist.clear_options()
         if self._active_items:
             olist.display = True
@@ -425,7 +426,7 @@ class TodoScreen(_VimOptionListMixin, ModalScreen[None]):
             for item in self._active_items:
                 prompt = _render_todo_option(item)
                 olist.add_option(Option(prompt, id=item.id))
-            self._restore_highlight(olist, self._active_items, old_id)
+            self._restore_highlight(olist, self._active_items, old_id, old_active_idx)
         else:
             olist.display = False
             no_active.display = True
@@ -435,6 +436,7 @@ class TodoScreen(_VimOptionListMixin, ModalScreen[None]):
         no_arch = self.query_one("#todo-no-archived", Static)
         arch_pane = self.query_one("#todo-archived-pane")
         old_arch_id = self._highlighted_item_id(arch_olist, self._archived_items)
+        old_arch_idx = arch_olist.highlighted
         arch_olist.clear_options()
         if self._archived_items:
             arch_pane.display = True
@@ -443,7 +445,7 @@ class TodoScreen(_VimOptionListMixin, ModalScreen[None]):
             for item in self._archived_items:
                 prompt = _render_todo_option(item, is_archived=True)
                 arch_olist.add_option(Option(prompt, id=item.id))
-            self._restore_highlight(arch_olist, self._archived_items, old_arch_id)
+            self._restore_highlight(arch_olist, self._archived_items, old_arch_id, old_arch_idx)
         else:
             # Hide entire archived pane when empty
             arch_pane.display = False
@@ -467,7 +469,7 @@ class TodoScreen(_VimOptionListMixin, ModalScreen[None]):
         return None
 
     @staticmethod
-    def _restore_highlight(olist: OptionList, items: list[TodoItem], item_id: str | None):
+    def _restore_highlight(olist: OptionList, items: list[TodoItem], item_id: str | None, old_idx: int | None = None):
         if not olist.option_count:
             return
         if item_id:
@@ -475,7 +477,11 @@ class TodoScreen(_VimOptionListMixin, ModalScreen[None]):
                 if t.id == item_id:
                     olist.highlighted = i
                     return
-        olist.highlighted = 0
+        # Item was removed — keep cursor at same position, clamped.
+        if old_idx is not None:
+            olist.highlighted = min(old_idx, olist.option_count - 1)
+        else:
+            olist.highlighted = 0
 
     def _update_pane_labels(self):
         active_label = self.query_one("#todo-active-label", Static)
@@ -1247,8 +1253,9 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
             olist.display = True
             no_sess.display = False
             old_sid = self._highlighted_session_id(olist)
+            old_idx = olist.highlighted
             self._build_session_list()
-            self._restore_highlight_by_sid(olist, self._detail_sessions, old_sid)
+            self._restore_highlight_by_sid(olist, self._detail_sessions, old_sid, old_idx)
         else:
             olist.display = False
             no_sess.display = True
@@ -1261,8 +1268,9 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
             arch_olist.display = True
             no_arch.display = False
             old_sid = self._highlighted_session_id(arch_olist)
+            old_arch_idx = arch_olist.highlighted
             self._build_archived_list()
-            self._restore_highlight_by_sid(arch_olist, self._archived_sessions, old_sid)
+            self._restore_highlight_by_sid(arch_olist, self._archived_sessions, old_sid, old_arch_idx)
         else:
             arch_olist.display = False
             no_arch.display = True
