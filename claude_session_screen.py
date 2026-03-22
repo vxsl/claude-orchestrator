@@ -462,13 +462,8 @@ class ClaudeSessionScreen(Screen):
 # orch-sidebar overrides — compact for 36-column pane
 set refresh-mode = periodic
 set refresh-interval = 3
-set main-view-date = custom
-set main-view-date-format = "%m/%d"
-set main-view-author = no
-set main-view-id = yes
-set main-view-id-width = 7
-set main-view-line-number = no
-set line-graphics = utf-8
+set main-view = line-number:no id:no date:custom,format="%m/%d" author:no commit-title:yes,refs,overflow=no
+set line-graphics = ascii
 set status-view-show-untracked-dirs = no
 """
         fd, path = tempfile.mkstemp(suffix=".tigrc", prefix="orch-")
