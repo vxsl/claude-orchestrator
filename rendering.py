@@ -442,7 +442,10 @@ def _render_session_option(
         LINE_WIDTH = title_width + 20  # right-alignment anchor
 
     # Resolved state: session's last action was a git commit
-    committed = bool(s.last_commit_sha)
+    # But active states (thinking, awaiting input) take priority — the session
+    # has moved on from the commit.
+    _active = act in (ThreadActivity.THINKING, ThreadActivity.AWAITING_INPUT)
+    committed = bool(s.last_commit_sha) and not _active
 
     if committed:
         icon = f"[{C_RESOLVED}]✓[/{C_RESOLVED}]"
