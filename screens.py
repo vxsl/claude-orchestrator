@@ -854,7 +854,6 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
     #detail-container {{
         width: 100%; height: 100%;
         padding: 0; background: {BG_BASE};
-        layers: default peek;
     }}
     #detail-header {{
         height: auto;
@@ -958,36 +957,16 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         color: {C_DIM};
         dock: bottom;
     }}
-    #detail-peek-overlay {{
+    #detail-peek-scroll {{
         display: none;
-        layer: peek;
-        align: center middle;
-        width: 100%; height: 100%;
-        background: black 60%;
+        margin: 0 1; padding: 0;
+        background: {BG_BASE};
     }}
-    #detail-peek-overlay.visible {{
+    #detail-peek-scroll.visible {{
         display: block;
     }}
-    #detail-peek-box {{
-        width: 80%;
-        height: 70%;
-        max-width: 120;
-        background: {BG_BASE};
-        border: round {C_BLUE};
-        padding: 0;
-    }}
-    #detail-peek-scroll {{
-        width: 100%; height: 1fr;
-        padding: 0 2;
-    }}
     #detail-peek-content {{
-        width: 100%;
-    }}
-    #detail-peek-header {{
-        padding: 1 2 0 2;
-        color: {C_BLUE};
-        text-style: bold;
-        height: auto;
+        padding: 0 1;
     }}
     """
 
@@ -1030,6 +1009,8 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
                     yield _SearchInput(placeholder="search...", id="detail-search-input")
                     yield OptionList(id="detail-sessions")
                     yield Static(f"[{C_DIM}]No sessions[/{C_DIM}]", id="detail-no-sessions")
+                    with VerticalScroll(id="detail-peek-scroll"):
+                        yield Static("", id="detail-peek-content")
                 with Vertical(id="detail-archived-pane", classes="detail-list-pane"):
                     yield Static(f"[{C_DIM}]Archived[/{C_DIM}]", id="detail-archived-label", classes="detail-list-label")
                     yield OptionList(id="detail-archived")
@@ -1044,11 +1025,6 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
                     yield Static(f"[{C_DIM}]No notifications[/{C_DIM}]", id="detail-no-feed")
 
             yield Static(self._render_help(), id="detail-help")
-            with Vertical(id="detail-peek-overlay"):
-                with Vertical(id="detail-peek-box"):
-                    yield Static("", id="detail-peek-header")
-                    with VerticalScroll(id="detail-peek-scroll"):
-                        yield Static("", id="detail-peek-content")
 
     def on_mount(self):
         self._last_seen_cache = load_last_seen()
@@ -1724,7 +1700,7 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         self._hide_peek()
 
     def _show_peek(self):
-        """Populate and show the peek overlay for the highlighted session."""
+        """Show session content inline in the sessions pane."""
         olist = self._focused_olist()
         idx = olist.highlighted
         sessions = self._archived_sessions if self._active_pane == "archived" else self._detail_sessions
@@ -1734,21 +1710,17 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         self._peek_session_id = session.session_id
 
         title = _session_title(session)
-        header = self.query_one("#detail-peek-header", Static)
-
-        # Try live tmux capture first
+        # Build content
         pane_text = capture_session_pane(session.session_id)
         if pane_text is not None:
-            header.update(
+            header = (
                 f"[bold {C_BLUE}]{_rich_escape(title)}[/bold {C_BLUE}]  "
                 f"[{C_DIM}]{session.age} · {_short_model(session.model)}[/{C_DIM}]  "
                 f"[bold {C_GREEN}]LIVE[/bold {C_GREEN}]"
             )
-            content = self.query_one("#detail-peek-content", Static)
-            content.update(_rich_escape(pane_text))
+            body = _rich_escape(pane_text)
         else:
-            # Fallback: show JSONL conversation
-            header.update(
+            header = (
                 f"[bold {C_BLUE}]{_rich_escape(title)}[/bold {C_BLUE}]  "
                 f"[{C_DIM}]{session.age} · {_short_model(session.model)}[/{C_DIM}]"
             )
@@ -1758,19 +1730,25 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
             else:
                 messages = extract_session_content(session.jsonl_path) if session.jsonl_path else []
                 self._content_cache[session.session_id] = messages
-            content = self.query_one("#detail-peek-content", Static)
-            content.update(self._render_peek_messages(messages))
+            body = self._render_peek_messages(messages)
 
-        scroll = self.query_one("#detail-peek-scroll", VerticalScroll)
-        scroll.scroll_end(animate=False)
-        overlay = self.query_one("#detail-peek-overlay")
-        overlay.add_class("visible")
+        # Populate, then swap visibility
+        content = self.query_one("#detail-peek-content", Static)
+        content.update(f"{header}\n\n{body}")
+        peek_scroll = self.query_one("#detail-peek-scroll", VerticalScroll)
+        peek_scroll.scroll_end(animate=False)
+
+        # Hide session list, show peek
+        olist.display = False
+        peek_scroll.add_class("visible")
         self._peek_visible = True
 
     def _hide_peek(self):
-        """Hide the peek overlay."""
-        overlay = self.query_one("#detail-peek-overlay")
-        overlay.remove_class("visible")
+        """Hide peek and restore the session list."""
+        peek_scroll = self.query_one("#detail-peek-scroll", VerticalScroll)
+        peek_scroll.remove_class("visible")
+        olist = self._focused_olist()
+        olist.display = True
         self._peek_visible = False
         self._peek_session_id = None
         if self._peek_timer is not None:
@@ -1779,7 +1757,7 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
 
     @staticmethod
     def _render_peek_messages(messages) -> str:
-        """Render session messages as a conversation for the peek overlay."""
+        """Render session messages as a conversation for the peek."""
         if not messages:
             return f"[{C_DIM}]No conversation content[/{C_DIM}]"
         lines: list[str] = []
