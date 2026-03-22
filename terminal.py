@@ -30,14 +30,58 @@ from textual.strip import Strip
 from textual.widget import Widget
 
 
-# ── pyte screen subclass ───────────────────────────────────────────
+# ── pyte subclasses ───────────────────────────────────────────────
 
 class _Screen(pyte.Screen):
-    """Pyte screen that tolerates private-mode set_margins."""
+    """Pyte screen with extra tolerance for modern terminal sequences."""
 
     def set_margins(self, *args, **kwargs):
         kwargs.pop("private", None)
         return super().set_margins(*args, **kwargs)
+
+    def _ignore(self, *args, **kwargs):
+        """Silently ignore unsupported sequences."""
+        pass
+
+
+class _Stream(pyte.Stream):
+    """Pyte stream with additional CSI handlers for tmux compat."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # CSI s/u — cursor save/restore (ANSI.SYS style, used by tmux)
+        self.csi["s"] = "save_cursor"
+        self.csi["u"] = "restore_cursor"
+        # CSI t — window manipulation (xterm); ignore
+        self.csi["t"] = "_ignore"
+        # CSI q — cursor shape; ignore
+        self.csi["q"] = "_ignore"
+
+
+# ── Pre-filter for sequences pyte can't handle ────────────────────
+
+# DCS (ESC P), APC (ESC _), PM (ESC ^), SOS (ESC X) — pyte leaks
+# their content as plain text.  Strip complete sequences terminated
+# by ST (ESC \) or BEL.  OSC (ESC ]) is handled by pyte, so we
+# leave it alone.
+_STRIP_SEQ = re.compile(
+    r"\x1b[P_^X]"        # opener: DCS / APC / PM / SOS
+    r"[^\x1b\x07]*"      # body (no ESC or BEL)
+    r"(?:\x07|\x1b\\)"   # closer: BEL or ST
+)
+
+# CSI sequences with intermediate bytes that pyte can't parse
+# (e.g. \x1b[=1u for kitty keyboard protocol, \x1b[>0c for DA2).
+_STRIP_CSI_EXT = re.compile(
+    r"\x1b\[[\d;]*[=><][\d;]*[a-zA-Z]"
+)
+
+
+def _prefilter(data: str) -> str:
+    """Strip escape sequences that confuse pyte."""
+    data = _STRIP_SEQ.sub("", data)
+    data = _STRIP_CSI_EXT.sub("", data)
+    return data
 
 
 # ── Color helpers ──────────────────────────────────────────────────
@@ -153,7 +197,7 @@ class TerminalWidget(Widget, can_focus=True):
         self._ncol = 80
         self._nrow = 24
         self._screen = _Screen(self._ncol, self._nrow)
-        self._stream = pyte.Stream(self._screen)
+        self._stream = _Stream(self._screen)
         self._mouse_tracking = False
 
         # PTY state
@@ -270,6 +314,7 @@ class TerminalWidget(Widget, can_focus=True):
                     self._mouse_tracking = True
                 if "1000l" in params:
                     self._mouse_tracking = False
+        data = _prefilter(data)
         try:
             self._stream.feed(data)
         except Exception:
