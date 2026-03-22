@@ -121,6 +121,8 @@ class SessionHeaderWidget(Static):
 
     def on_mount(self) -> None:
         self._render_static()
+        self._cached_session: ClaudeSession | None = None
+        self._last_jsonl_size: int = 0
         self.set_interval(5.0, self._refresh_async)
 
     def _format_elapsed(self) -> str:
@@ -144,7 +146,12 @@ class SessionHeaderWidget(Static):
 
     @work(thread=True)
     def _refresh_async(self) -> None:
-        """Parse JSONL in a thread so we don't block the event loop."""
+        """Parse JSONL in a thread so we don't block the event loop.
+
+        First call does a full parse; subsequent calls only read the tail
+        of the file (last 8KB) for incremental updates. Full re-parse is
+        triggered every 30s to keep token/message counts accurate.
+        """
         elapsed = self._format_elapsed()
         sid_short = self._session_id[:8]
 
@@ -163,7 +170,26 @@ class SessionHeaderWidget(Static):
         jp = Path(self._jsonl_path)
         if jp.exists():
             try:
-                s = parse_session(jp)
+                cur_size = jp.stat().st_size
+                need_full = (
+                    self._cached_session is None
+                    or cur_size < self._last_jsonl_size  # file was truncated
+                    or (int(time.time()) % 30 < 5)  # full re-parse every ~30s
+                )
+
+                if need_full:
+                    s = parse_session(jp)
+                    if s:
+                        self._cached_session = s
+                        self._last_jsonl_size = cur_size
+                else:
+                    # Incremental: only read tail for last_message updates
+                    from sessions import refresh_session_tail
+                    s = self._cached_session
+                    if s:
+                        refresh_session_tail(s)
+                        self._last_jsonl_size = cur_size
+
                 if s:
                     model = s.model_short
                     msgs = s.message_count
