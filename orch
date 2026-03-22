@@ -4,14 +4,10 @@ export PATH="$PYENV_ROOT/bin:$PATH"
 eval "$(pyenv init -)"
 SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
 
-# Unbind C-j/C-k in the orch tmux session so they reach the TUI
-# (globally they're tmux pane navigation, but orch uses them for panel switching)
+# C-j/C-k passthrough is handled in tmux.conf via session-name detection.
+# C-h: from Claude session windows jumps back to orch TUI (window 0);
+# on window 0, passes through so the TUI can use it.
 if [ -n "$TMUX" ]; then
-    tmux unbind -n C-j 2>/dev/null
-    tmux unbind -n C-k 2>/dev/null
-    tmux unbind -n C-l 2>/dev/null
-    # C-h from Claude session windows jumps back to the orch TUI (window 0).
-    # When already on window 0, pass the key through so the TUI can use it.
     tmux bind -n C-h if-shell '[ "#{window_index}" = "0" ]' 'send-keys C-h' 'select-window -t orch:0' 2>/dev/null
 fi
 
