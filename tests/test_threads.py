@@ -468,7 +468,7 @@ class TestThreadActivity:
         t = Thread(thread_id="t1", name="test", project_path="/p",
                    sessions=[self._make_session(is_live=False, last_message_role="assistant",
                                                 last_activity=recent)],
-                   _last_seen={"t1": future})
+                   _last_seen={"s1": future})
         assert t.activity == ThreadActivity.IDLE
 
     def test_empty_thread_is_idle(self):

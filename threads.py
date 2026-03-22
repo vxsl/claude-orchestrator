@@ -24,12 +24,21 @@ from sessions import (
 
 class ThreadActivity(Enum):
     """Observable activity state of a thread."""
-    THINKING = "thinking"              # Live, Claude is processing
-    AWAITING_INPUT = "awaiting_input"  # Live, Claude responded, waiting for user
-    RESPONSE_FRESH = "response_fresh"  # Not live, unread assistant response within 30 min
-    RESPONSE_READY = "response_ready"  # Not live, unread assistant response (older)
-    IDLE = "idle"                      # Not live, nothing unread
+    THINKING = "thinking"              # Claude is actively processing
+    AWAITING_INPUT = "awaiting_input"  # Your turn (live session, turn finished)
+    RESPONSE_FRESH = "response_fresh"  # Your turn (response within 30 min)
+    RESPONSE_READY = "response_ready"  # Your turn (older response)
+    IDLE = "idle"                      # Nothing pending
 
+
+# Priority ordering (lower = more urgent)
+_ACTIVITY_PRIORITY = {
+    ThreadActivity.THINKING: 0,
+    ThreadActivity.AWAITING_INPUT: 1,
+    ThreadActivity.RESPONSE_FRESH: 2,
+    ThreadActivity.RESPONSE_READY: 3,
+    ThreadActivity.IDLE: 4,
+}
 
 # Tools that block on user input (polls, questions, plan confirmations)
 _INTERACTIVE_TOOLS = frozenset({
@@ -66,32 +75,33 @@ def mark_thread_seen(thread_id: str) -> None:
 
 
 def session_activity(session: ClaudeSession, last_seen: dict[str, str] | None = None) -> ThreadActivity:
-    """Compute activity state for a single session."""
+    """Compute activity state for a single session.
+
+    The live/not-live distinction is an implementation detail — users just
+    care about: is Claude thinking, is it my turn, or is nothing happening?
+    """
+    # ── THINKING: live session, Claude is mid-turn ──────────────────
     if session.is_live:
-        # No messages yet → user hasn't sent anything, Claude is idle at prompt
-        if not session.last_message_role:
-            return ThreadActivity.AWAITING_INPUT
+        turn_done = (
+            not session.last_message_role          # no messages yet
+            or session.turn_complete
+            or (session.last_stop_reason and session.last_stop_reason != "tool_use")
+            or (session.last_stop_reason == "tool_use"
+                and session.last_tool_name in _INTERACTIVE_TOOLS)
+        )
+        if not turn_done:
+            return ThreadActivity.THINKING
 
-        # system:turn_duration is the definitive "turn finished" signal
-        if session.turn_complete:
-            return ThreadActivity.AWAITING_INPUT
+    # ── YOUR TURN: live session, Claude's turn is done ────────────────
+    # Most urgent — the session is open right now.
+    if session.is_live:
+        return ThreadActivity.AWAITING_INPUT
 
-        # Any stop_reason other than tool_use means the turn is done
-        # (end_turn, stop_sequence, max_tokens, etc.)
-        if session.last_stop_reason and session.last_stop_reason != "tool_use":
-            return ThreadActivity.AWAITING_INPUT
-
-        # Interactive tools (AskUserQuestion, ExitPlanMode) mean Claude is
-        # waiting for the user to respond, not thinking.
-        if session.last_stop_reason == "tool_use" and session.last_tool_name in _INTERACTIVE_TOOLS:
-            return ThreadActivity.AWAITING_INPUT
-
-        return ThreadActivity.THINKING
-
+    # ── YOUR TURN: non-live, Claude left a response ─────────────────
     if session.last_message_role != "assistant":
         return ThreadActivity.IDLE
 
-    # Check last-seen (keyed by session_id)
+    # Check last-seen — if user already viewed this response, dim it
     if last_seen:
         seen_ts = last_seen.get(session.session_id, "")
         if seen_ts:
@@ -105,7 +115,7 @@ def session_activity(session: ClaudeSession, last_seen: dict[str, str] | None = 
             except (ValueError, TypeError):
                 pass
 
-    # Unread — is it fresh?
+    # Fresh vs ready (both mean "your turn", just different visual urgency)
     try:
         activity_dt = datetime.fromisoformat(
             (session.last_activity or "").replace("Z", "+00:00")
@@ -144,46 +154,20 @@ class Thread:
 
     @property
     def activity(self) -> ThreadActivity:
-        """Compute the current activity state of this thread."""
-        if self.is_live:
-            # Use session_activity for the latest live session (includes mtime check)
-            live_sessions = [s for s in self.sessions if s.is_live]
-            latest_live = max(live_sessions, key=lambda s: s.last_activity or "")
-            return session_activity(latest_live, self._last_seen)
+        """Compute the current activity state of this thread.
 
-        # Not live — check if there's an unread assistant response
+        Uses the best (most urgent) activity across all sessions — the
+        live/not-live split is handled inside session_activity.
+        """
         if not self.sessions:
             return ThreadActivity.IDLE
 
-        latest = max(self.sessions, key=lambda s: s.last_activity or "")
-        if latest.last_message_role != "assistant":
-            return ThreadActivity.IDLE
-
-        # Last message was from assistant — check if user has seen it
-        seen_ts = self._last_seen.get(self.thread_id, "")
-        if seen_ts:
-            try:
-                seen_dt = datetime.fromisoformat(seen_ts.replace("Z", "+00:00"))
-                activity_dt = datetime.fromisoformat(
-                    (latest.last_activity or "").replace("Z", "+00:00")
-                )
-                if seen_dt >= activity_dt:
-                    return ThreadActivity.IDLE  # Already seen
-            except (ValueError, TypeError):
-                pass
-
-        # Unread — is it fresh?
-        try:
-            activity_dt = datetime.fromisoformat(
-                (latest.last_activity or "").replace("Z", "+00:00")
-            )
-            age = datetime.now().astimezone() - activity_dt
-            if age <= FRESH_THRESHOLD:
-                return ThreadActivity.RESPONSE_FRESH
-        except (ValueError, TypeError):
-            pass
-
-        return ThreadActivity.RESPONSE_READY
+        best = ThreadActivity.IDLE
+        for s in self.sessions:
+            act = session_activity(s, self._last_seen)
+            if _ACTIVITY_PRIORITY.get(act, 99) < _ACTIVITY_PRIORITY.get(best, 99):
+                best = act
+        return best
 
     @property
     def session_count(self) -> int:

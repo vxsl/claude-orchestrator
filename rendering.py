@@ -23,7 +23,7 @@ from models import (
     _relative_time,
 )
 from sessions import ClaudeSession
-from threads import Thread, ThreadActivity, session_activity
+from threads import Thread, ThreadActivity, session_activity, _ACTIVITY_PRIORITY
 
 
 # ─── Color Palette (matching fzedit / jira-fzf) ─────────────────────
@@ -240,13 +240,6 @@ def _short_model(model: str) -> str:
 
 THROBBER_FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 
-_ACTIVITY_PRIORITY = {
-    ThreadActivity.THINKING: 0,
-    ThreadActivity.AWAITING_INPUT: 1,
-    ThreadActivity.RESPONSE_FRESH: 2,
-    ThreadActivity.RESPONSE_READY: 3,
-    ThreadActivity.IDLE: 4,
-}
 
 
 def _activity_icon(activity: ThreadActivity, throbber_frame: int = 0) -> str:
@@ -269,9 +262,9 @@ def _activity_badge(activity: ThreadActivity) -> str:
     if activity == ThreadActivity.AWAITING_INPUT:
         return f"[{C_YELLOW}]your turn[/{C_YELLOW}]"
     if activity == ThreadActivity.RESPONSE_FRESH:
-        return f"[bold {C_GREEN}]done[/bold {C_GREEN}]"
+        return f"[bold {C_GREEN}]your turn[/bold {C_GREEN}]"
     if activity == ThreadActivity.RESPONSE_READY:
-        return f"[{C_ORANGE}]done[/{C_ORANGE}]"
+        return f"[{C_ORANGE}]your turn[/{C_ORANGE}]"
     return ""
 
 
@@ -314,8 +307,8 @@ def _session_title(session: ClaudeSession, titles: dict[str, str] | None = None)
 _BADGE_WIDTHS = {
     ThreadActivity.THINKING: 9,       # "thinking…"
     ThreadActivity.AWAITING_INPUT: 9, # "your turn"
-    ThreadActivity.RESPONSE_FRESH: 4, # "done"
-    ThreadActivity.RESPONSE_READY: 4, # "done"
+    ThreadActivity.RESPONSE_FRESH: 9, # "your turn"
+    ThreadActivity.RESPONSE_READY: 9, # "your turn"
     ThreadActivity.IDLE: 0,
 }
 
