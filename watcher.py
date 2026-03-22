@@ -6,6 +6,7 @@ to detect new/modified sessions in real time instead of polling.
 
 from __future__ import annotations
 
+import time
 import threading
 from pathlib import Path
 from typing import Callable
@@ -18,21 +19,55 @@ CLAUDE_PROJECTS_DIR = Path.home() / ".claude" / "projects"
 CLAUDE_SESSIONS_DIR = Path.home() / ".claude" / "sessions"
 
 
-class _DebouncedHandler(FileSystemEventHandler):
-    """Fires callback at most once per `debounce` seconds, on relevant file changes."""
+class _LeadingEdgeDebounce:
+    """Fires immediately on first call, then suppresses for `window` seconds."""
 
-    def __init__(self, callback: Callable[[], None], debounce: float = 1.0):
-        super().__init__()
+    def __init__(self, callback: Callable[[], None], window: float = 1.0):
         self._callback = callback
-        self._debounce = debounce
+        self._window = window
+        self._last_fire: float = 0
+        self._lock = threading.Lock()
+        self._trailing_timer: threading.Timer | None = None
+
+    def __call__(self):
+        with self._lock:
+            now = time.monotonic()
+            elapsed = now - self._last_fire
+            if elapsed >= self._window:
+                # Leading edge: fire immediately
+                self._last_fire = now
+                self._callback()
+            else:
+                # Within suppression window — schedule a trailing fire
+                # so the last event in a burst isn't lost
+                if self._trailing_timer is not None:
+                    self._trailing_timer.cancel()
+                remaining = self._window - elapsed
+                self._trailing_timer = threading.Timer(remaining, self._trailing_fire)
+                self._trailing_timer.daemon = True
+                self._trailing_timer.start()
+
+    def _trailing_fire(self):
+        with self._lock:
+            self._trailing_timer = None
+            self._last_fire = time.monotonic()
+        self._callback()
+
+
+class _TrailingEdgeDebounce:
+    """Fires after `window` seconds of quiet (resets on each call)."""
+
+    def __init__(self, callback: Callable[[], None], window: float = 1.0):
+        self._callback = callback
+        self._window = window
         self._timer: threading.Timer | None = None
         self._lock = threading.Lock()
 
-    def _schedule(self):
+    def __call__(self):
         with self._lock:
             if self._timer is not None:
                 self._timer.cancel()
-            self._timer = threading.Timer(self._debounce, self._fire)
+            self._timer = threading.Timer(self._window, self._fire)
             self._timer.daemon = True
             self._timer.start()
 
@@ -41,44 +76,83 @@ class _DebouncedHandler(FileSystemEventHandler):
             self._timer = None
         self._callback()
 
-    def _is_relevant(self, event: FileSystemEvent) -> bool:
+
+class _SplitHandler(FileSystemEventHandler):
+    """Routes events to separate callbacks based on event type.
+
+    - Session JSON markers (liveness): leading-edge debounce (fire immediately)
+    - JSONL content changes: trailing-edge debounce (fire after quiet period)
+    """
+
+    def __init__(
+        self,
+        on_liveness: Callable[[], None],
+        on_content: Callable[[], None],
+        liveness_debounce: float = 1.0,
+        content_debounce: float = 1.0,
+    ):
+        super().__init__()
+        self._on_liveness = _LeadingEdgeDebounce(on_liveness, window=liveness_debounce)
+        self._on_content = _TrailingEdgeDebounce(on_content, window=content_debounce)
+
+    def _classify(self, event: FileSystemEvent) -> str | None:
         path = event.src_path
-        # New/modified JSONL session files
-        if path.endswith(".jsonl") and not path.endswith(".wakatime"):
-            return True
-        # Live session markers
+        # Session liveness markers
         if path.endswith(".json") and CLAUDE_SESSIONS_DIR.as_posix() in path:
-            return True
-        # New project subdirectory created
+            return "liveness"
+        # JSONL session files
+        if path.endswith(".jsonl") and not path.endswith(".wakatime"):
+            return "content"
+        # New project subdirectory
         if event.is_directory:
-            return True
-        return False
+            return "content"
+        return None
+
+    def _dispatch(self, event: FileSystemEvent):
+        kind = self._classify(event)
+        if kind == "liveness":
+            self._on_liveness()
+        elif kind == "content":
+            self._on_content()
 
     def on_created(self, event: FileSystemEvent):
-        if self._is_relevant(event):
-            self._schedule()
+        self._dispatch(event)
 
     def on_modified(self, event: FileSystemEvent):
-        if self._is_relevant(event):
-            self._schedule()
+        self._dispatch(event)
 
     def on_deleted(self, event: FileSystemEvent):
-        if self._is_relevant(event):
-            self._schedule()
+        self._dispatch(event)
 
 
 class SessionWatcher:
-    """Watch Claude session directories for changes and invoke a callback.
+    """Watch Claude session directories for changes and invoke callbacks.
 
-    Usage:
-        watcher = SessionWatcher(on_change=my_callback)
-        watcher.start()
-        ...
-        watcher.stop()
+    Two event channels:
+    - on_liveness: Fires immediately when session JSON markers change
+      (session start/stop). Leading-edge debounce — fast path.
+    - on_content: Fires after JSONL content changes settle (1s quiet).
+      Trailing-edge debounce — batches rapid writes.
+
+    For backwards compat, on_change is used for both if on_liveness
+    is not provided.
     """
 
-    def __init__(self, on_change: Callable[[], None], debounce: float = 1.0):
-        self._handler = _DebouncedHandler(on_change, debounce=debounce)
+    def __init__(
+        self,
+        on_change: Callable[[], None] | None = None,
+        on_liveness: Callable[[], None] | None = None,
+        on_content: Callable[[], None] | None = None,
+        debounce: float = 1.0,
+    ):
+        liveness_cb = on_liveness or on_change or (lambda: None)
+        content_cb = on_content or on_change or (lambda: None)
+        self._handler = _SplitHandler(
+            on_liveness=liveness_cb,
+            on_content=content_cb,
+            liveness_debounce=debounce,
+            content_debounce=debounce,
+        )
         self._observer = Observer()
         self._started = False
 
