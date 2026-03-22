@@ -43,6 +43,53 @@ _PASSTHROUGH_KEYS = {"ctrl+j", "ctrl+k", "ctrl+e", "ctrl+h"}
 ORCH_DIR = str(Path(__file__).parent)
 
 
+# ── Tmux session helpers ──────────────────────────────────────────────
+
+def tmux_session_name(session_id: str) -> str:
+    """Deterministic tmux session name for a Claude session."""
+    return f"orch-{session_id[:8]}"
+
+
+def tmux_session_alive(name: str) -> bool:
+    """Check if a tmux session exists."""
+    return subprocess.run(
+        ["tmux", "has-session", "-t", name],
+        capture_output=True,
+    ).returncode == 0
+
+
+def auto_link_session(store: Store, ws_id: str, session_id: str) -> None:
+    """Link a claude-session to a workstream if not already linked."""
+    if not ws_id:
+        return
+    ws = store.get(ws_id)
+    if not ws:
+        return
+    for link in ws.links:
+        if link.kind == "claude-session" and link.value == session_id:
+            return
+    ws.links.append(Link(kind="claude-session", label="session", value=session_id))
+    ws.touch()
+    store.update(ws)
+
+
+def log_session_exit(session_id: str, ws_name: str, start_time: float,
+                     exit_type: str = "textual") -> None:
+    """Append a line to the session-exits diagnostic log."""
+    try:
+        diag_dir = Path.home() / ".cache" / "claude-orchestrator" / "diag"
+        diag_dir.mkdir(parents=True, exist_ok=True)
+        elapsed = int(time.time() - start_time)
+        with open(diag_dir / "session-exits.log", "a") as f:
+            f.write(
+                f"{time.strftime('%Y-%m-%dT%H:%M:%S%z')}  "
+                f"exit={exit_type}  session={session_id[:8]}  "
+                f"ws={ws_name}  elapsed={elapsed}s\n"
+            )
+    except Exception:
+        pass
+
+
 # ── Header Widget ────────────────────────────────────────────────────
 
 class SessionHeaderWidget(Static):
@@ -289,9 +336,11 @@ class ClaudeSessionScreen(Screen):
         self._tig_env = {"TIGRC_USER": self._tigrc_path}
         self._git_branch = self._detect_git_branch()
         self._jsonl = self._jsonl_path()
+        self.tmux_name = tmux_session_name(self._session_id)
+        self._create_tmux_session()
 
-        log.debug("ClaudeSessionScreen.__init__: sid=%s cwd=%s new=%s cmd_len=%d",
-                  self._session_id[:8], self._cwd, self._is_new, len(self._claude_command))
+        log.debug("ClaudeSessionScreen.__init__: sid=%s cwd=%s tmux=%s new=%s",
+                  self._session_id[:8], self._cwd, self.tmux_name, self._is_new)
 
     def _resolve_cwd(self) -> str:
         from actions import ws_working_dir
@@ -371,6 +420,40 @@ class ClaudeSessionScreen(Screen):
             pass
         return ""
 
+    # ── Tmux session management ──────────────────────────────────
+
+    def _create_tmux_session(self) -> None:
+        """Create a detached tmux session running the claude command, if not already running."""
+        if tmux_session_alive(self.tmux_name):
+            log.debug("tmux session %s already exists, will attach", self.tmux_name)
+            return
+
+        # Build shell command with env exports to avoid quoting issues
+        env_exports = "; ".join(
+            f"export {k}={shlex.quote(v)}" for k, v in self._env.items()
+        )
+        shell_cmd = f"{env_exports}; exec {self._claude_command}"
+
+        result = subprocess.run(
+            ["tmux", "new-session", "-d",
+             "-s", self.tmux_name,
+             "-c", self._cwd,
+             shell_cmd],
+            capture_output=True, text=True,
+        )
+        if result.returncode != 0:
+            log.error("tmux new-session failed: %s", result.stderr)
+            raise RuntimeError(f"tmux new-session failed: {result.stderr}")
+
+        # Configure the session: no status bar, no prefix interference
+        for opt, val in [("status", "off"), ("remain-on-exit", "off"),
+                         ("prefix", "F12"), ("prefix2", "F12")]:
+            subprocess.run(
+                ["tmux", "set-option", "-t", self.tmux_name, opt, val],
+                capture_output=True,
+            )
+        log.debug("Created tmux session %s", self.tmux_name)
+
     # ── Slash command syncing ─────────────────────────────────────
 
     def _sync_slash_commands(self) -> None:
@@ -447,8 +530,7 @@ set status-view-show-untracked-dirs = no
                     initial_title=self._initial_title,
                 )
                 yield TerminalWidget(
-                    command=self._claude_command,
-                    env=self._env,
+                    command=f"tmux attach-session -t {shlex.quote(self.tmux_name)}",
                     cwd=self._cwd,
                     passthrough_keys=_PASSTHROUGH_KEYS,
                     id="cs-terminal",
@@ -502,13 +584,10 @@ set status-view-show-untracked-dirs = no
         if not isinstance(widget, TerminalWidget) or widget.id != "cs-terminal":
             return  # A sidebar terminal exited, ignore
 
-        log.debug("Claude terminal finished, cleaning up")
+        log.debug("Claude terminal finished (tmux session ended), cleaning up")
 
-        # Auto-link session to workstream
-        self._auto_link_session()
-
-        # Log exit diagnostics
-        self._log_exit()
+        auto_link_session(self._store, self._ws.id, self._session_id)
+        log_session_exit(self._session_id, self._ws.name, self._start_time)
 
         # Parse final session data for summary
         session = None
@@ -526,38 +605,11 @@ set status-view-show-untracked-dirs = no
 
         self.dismiss(session)
 
-    def _auto_link_session(self) -> None:
-        if not self._ws.id:
-            return
-        ws = self._store.get(self._ws.id)
-        if not ws:
-            return
-        for link in ws.links:
-            if link.kind == "claude-session" and link.value == self._session_id:
-                return  # Already linked
-        ws.links.append(Link(kind="claude-session", label="session", value=self._session_id))
-        ws.touch()
-        self._store.update(ws)
-
-    def _log_exit(self) -> None:
-        try:
-            diag_dir = Path.home() / ".cache" / "claude-orchestrator" / "diag"
-            diag_dir.mkdir(parents=True, exist_ok=True)
-            elapsed = int(time.time() - self._start_time)
-            with open(diag_dir / "session-exits.log", "a") as f:
-                f.write(
-                    f"{time.strftime('%Y-%m-%dT%H:%M:%S%z')}  "
-                    f"exit=textual  session={self._session_id[:8]}  "
-                    f"ws={self._ws.name}  elapsed={elapsed}s\n"
-                )
-        except Exception:
-            pass
-
     # ── Navigation ─────────────────────────────────────────────────
 
     def action_go_back(self) -> None:
-        """Dismiss the session screen (ctrl+h / backspace)."""
-        self.dismiss(None)
+        """Detach from the session (ctrl+h) — tmux session keeps running."""
+        self.dismiss("detached")
 
     # ── Panel navigation ──────────────────────────────────────────
 

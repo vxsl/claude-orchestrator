@@ -197,6 +197,7 @@ class OrchestratorApp(App):
         self._throbber_timer = None
         self._session_watcher: SessionWatcher | None = None
         self._refresh_pending = False  # debounce flag for _refresh_ws_table
+        self._detached_sessions: set[str] = set()  # tmux session names being watched
 
     def on_key(self, event) -> None:
         if event.key in ("ctrl+j", "ctrl+k"):
@@ -1313,22 +1314,75 @@ class OrchestratorApp(App):
     ) -> None:
         """Push a ClaudeSessionScreen for the given workstream."""
         from claude_session_screen import ClaudeSessionScreen
-        def _on_dismiss(session):
-            if session:
+        screen = ClaudeSessionScreen(
+            ws=ws, store=self.state.store,
+            session_id=session_id, prompt=prompt, cwd=cwd,
+        )
+        # Cancel any existing watcher for this tmux session (re-attach case)
+        self._detached_sessions.discard(screen.tmux_name)
+
+        def _on_dismiss(result):
+            if result == "detached":
+                self._watch_detached_session(
+                    screen.tmux_name, ws, screen._session_id,
+                    screen._jsonl, screen._start_time,
+                )
+            elif result is not None:
                 self.notify(
-                    f"{session.model_short} | {session.message_count} msgs | {session.tokens_display}",
+                    f"{result.model_short} | {result.message_count} msgs | {result.tokens_display}",
                     timeout=5,
                 )
             self._refresh_ws_table()
             if callback:
-                callback(session)
-        self.push_screen(
-            ClaudeSessionScreen(
-                ws=ws, store=self.state.store,
-                session_id=session_id, prompt=prompt, cwd=cwd,
-            ),
-            callback=_on_dismiss,
+                callback(result)
+        self.push_screen(screen, callback=_on_dismiss)
+
+    @work(thread=True)
+    def _watch_detached_session(
+        self, tmux_name: str, ws: Workstream,
+        session_id: str, jsonl_path: str, start_time: float,
+    ) -> None:
+        """Poll until a detached tmux session ends, then run cleanup."""
+        import time as _time
+        from claude_session_screen import (
+            tmux_session_alive, auto_link_session, log_session_exit,
         )
+        self._detached_sessions.add(tmux_name)
+        try:
+            while tmux_name in self._detached_sessions:
+                if not tmux_session_alive(tmux_name):
+                    break
+                _time.sleep(3)
+            else:
+                return  # Watcher cancelled (session re-attached)
+
+            # Session ended — run cleanup
+            auto_link_session(self.state.store, ws.id, session_id)
+            log_session_exit(session_id, ws.name, start_time, exit_type="tmux-bg")
+
+            session = None
+            jp = Path(jsonl_path)
+            if jp.exists():
+                try:
+                    from sessions import parse_session
+                    session = parse_session(jp)
+                except Exception:
+                    pass
+
+            if session:
+                self.call_from_thread(
+                    self.notify,
+                    f"[{ws.name}] done — {session.model_short} | "
+                    f"{session.message_count} msgs | {session.tokens_display}",
+                    timeout=8,
+                )
+            else:
+                self.call_from_thread(
+                    self.notify, f"[{ws.name}] session ended", timeout=5,
+                )
+            self.call_from_thread(self._refresh_ws_table)
+        finally:
+            self._detached_sessions.discard(tmux_name)
 
     def action_spawn(self):
         if self.state.view_mode != ViewMode.WORKSTREAMS:
