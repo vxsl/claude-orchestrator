@@ -361,10 +361,10 @@ def _tool_bar(tool_counts: dict[str, int], width: int = 6) -> str:
         chars = max(1, round(n / total * width))
         chars = min(chars, width - used)
         if chars > 0:
-            parts.append(f"[{color}]{'█' * chars}[/{color}]")
+            parts.append(f"[{color}]{'▄' * chars}[/{color}]")
             used += chars
     if used < width:
-        parts.append(f"[{C_DIM}]{'░' * (width - used)}[/{C_DIM}]")
+        parts.append(f"[{C_DIM}]{'▁' * (width - used)}[/{C_DIM}]")
     return "".join(parts)
 
 
