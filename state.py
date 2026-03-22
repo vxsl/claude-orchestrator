@@ -248,6 +248,10 @@ def search_session_content(
             # Extra bonus when ALL terms match in the title
             if len(matched_terms) == len(all_terms):
                 title_score += 30.0
+            # Exact phrase in title is a very strong signal
+            query_lower = query.strip().lower()
+            if len(query_lower) > 1 and query_lower in title_lower:
+                title_score += 100.0
             # Create a synthetic hit from the title so there's a snippet
             snippet, match_ranges = extract_snippet(title_text, all_terms)
             hits.append(SearchHit(
@@ -274,6 +278,12 @@ def search_session_content(
             freq = msg_lower.count(t)
             score += 10 + (freq - 1) * 2  # base + frequency bonus
 
+        # Exact phrase bonus: the full original query appears verbatim
+        # Only meaningful for multi-word queries (single words already get full credit)
+        query_lower = query.strip().lower()
+        if ' ' in query_lower and query_lower in msg_lower:
+            score += 80  # dominant signal — exact match should win
+
         # Proximity bonus: all terms within 200-char window
         if len(all_terms) > 1:
             first_positions = []
@@ -290,9 +300,9 @@ def search_session_content(
         if msg.role == "user":
             score += 5
 
-        # Recency: mild bonus for later messages
+        # Recency: mild additive bonus for later messages
         if n_messages > 1:
-            score *= 1.0 + 0.1 * (i / (n_messages - 1))
+            score += 3.0 * (i / (n_messages - 1))
 
         snippet, match_ranges = extract_snippet(msg.text, all_terms)
 
@@ -310,7 +320,11 @@ def search_session_content(
 
     hits.sort(key=lambda h: h.score, reverse=True)
     hits = hits[:max_hits]
-    total_score = sum(h.score for h in hits)
+    # Rank by best hit first, with diminishing credit for additional hits.
+    # This prevents chatty sessions from outranking an exact match.
+    best = hits[0].score
+    tail = sum(h.score for h in hits[1:])
+    total_score = best + tail * 0.2
 
     return SessionSearchResult(
         session=session,
