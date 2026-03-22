@@ -518,9 +518,9 @@ class TerminalWidget(Widget, can_focus=True):
         return self._render_line_pyte(y)
 
     def _render_scrollback_line(self, sb_index: int) -> Strip:
-        """Render a line from the scrollback buffer."""
+        """Render a line from the scrollback buffer using raw cell data."""
         backend = self._backend
-        row = backend.scrollback[sb_index]
+        stored_cols = backend.scrollback[sb_index][0] if sb_index < len(backend.scrollback) else 0
         segments: list[Segment] = []
         run_text: list[str] = []
         run_style: Style | None = None
@@ -532,17 +532,19 @@ class TerminalWidget(Widget, can_focus=True):
                 run_text = []
 
         for x in range(self._ncol):
-            if x < len(row):
-                ch, fg, bg, attrs = row[x]
+            cell = backend.get_scrollback_cell(sb_index, x)
+            if cell is not None:
+                attrs = cell.attrs
                 style = Style(
-                    color=fg,
-                    bgcolor=bg,
+                    color=backend.color_to_rich(cell.fg),
+                    bgcolor=backend.color_to_rich(cell.bg),
                     bold=bool(attrs & 0x01),
                     italic=bool(attrs & 0x08),
                     underline=bool((attrs >> 1) & 0x03),
                     strike=bool(attrs & 0x80),
                     reverse=bool(attrs & 0x20),
                 )
+                ch = backend.cell_char(cell)
             else:
                 ch = " "
                 style = Style()

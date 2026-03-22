@@ -125,6 +125,7 @@ _vterm_set_utf8 = _sig("vterm_set_utf8", None, [c_void_p, c_int])
 # Constants
 _DAMAGE_ROW = 1
 _PROP_MOUSE = 8
+_CELL_SIZE = ctypes.sizeof(VTermScreenCell)
 
 
 # ── Backend class ─────────────────────────────────────────────────
@@ -148,10 +149,10 @@ class VTermBackend:
         self.cursor_x = 0
         self.mouse_tracking = False
 
-        # Scrollback buffer — list of rows, each row is a list of
-        # (char_str, fg_hex|None, bg_hex|None, attrs_int) tuples.
-        # Most recent scrollback line is at the END (index -1).
-        self.scrollback: list[list[tuple[str, str | None, str | None, int]]] = []
+        # Scrollback buffer — list of (cols, raw_bytes) tuples.
+        # Each raw_bytes is a memcpy of the VTermScreenCell array from
+        # sb_pushline — no per-cell Python objects. Most recent line at END.
+        self.scrollback: list[tuple[int, bytes]] = []
 
         # Prevent GC of callback pointers
         self._cb_damage = _damage_cb(self._on_damage)
@@ -202,29 +203,12 @@ class VTermBackend:
         return 0
 
     def _on_sb_pushline(self, cols, cells_ptr, user):
-        """Called when a line scrolls off the top of the screen."""
-        cells = ctypes.cast(cells_ptr, POINTER(VTermScreenCell))
-        row: list[tuple[str, str | None, str | None, int]] = []
-        for i in range(cols):
-            cell = cells[i]
-            # Extract character
-            cp = cell.chars[0]
-            if cp == 0:
-                ch = " "
-            else:
-                parts = [chr(cp)]
-                for j in range(1, 6):
-                    cp2 = cell.chars[j]
-                    if cp2 == 0:
-                        break
-                    parts.append(chr(cp2))
-                ch = "".join(parts)
-            # Extract colors — must convert now since screen ref may change
-            fg = self.color_to_rich(cell.fg)
-            bg = self.color_to_rich(cell.bg)
-            row.append((ch, fg, bg, cell.attrs))
-        self.scrollback.append(row)
-        # Cap buffer size
+        """Called when a line scrolls off the top of the screen.
+        Stores a raw memcpy of the VTermScreenCell array — no per-cell
+        Python object creation."""
+        nbytes = cols * _CELL_SIZE
+        raw = ctypes.string_at(cells_ptr, nbytes)
+        self.scrollback.append((cols, raw))
         if len(self.scrollback) > self.MAX_SCROLLBACK:
             del self.scrollback[0]
         return 1
@@ -233,24 +217,17 @@ class VTermBackend:
         """Called when libvterm wants to restore a scrollback line."""
         if not self.scrollback:
             return 0
-        row = self.scrollback.pop()
-        cells = ctypes.cast(cells_ptr, POINTER(VTermScreenCell))
-        for i in range(cols):
-            if i < len(row):
-                ch, _fg, _bg, _attrs = row[i]
-                cp = ord(ch[0]) if ch else 0x20
-                cells[i].chars[0] = c_uint32(cp)
-                for j in range(1, 6):
-                    if j < len(ch):
-                        cells[i].chars[j] = c_uint32(ord(ch[j]))
-                    else:
-                        cells[i].chars[j] = c_uint32(0)
-                cells[i].width = 1
-            else:
-                cells[i].chars[0] = c_uint32(0x20)
-                for j in range(1, 6):
-                    cells[i].chars[j] = c_uint32(0)
-                cells[i].width = 1
+        stored_cols, raw = self.scrollback.pop()
+        # Copy back as many cells as we can
+        copy_bytes = min(stored_cols, cols) * _CELL_SIZE
+        ctypes.memmove(cells_ptr, raw, copy_bytes)
+        # Zero-fill any extra columns if screen is now wider
+        if cols > stored_cols:
+            extra_offset = stored_cols * _CELL_SIZE
+            extra_bytes = (cols - stored_cols) * _CELL_SIZE
+            ctypes.memset(
+                ctypes.cast(cells_ptr, c_void_p).value + extra_offset,
+                0, extra_bytes)
         return 1
 
     # ── Public API ──
@@ -276,6 +253,19 @@ class VTermBackend:
         self._pos.col = col
         _vterm_screen_get_cell(
             self._screen, self._pos, ctypes.byref(self._cell))
+        return self._cell
+
+    def get_scrollback_cell(self, sb_index: int, col: int) -> VTermScreenCell | None:
+        """Read a cell from a scrollback line. Returns the internal reusable
+        struct (same as get_cell) or None if out of bounds."""
+        if sb_index < 0 or sb_index >= len(self.scrollback):
+            return None
+        stored_cols, raw = self.scrollback[sb_index]
+        if col >= stored_cols:
+            return None
+        # Point _cell at the right offset within the raw bytes
+        offset = col * _CELL_SIZE
+        ctypes.memmove(ctypes.byref(self._cell), raw[offset:offset + _CELL_SIZE], _CELL_SIZE)
         return self._cell
 
     def cell_char(self, cell: VTermScreenCell) -> str:
