@@ -349,6 +349,7 @@ class TodoScreen(_VimOptionListMixin, ModalScreen[None]):
         self._active_pane: str = "active"
         self._active_items: list[TodoItem] = []
         self._archived_items: list[TodoItem] = []
+        self._rebuilding: bool = False
 
     @property
     def _app_state(self):
@@ -401,6 +402,13 @@ class TodoScreen(_VimOptionListMixin, ModalScreen[None]):
 
     def _rebuild(self):
         """Reload data and rebuild both panes."""
+        self._rebuilding = True
+        try:
+            self._rebuild_inner()
+        finally:
+            self._rebuilding = False
+
+    def _rebuild_inner(self):
         from state import AppState
         self.ws = self.store.get(self.ws.id) or self.ws
         self._active_items = AppState.active_todos(self.ws)
@@ -503,6 +511,8 @@ class TodoScreen(_VimOptionListMixin, ModalScreen[None]):
         return None
 
     def on_option_list_option_highlighted(self, event: OptionList.OptionHighlighted):
+        if self._rebuilding:
+            return
         # Sync pane state based on which list emitted the event
         if event.option_list.id == "todo-archived":
             if self._active_pane != "archived":
