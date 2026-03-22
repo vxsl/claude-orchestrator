@@ -469,10 +469,10 @@ class TestQuickNote:
             ws_before = pilot.app._selected_ws()
             assert len(ws_before.todos) == 0
             await pilot.press("n")
-            # Type a note
+            # Type a note into the TextArea
             for char in "test note":
                 await pilot.press(char)
-            await pilot.press("enter")
+            await pilot.press("ctrl+s")
             ws_after = pilot.app.store.get(ws_before.id)
             assert any(t.text == "test note" for t in ws_after.todos)
 
@@ -1537,7 +1537,7 @@ class TestModalReturnRefresh:
             await pilot.press("n")
             for char in "test task from modal":
                 await pilot.press(char)
-            await pilot.press("enter")
+            await pilot.press("ctrl+s")
             # Workstream should have the new todo
             ws_after = pilot.app.store.get(ws_before.id)
             assert len(ws_after.todos) == initial_todos + 1
@@ -2100,7 +2100,7 @@ class TestOnReturnFromModal:
             assert isinstance(pilot.app.screen, QuickNoteScreen)
             for char in "test note in detail":
                 await pilot.press(char)
-            await pilot.press("enter")
+            await pilot.press("ctrl+s")
             # Back to detail
             assert isinstance(pilot.app.screen, DetailScreen)
             # Dismiss detail
@@ -2144,7 +2144,7 @@ class TestTodoScreen:
             await pilot.press("n")
             for char in "test todo":
                 await pilot.press(char)
-            await pilot.press("enter")
+            await pilot.press("ctrl+s")
             # Now open detail and then todos
             await pilot.press("enter")
             from screens import DetailScreen, TodoScreen

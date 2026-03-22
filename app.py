@@ -932,6 +932,51 @@ class OrchestratorApp(App):
         self.state.discovered_ws = discovered
         self._refresh_ws_table_debounced()
 
+    def _inject_session(self, session: ClaudeSession) -> None:
+        """Inject a session into state immediately so DetailScreen updates without polling."""
+        # 1. Inject into flat sessions list
+        existing = {s.session_id for s in self.state.sessions}
+        if session.session_id in existing:
+            for i, s in enumerate(self.state.sessions):
+                if s.session_id == session.session_id:
+                    self.state.sessions[i] = session
+                    break
+        else:
+            self.state.sessions.insert(0, session)
+
+        # 2. Inject into matching thread (sessions_for_ws uses threads primarily)
+        sp = session.project_path.rstrip("/")
+        injected = False
+        for t in self.state.threads:
+            if t.project_path.rstrip("/") == sp:
+                t_sids = {s.session_id for s in t.sessions}
+                if session.session_id not in t_sids:
+                    t.sessions.insert(0, session)
+                else:
+                    for i, s in enumerate(t.sessions):
+                        if s.session_id == session.session_id:
+                            t.sessions[i] = session
+                            break
+                injected = True
+                break
+
+        # 3. If no matching thread, create a minimal one so the session is discoverable
+        if not injected and sp:
+            new_thread = Thread(
+                thread_id=session.session_id,
+                name=sp.rsplit("/", 1)[-1],
+                project_path=sp,
+                sessions=[session],
+            )
+            self.state.threads.append(new_thread)
+
+        self.state.invalidate_caches()
+        for screen in self.screen_stack:
+            screen.post_message(SessionsChanged())
+
+        # 4. Trigger background poll for full consistency (proper thread naming, etc.)
+        self._do_poll_sessions()
+
     # ── Primary action (Enter) ──
 
     def action_select_item(self):
@@ -1169,11 +1214,23 @@ class OrchestratorApp(App):
         def _on_dismiss(result):
             if isinstance(result, dict) and result.get("detached"):
                 self._start_pty_drain(result)
-            elif result is not None:
+                # Parse the JSONL so we can inject the session immediately
+                jsonl = result.get("jsonl")
+                if jsonl:
+                    from sessions import parse_session
+                    from pathlib import Path
+                    try:
+                        s = parse_session(Path(jsonl))
+                        if s:
+                            self._inject_session(s)
+                    except Exception:
+                        pass
+            elif isinstance(result, ClaudeSession):
                 self.notify(
                     f"{result.model_short} | {result.message_count} msgs | {result.tokens_display}",
                     timeout=5,
                 )
+                self._inject_session(result)
             self._refresh_ws_table()
             if callback:
                 callback(result)

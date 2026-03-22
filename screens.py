@@ -176,6 +176,7 @@ class HelpScreen(FuzzyPickerScreen):
 
 class QuickNoteScreen(ModalScreen[str | None]):
     BINDINGS = [
+        Binding("ctrl+s", "save", "^S save", priority=True),
         Binding("backspace,ctrl+h", "go_back", "^H back"),
         Binding("escape", "go_back", "Esc back", priority=True),
     ]
@@ -183,14 +184,18 @@ class QuickNoteScreen(ModalScreen[str | None]):
     def action_go_back(self):
         self.dismiss(None)
 
+    def action_save(self):
+        text = self.query_one("#qnote-area", TextArea).text.strip()
+        self.dismiss(text or None)
+
     DEFAULT_CSS = f"""
     QuickNoteScreen {{ align: center middle; }}
     #qnote-container {{
-        width: 70; height: 9;
+        width: 72; height: 14;
         padding: 1 2; background: {BG_BASE}; border: round $primary 30%;
     }}
     #qnote-title {{ text-style: bold; color: {C_PURPLE}; padding-bottom: 1; }}
-    #qnote-input {{ height: 3; }}
+    #qnote-area {{ height: 7; }}
     #qnote-hint {{ text-align: center; color: {C_DIM}; padding-top: 1; }}
     """
 
@@ -200,19 +205,12 @@ class QuickNoteScreen(ModalScreen[str | None]):
 
     def compose(self) -> ComposeResult:
         with Vertical(id="qnote-container"):
-            yield Label(f"Note: {self.ws.name}", id="qnote-title")
-            yield Input(placeholder="type a note...", id="qnote-input")
-            yield Static(f"[{C_DIM}]Enter[/{C_DIM}] save  [{C_DIM}]^H[/{C_DIM}] back", id="qnote-hint")
+            yield Label(f"Todo: {self.ws.name}", id="qnote-title")
+            yield TextArea(id="qnote-area")
+            yield Static(f"[{C_DIM}]^S[/{C_DIM}] save  [{C_DIM}]Esc[/{C_DIM}] cancel", id="qnote-hint")
 
     def on_mount(self):
-        self.query_one("#qnote-input", Input).focus()
-
-    @on(Input.Submitted, "#qnote-input")
-    def on_submit(self, event: Input.Submitted):
-        self.dismiss(event.value.strip() or None)
-
-    def action_cancel(self):
-        self.dismiss(None)
+        self.query_one("#qnote-area", TextArea).focus()
 
 
 
