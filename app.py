@@ -32,7 +32,7 @@ from models import (
     STATUS_ICONS, _relative_time,
 )
 from sessions import ClaudeSession
-from threads import Thread, ThreadActivity, session_activity, load_last_seen, mark_thread_seen, discover_threads
+from threads import Thread, ThreadActivity, session_activity, mark_thread_seen, discover_threads
 from thread_namer import apply_cached_names, name_uncached_threads, title_sessions, get_session_title
 from watcher import SessionWatcher
 from workstream_synthesizer import (
@@ -196,6 +196,7 @@ class OrchestratorApp(App):
         self.state = AppState(Store())
         self._throbber_timer = None
         self._session_watcher: SessionWatcher | None = None
+        self._refresh_pending = False  # debounce flag for _refresh_ws_table
 
     def on_key(self, event) -> None:
         if event.key in ("ctrl+j", "ctrl+k"):
@@ -318,7 +319,7 @@ class OrchestratorApp(App):
         archived_table.add_columns("", "Name", "Worktree", "Sess", "Category", "Updated")
         archived_table.display = False
 
-        self._refresh_ws_table()
+        self._refresh_ws_table(immediate=True)
         self._load_sessions()
         self._refresh_archived_table()
         self._update_all_bars()
@@ -333,10 +334,10 @@ class OrchestratorApp(App):
             debounce=1.0,
         )
         self._session_watcher.start()
-        self.set_interval(10, self._poll_sessions)
+        self.set_interval(30, self._poll_sessions)
 
-        self._throbber_timer = self.set_interval(0.1, self._tick_throbber)
-        self.set_interval(3, self._refresh_session_liveness)
+        self._throbber_timer = self.set_interval(0.5, self._tick_throbber)
+        self.set_interval(10, self._refresh_session_liveness)
 
         ws_table.focus()
 
@@ -462,11 +463,18 @@ class OrchestratorApp(App):
         pane.display = self.state.preview_visible
 
     def _refresh_session_liveness(self):
+        self._do_refresh_liveness()
+
+    @work(thread=True, exclusive=True, group="liveness")
+    def _do_refresh_liveness(self):
         changed = self.state.refresh_liveness()
         if changed:
-            self._refresh_ws_table()
-            if self.state.view_mode == ViewMode.SESSIONS:
-                self._refresh_sessions_table()
+            self.call_from_thread(self._apply_liveness_change)
+
+    def _apply_liveness_change(self):
+        self._refresh_ws_table()
+        if self.state.view_mode == ViewMode.SESSIONS:
+            self._refresh_sessions_table()
 
     def _tick_throbber(self):
         self.state.throbber_frame += 1
@@ -576,7 +584,7 @@ class OrchestratorApp(App):
         content.update("\n".join(lines))
 
         self.state.preview_sessions = ws_sessions
-        self.state.last_seen_cache = load_last_seen()
+        self.state.last_seen_cache = self.state.get_last_seen()
         if ws_sessions:
             olist.display = True
             self._refresh_preview_sessions()
@@ -763,7 +771,20 @@ class OrchestratorApp(App):
 
     # ── Workstreams table ──
 
-    def _refresh_ws_table(self):
+    def _refresh_ws_table(self, immediate: bool = False):
+        """Schedule a debounced table refresh — coalesces rapid-fire calls."""
+        if immediate:
+            self._refresh_pending = False
+            self._do_refresh_ws_table()
+            return
+        if self._refresh_pending:
+            return
+        self._refresh_pending = True
+        self.set_timer(0.05, self._do_refresh_ws_table)
+
+    def _do_refresh_ws_table(self):
+        """Actually rebuild the workstreams table (called via debounce timer)."""
+        self._refresh_pending = False
         try:
             table = self.query_one("#ws-table", DataTable)
         except Exception:
@@ -772,21 +793,22 @@ class OrchestratorApp(App):
         table.clear()
 
         items = self.state.get_unified_items()
-        last_seen = load_last_seen()
+        last_seen = self.state.get_last_seen()
+
+        _ACTIVITY_ICONS = {
+            ThreadActivity.THINKING: ("◉", C_CYAN),
+            ThreadActivity.AWAITING_INPUT: ("◉", C_YELLOW),
+            ThreadActivity.RESPONSE_FRESH: ("●", C_GREEN),
+            ThreadActivity.RESPONSE_READY: ("●", C_ORANGE),
+            ThreadActivity.IDLE: ("·", C_DIM),
+        }
 
         for ws in items:
             is_discovered = ws.origin == Origin.DISCOVERED
+            ws_sessions = self.state.sessions_for_ws(ws)
 
             if is_discovered:
-                ws_sessions = self.state.sessions_for_ws(ws)
                 best = _best_activity(ws_sessions, last_seen)
-                _ACTIVITY_ICONS = {
-                    ThreadActivity.THINKING: ("◉", C_CYAN),
-                    ThreadActivity.AWAITING_INPUT: ("◉", C_YELLOW),
-                    ThreadActivity.RESPONSE_FRESH: ("●", C_GREEN),
-                    ThreadActivity.RESPONSE_READY: ("●", C_ORANGE),
-                    ThreadActivity.IDLE: ("·", C_DIM),
-                }
                 icon, color = _ACTIVITY_ICONS[best]
                 status_cell = Text(icon, style=color)
             else:
@@ -795,7 +817,6 @@ class OrchestratorApp(App):
             indicators = ""
             if not is_discovered:
                 indicators = _ws_indicators(ws, tmux_check=self.state.ws_has_tmux)
-            ws_sessions = self.state.sessions_for_ws(ws)
 
             name_str = _rich_escape(ws.name)
             if indicators:

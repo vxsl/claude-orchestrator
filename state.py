@@ -375,6 +375,9 @@ class AppState:
         self.throbber_frame: int = 0
         self.preview_sessions: list[ClaudeSession] = []
         self.last_seen_cache: dict[str, str] = {}
+        self._sessions_for_ws_cache: dict[str, list[ClaudeSession]] = {}
+        self._last_seen_valid: bool = False
+        self._session_mtimes: dict[str, float] = {}  # session_id -> last known mtime
         self.infer_repo_paths()
 
     # ── View navigation ──
@@ -433,6 +436,13 @@ class AppState:
 
         return self.store.sorted(streams, self.sort_mode)
 
+    def get_last_seen(self) -> dict[str, str]:
+        """Return cached last-seen data, refreshing from disk only when invalidated."""
+        if not self._last_seen_valid:
+            self.last_seen_cache = load_last_seen()
+            self._last_seen_valid = True
+        return self.last_seen_cache
+
     def get_unified_items(self) -> list[Workstream]:
         """Build unified list: manual workstreams + AI-discovered workstreams."""
         manual = self.get_filtered_streams()
@@ -457,7 +467,7 @@ class AppState:
             discovered = [w for w in discovered if w.category == Category.PERSONAL]
 
         # Sort discovered: unread responses float to top, then by last user message time
-        last_seen = load_last_seen()
+        last_seen = self.get_last_seen()
 
         def _has_unread(ws: Workstream) -> bool:
             sessions = self.sessions_for_ws(ws)
@@ -593,6 +603,10 @@ class AppState:
         """Find sessions for a workstream via thread_ids or directory matching."""
         from actions import find_sessions_for_ws
 
+        cache_key = f"{ws.id}:{include_archived_sessions}"
+        if cache_key in self._sessions_for_ws_cache:
+            return self._sessions_for_ws_cache[cache_key]
+
         hidden_sids = set(ws.archived_sessions) if not include_archived_sessions else set()
 
         effective_tids = ws.thread_ids
@@ -624,9 +638,12 @@ class AppState:
                             sessions.append(s)
                             seen.add(s.session_id)
             sessions.sort(key=lambda s: s.last_activity or "", reverse=True)
+            self._sessions_for_ws_cache[cache_key] = sessions
             return sessions
 
-        return find_sessions_for_ws(ws, self.sessions)
+        result = find_sessions_for_ws(ws, self.sessions)
+        self._sessions_for_ws_cache[cache_key] = result
+        return result
 
     def find_ws_for_session(self, session: ClaudeSession) -> Workstream | None:
         """Reverse-lookup: find a workstream that owns this session."""
@@ -831,7 +848,13 @@ class AppState:
         self.sessions = sessions
         self.threads = threads
         self.discovered_ws = discovered
+        self.invalidate_caches()
         self.infer_repo_paths()
+
+    def invalidate_caches(self):
+        """Clear derived-data caches after session/thread updates."""
+        self._sessions_for_ws_cache.clear()
+        self._last_seen_valid = False
 
     def refresh_liveness(self) -> bool:
         """Update is_live flags and tail-read active sessions. Returns True if anything changed."""
@@ -849,13 +872,30 @@ class AppState:
         for s in self.sessions:
             if s.session_id in active_ids and s.session_id not in seen:
                 seen.add(s.session_id)
+                # Skip tail read if file hasn't changed
+                try:
+                    mtime = os.path.getmtime(s.jsonl_path)
+                except OSError:
+                    continue
+                if mtime == self._session_mtimes.get(s.session_id):
+                    continue
+                self._session_mtimes[s.session_id] = mtime
                 if refresh_session_tail(s):
                     changed = True
         for s in self.preview_sessions:
             if s.session_id in active_ids and s.session_id not in seen:
                 seen.add(s.session_id)
+                try:
+                    mtime = os.path.getmtime(s.jsonl_path)
+                except OSError:
+                    continue
+                if mtime == self._session_mtimes.get(s.session_id):
+                    continue
+                self._session_mtimes[s.session_id] = mtime
                 refresh_session_tail(s)
 
+        if changed:
+            self.invalidate_caches()
         return changed
 
     # ── Tmux ──
