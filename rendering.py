@@ -663,11 +663,13 @@ def _render_notified_session_option(
     ws_repo_path: str = "", seen: bool = False,
     line_width: int = 0,
 ) -> str:
-    """Render a notified session: title row + notification text only.
+    """Render a session like normal but replace the snippet line with notification.
 
-    Layout — 2 lines (no metadata):
+    Layout — 4 lines (same height as _render_session_option):
       {icon} {title}                                     {badge}
-         {notif_icon} {notification_message}              {notif_age}
+         {model}  {msgs}  {tokens}  {duration}  {age}    {sid}
+         ▏▏▏▏▏░░░  app.py sessions.py +4                {project}
+         {notification_message}                           {notif_age}
     """
     INDENT = "    "
     if line_width > 0:
@@ -684,8 +686,14 @@ def _render_notified_session_option(
     else:
         badge = _activity_badge(act, seen=seen)
     badge_w = _BADGE_WIDTHS.get(act, 0)
+    model = _short_model(s.model)
     title_raw = _session_title(s)[:title_width]
     title_esc = _rich_escape(title_raw)
+    sid = s.session_id[:8]
+    tokens_plain = s.tokens_display
+    msgs_str = f"{s.message_count}↑{s.assistant_message_count}↓"
+    duration = s.duration_display
+    age_str = s.age
 
     # Title always bright for notified sessions
     title_fmt = f"[{C_LIGHT}]{title_esc}[/{C_LIGHT}]"
@@ -698,7 +706,44 @@ def _render_notified_session_option(
     else:
         line1 = f" {icon} {title_fmt}"
 
-    # Line 2: notification message
+    # Line 2: metadata (same as normal)
+    model_part = "" if model == "opus" else f"[{C_BLUE}]{model:<8}[/{C_BLUE}]"
+    tokens_fmt = _colored_tokens(s)
+    tok_pad = " " * max(1, 8 - len(tokens_plain))
+    dur_str = f"{duration:<8}" if duration else ""
+    dur_len = 8 if duration else 0
+    model_len = 0 if model == "opus" else 8
+    meta_left_len = 4 + model_len + 10 + 8 + dur_len + len(age_str)
+    sid_gap = max(2, LINE_WIDTH - meta_left_len - 8)
+    line2 = (
+        f"{INDENT}{model_part}[{C_DIM}]{msgs_str:<10}[/{C_DIM}]"
+        f"{tokens_fmt}"
+        f"[{C_DIM}]{tok_pad}"
+        f"{dur_str}[/{C_DIM}]"
+        f"[{C_MID}]{age_str}[/{C_MID}]"
+        f"{' ' * sid_gap}[{C_FAINT}]{sid}[/{C_FAINT}]"
+    )
+
+    # Line 3: tool bar + file touchpoints (same as normal)
+    bar = _tool_bar(s.tool_counts)
+    files = _file_touchpoints(s.files_mutated)
+    proj_label = ""
+    if ws_repo_path and s.project_path and s.project_path.rstrip("/") != ws_repo_path.rstrip("/"):
+        proj_label = f"[{C_FAINT}]{Path(s.project_path).name}[/{C_FAINT}]"
+
+    left = "  ".join(p for p in (bar, files) if p)
+    if not left:
+        left = f"[{C_FAINT}]{'─' * 6}[/{C_FAINT}]"
+    if proj_label:
+        import re
+        left_plain = re.sub(r"\[/?[^\]]*\]", "", left)
+        proj_plain = re.sub(r"\[/?[^\]]*\]", "", proj_label)
+        gap = max(2, LINE_WIDTH - 4 - len(left_plain) - len(proj_plain))
+        line3 = f"{INDENT}{left}{' ' * gap}{proj_label}" if left else f"{INDENT}{' ' * (LINE_WIDTH - 4 - len(proj_plain))}{proj_label}"
+    else:
+        line3 = f"{INDENT}{left}"
+
+    # Line 4: notification message (replaces snippet — no dot icon)
     freshness = notif.freshness
     if notif.dismissed:
         notif_color = C_DIM
@@ -709,17 +754,16 @@ def _render_notified_session_option(
     else:
         notif_color = C_DIM
 
-    notif_icon = "●" if freshness in ("fresh", "recent") and not notif.dismissed else "○"
     notif_age = _relative_time(notif.timestamp)
     msg_raw = notif.message.replace("\n", " ").strip()
-    max_msg = LINE_WIDTH - 4 - 2 - len(notif_age) - 2  # indent + icon+space + age + gap
+    max_msg = LINE_WIDTH - 4 - len(notif_age) - 2
     if len(msg_raw) > max_msg:
         msg_raw = msg_raw[:max_msg - 1] + "…"
     msg_esc = _rich_escape(msg_raw)
-    age_gap = max(2, LINE_WIDTH - 4 - 2 - len(msg_raw) - len(notif_age))
-    line2 = f"{INDENT}[{notif_color}]{notif_icon} {msg_esc}[/{notif_color}]{' ' * age_gap}[{C_DIM}]{notif_age}[/{C_DIM}]"
+    age_gap = max(2, LINE_WIDTH - 4 - len(msg_raw) - len(notif_age))
+    line4 = f"{INDENT}[{notif_color}]{msg_esc}[/{notif_color}]{' ' * age_gap}[{C_DIM}]{notif_age}[/{C_DIM}]"
 
-    return "\n".join([line1, line2])
+    return "\n".join([line1, line2, line3, line4])
 
 
 # ─── Quiet session separator ──────────────────────────────────────
