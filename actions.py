@@ -74,36 +74,6 @@ def find_tmux_window_for_session(session_id: str) -> str | None:
     return None
 
 
-def capture_session_pane(session_id: str) -> str | None:
-    """Capture the visible content of a live session's main tmux pane.
-
-    Returns the pane text, or None if the session has no live tmux window.
-    """
-    window_id = find_tmux_window_for_session(session_id)
-    if not window_id:
-        return None
-    try:
-        # Get the @orch_main_pane option from the window
-        result = subprocess.run(
-            ["tmux", "display-message", "-t", window_id, "-p", "#{@orch_main_pane}"],
-            capture_output=True, text=True, timeout=3,
-        )
-        pane_id = result.stdout.strip()
-        if not pane_id or result.returncode != 0:
-            return None
-        # Capture the pane content (plain text, no ANSI escapes)
-        result = subprocess.run(
-            ["tmux", "capture-pane", "-t", pane_id, "-p"],
-            capture_output=True, text=True, timeout=3,
-        )
-        if result.returncode != 0:
-            return None
-        return result.stdout
-    except Exception as e:
-        log.debug("capture_session_pane: %s", e)
-        return None
-
-
 def switch_to_tmux_window(window_id: str) -> bool:
     """Switch to an existing tmux window by ID.
 

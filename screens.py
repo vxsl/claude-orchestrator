@@ -55,7 +55,6 @@ from rendering import (
 )
 from actions import (
     launch_orch_claude, ws_directories, resume_session_now, open_link,
-    capture_session_pane,
 )
 from notifications import Notification, dismiss_notification, dismiss_all_for_dirs
 from state import fuzzy_match, content_search, SessionSearchResult
@@ -1710,27 +1709,17 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         self._peek_session_id = session.session_id
 
         title = _session_title(session)
-        # Build content
-        pane_text = capture_session_pane(session.session_id)
-        if pane_text is not None:
-            header = (
-                f"[bold {C_BLUE}]{_rich_escape(title)}[/bold {C_BLUE}]  "
-                f"[{C_DIM}]{session.age} · {_short_model(session.model)}[/{C_DIM}]  "
-                f"[bold {C_GREEN}]LIVE[/bold {C_GREEN}]"
-            )
-            body = _rich_escape(pane_text)
+        header = (
+            f"[bold {C_BLUE}]{_rich_escape(title)}[/bold {C_BLUE}]  "
+            f"[{C_DIM}]{session.age} · {_short_model(session.model)}[/{C_DIM}]"
+        )
+        from sessions import extract_session_content
+        if session.session_id in self._content_cache:
+            messages = self._content_cache[session.session_id]
         else:
-            header = (
-                f"[bold {C_BLUE}]{_rich_escape(title)}[/bold {C_BLUE}]  "
-                f"[{C_DIM}]{session.age} · {_short_model(session.model)}[/{C_DIM}]"
-            )
-            from sessions import extract_session_content
-            if session.session_id in self._content_cache:
-                messages = self._content_cache[session.session_id]
-            else:
-                messages = extract_session_content(session.jsonl_path) if session.jsonl_path else []
-                self._content_cache[session.session_id] = messages
-            body = self._render_peek_messages(messages)
+            messages = extract_session_content(session.jsonl_path) if session.jsonl_path else []
+            self._content_cache[session.session_id] = messages
+        body = self._render_peek_messages(messages)
 
         # Populate, then swap visibility
         content = self.query_one("#detail-peek-content", Static)
@@ -2343,61 +2332,121 @@ class SessionPickerScreen(_VimOptionListMixin, ModalScreen[ClaudeSession | None]
 
 # ─── Repo Picker Screen ──────────────────────────────────────────────
 
-class RepoPickerScreen(_VimOptionListMixin, ModalScreen[str | None]):
-    """Pick a repo from known project paths."""
+class RepoPickerScreen(ModalScreen[str | None]):
+    """fzf-style fuzzy repo picker with full home-dir scanning."""
 
-    _option_list_id = "repopick-list"
     BINDINGS = [
         Binding("escape", "cancel", "Cancel"),
-        Binding("backspace,ctrl+h", "go_back", "^H back"),
         Binding("enter", "confirm", "Select"),
-    ] + _VimOptionListMixin.VIM_BINDINGS
-
-    def action_go_back(self):
-        self.dismiss(None)
+    ]
 
     DEFAULT_CSS = f"""
     RepoPickerScreen {{ align: center middle; }}
     #repopick-container {{
-        width: 70; height: auto; max-height: 80%;
+        width: 80; height: auto; max-height: 80%;
         padding: 1 2; background: {BG_BASE}; border: round $primary 30%;
     }}
-    #repopick-title {{ text-style: bold; color: {C_PURPLE}; padding-bottom: 1; }}
-    #repopick-list {{ height: auto; max-height: 20; }}
+    #repopick-input {{
+        dock: top; margin-bottom: 1;
+    }}
+    #repopick-list {{ height: auto; max-height: 24; }}
     #repopick-list > .option-list--option-highlighted {{
         background: $primary 15%;
     }}
     #repopick-hint {{ text-align: center; color: {C_DIM}; padding-top: 1; }}
     """
 
-    def __init__(self, repos: list[str]):
+    def __init__(self, repos: list[str], ws_counts: dict[str, int]):
         super().__init__()
-        self.repos = repos
+        self.all_repos = repos
+        self.ws_counts = ws_counts  # repo_path -> number of workstreams
+        self._filtered: list[str] = []  # current filtered list shown
 
     def compose(self) -> ComposeResult:
         with Vertical(id="repopick-container"):
-            yield Label("Select repo:", id="repopick-title")
-            options = []
-            for repo in self.repos:
-                name = Path(repo).name
-                short = repo.replace(str(Path.home()), "~")
-                options.append(Option(
-                    f"[bold]{name}[/bold]  [{C_DIM}]{short}[/{C_DIM}]",
-                    id=repo,
-                ))
-            if not options:
-                options.append(Option("(no repos found)", id="none", disabled=True))
-            yield OptionList(*options, id="repopick-list")
-            yield Static(
-                f"[{C_DIM}]Enter[/{C_DIM}] select  [{C_DIM}]^H[/{C_DIM}] back",
-                id="repopick-hint",
+            yield Input(placeholder="Type to filter repos…", id="repopick-input")
+            yield OptionList(id="repopick-list")
+            yield Static("", id="repopick-hint")
+        self._rebuild_list("")
+
+    def on_mount(self) -> None:
+        self.query_one("#repopick-input", Input).focus()
+
+    def _rebuild_list(self, query: str) -> None:
+        """Recompute filtered repos and repopulate the OptionList."""
+        home_str = str(Path.home())
+
+        if query:
+            scored: list[tuple[int, str]] = []
+            for repo in self.all_repos:
+                basename = Path(repo).name
+                # Match against both basename and full path
+                s1 = fuzzy_match(query, basename)
+                s2 = fuzzy_match(query, repo)
+                best = max(s for s in (s1, s2) if s is not None) if (s1 is not None or s2 is not None) else None
+                if best is not None:
+                    scored.append((best, repo))
+            scored.sort(key=lambda t: -t[0])
+            self._filtered = [repo for _, repo in scored]
+        else:
+            # No query: repos with workstreams first, then alpha
+            with_ws = sorted(
+                (r for r in self.all_repos if self.ws_counts.get(r, 0) > 0),
+                key=lambda r: Path(r).name.lower(),
             )
+            without_ws = sorted(
+                (r for r in self.all_repos if self.ws_counts.get(r, 0) == 0),
+                key=lambda r: Path(r).name.lower(),
+            )
+            self._filtered = with_ws + without_ws
+
+        ol = self.query_one("#repopick-list", OptionList)
+        ol.clear_options()
+        for repo in self._filtered:
+            name = Path(repo).name
+            short = repo.replace(home_str, "~")
+            n_ws = self.ws_counts.get(repo, 0)
+            if n_ws > 0:
+                label = f"[bold]{name}[/bold]  [dim]({n_ws} ws)[/dim]  [{C_DIM}]{short}[/{C_DIM}]"
+            else:
+                label = f"[{C_DIM}]{name}  {short}[/{C_DIM}]"
+            ol.add_option(Option(label, id=repo))
+
+        if not self._filtered:
+            ol.add_option(Option(f"[{C_DIM}](no matches)[/{C_DIM}]", id="__none__", disabled=True))
+
+        # Status line
+        n_with = sum(1 for r in self._filtered if self.ws_counts.get(r, 0) > 0)
+        hint = self.query_one("#repopick-hint", Static)
+        hint.update(
+            f"[{C_DIM}]{len(self._filtered)} repos · {n_with} with workstreams  "
+            f"  Enter select  Esc cancel[/{C_DIM}]"
+        )
+
+    @on(Input.Changed, "#repopick-input")
+    def _on_filter_changed(self, event: Input.Changed) -> None:
+        self._rebuild_list(event.value)
+
+    def _on_key(self, event) -> None:
+        """Route navigation keys to the option list while input stays focused."""
+        ol = self.query_one("#repopick-list", OptionList)
+        key = event.key
+        if key in ("down", "ctrl+n"):
+            if ol.highlighted is not None and ol.highlighted < ol.option_count - 1:
+                ol.action_cursor_down()
+            event.prevent_default()
+            event.stop()
+        elif key in ("up", "ctrl+p"):
+            if ol.highlighted is not None and ol.highlighted > 0:
+                ol.action_cursor_up()
+            event.prevent_default()
+            event.stop()
 
     def action_confirm(self):
-        option_list = self.query_one("#repopick-list", OptionList)
-        idx = option_list.highlighted
-        if idx is not None and idx < len(self.repos):
-            self.dismiss(self.repos[idx])
+        ol = self.query_one("#repopick-list", OptionList)
+        idx = ol.highlighted
+        if idx is not None and idx < len(self._filtered):
+            self.dismiss(self._filtered[idx])
             return
         self.app.notify("No repo selected", severity="error", timeout=2)
 
