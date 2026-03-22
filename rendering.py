@@ -395,8 +395,10 @@ def _render_session_option(
     duration = s.duration_display
     age_str = s.age
 
-    # Title styling: idle sessions are dimmed, everything else is normal weight.
-    if act == ThreadActivity.IDLE:
+    # Title styling: live sessions bold, idle dimmed, others normal.
+    if act == ThreadActivity.AWAITING_INPUT:
+        title_fmt = f"[bold {C_LIGHT}]{title_esc}[/bold {C_LIGHT}]"
+    elif act == ThreadActivity.IDLE:
         title_fmt = f"[{C_DIM}]{title_esc}[/{C_DIM}]"
     else:
         title_fmt = f"[{C_LIGHT}]{title_esc}[/{C_LIGHT}]"
