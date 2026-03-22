@@ -683,11 +683,11 @@ class TerminalWidget(Widget, can_focus=True):
 
         key = event.key
 
-        # Scroll bindings (shift+pageup/down, shift+up/down)
-        if key == "shift+pageup":
+        # Vim-style scroll bindings
+        if key == "ctrl+u" or key == "shift+pageup":
             self._scroll_up(self._nrow // 2)
             return
-        if key == "shift+pagedown":
+        if key == "ctrl+d" or key == "shift+pagedown":
             self._scroll_down(self._nrow // 2)
             return
         if key == "shift+up":
