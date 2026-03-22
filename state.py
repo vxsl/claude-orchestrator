@@ -362,10 +362,10 @@ def content_search(
             results.append(result)
 
     # Add a recency bonus so newer sessions rank higher when scores are similar.
-    # Up to 15% of the best score is awarded based on relative recency.
+    # Up to 35% of the best score is awarded based on relative recency.
     if len(results) > 1:
         best_total = max(r.total_score for r in results)
-        max_bonus = best_total * 0.15
+        max_bonus = best_total * 0.35
         # Parse timestamps into epoch seconds for interpolation
         epochs: list[float | None] = []
         for r in results:
