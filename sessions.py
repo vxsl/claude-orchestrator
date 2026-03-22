@@ -160,6 +160,21 @@ def _extract_commit_from_result(data: dict) -> tuple[str, str]:
     return "", ""
 
 
+def _is_human_turn(data: dict) -> bool:
+    """True if this user message contains a real human prompt (text block), not just tool_results."""
+    msg = data.get("message", {})
+    content = msg.get("content", "")
+    if isinstance(content, str):
+        return bool(content.strip())
+    if isinstance(content, list):
+        for block in content:
+            if isinstance(block, dict) and block.get("type") == "text":
+                text = block.get("text", "")
+                if text and "[Request interrupted" not in text:
+                    return True
+    return False
+
+
 def _is_interrupt_marker(data: dict) -> bool:
     """Return True if this user message is a '[Request interrupted…]' marker."""
     msg = data.get("message", {})
@@ -415,6 +430,10 @@ def parse_session(jsonl_path: Path) -> Optional[ClaudeSession]:
                     session.turn_complete = False  # new message resets turn completion
                     if msg_type == "user" and ts:
                         session.last_user_message_at = ts
+                    # User replied → commit is no longer the last word
+                    if msg_type == "user" and _is_human_turn(data):
+                        session.last_commit_sha = ""
+                        session.last_commit_summary = ""
                     snippet = _extract_message_text(data)
                     if snippet:
                         session.last_message_role = msg_type
@@ -537,6 +556,10 @@ def refresh_session_tail(session: ClaudeSession, tail_bytes: int = 8192) -> bool
                 session.turn_complete = False
                 if msg_type == "user" and ts:
                     session.last_user_message_at = ts
+                # User replied → commit is no longer the last word
+                if msg_type == "user" and _is_human_turn(data):
+                    session.last_commit_sha = ""
+                    session.last_commit_summary = ""
                 snippet = _extract_message_text(data)
                 if snippet:
                     session.last_message_role = msg_type
