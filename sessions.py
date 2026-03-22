@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -29,6 +30,14 @@ _TOOL_CATEGORIES: dict[str, str] = {
     "TaskCreate": "agent",
     "TaskUpdate": "agent",
 }
+
+# Claude internal plan files use three-hyphenated-word names like
+# "unified-jingling-backus.md" — filter these from file lists.
+_PLAN_FILE_RE = re.compile(r"^[a-z]+-[a-z]+-[a-z]+\.md$")
+
+
+def _is_plan_file(basename: str) -> bool:
+    return bool(_PLAN_FILE_RE.match(basename))
 
 
 @dataclass
@@ -394,7 +403,7 @@ def parse_session(jsonl_path: Path) -> Optional[ClaudeSession]:
                                 fp = block.get("input", {}).get("file_path", "")
                                 if fp:
                                     bn = Path(fp).name
-                                    if bn not in session.files_mutated:
+                                    if bn not in session.files_mutated and not _is_plan_file(bn):
                                         session.files_mutated.append(bn)
 
             session.started_at = first_ts or ""
