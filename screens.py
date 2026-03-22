@@ -914,7 +914,7 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
     #detail-header {{
         height: auto;
         padding: 1 3;
-        background: {BG_BASE};
+        background: {BG_RAISED};
     }}
     #detail-title {{ text-style: bold; }}
     #detail-meta {{ color: {C_DIM}; }}
@@ -1008,7 +1008,7 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
     #detail-help {{
         height: 1;
         padding: 0 2;
-        background: {BG_BASE};
+        background: {BG_RAISED};
         color: {C_DIM};
         dock: bottom;
     }}
