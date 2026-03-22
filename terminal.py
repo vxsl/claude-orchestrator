@@ -58,30 +58,99 @@ class _Stream(pyte.Stream):
         self.csi["q"] = "_ignore"
 
 
-# ── Pre-filter for sequences pyte can't handle ────────────────────
+# ── Escape sequence filter ─────────────────────────────────────────
 
-# DCS (ESC P), APC (ESC _), PM (ESC ^), SOS (ESC X) — pyte leaks
-# their content as plain text.  Strip complete sequences terminated
-# by ST (ESC \) or BEL.  OSC (ESC ]) is handled by pyte, so we
-# leave it alone.
-_STRIP_SEQ = re.compile(
-    r"\x1b[P_^X]"        # opener: DCS / APC / PM / SOS
-    r"[^\x1b\x07]*"      # body (no ESC or BEL)
-    r"(?:\x07|\x1b\\)"   # closer: BEL or ST
-)
-
-# CSI sequences with intermediate bytes that pyte can't parse
-# (e.g. \x1b[=1u for kitty keyboard protocol, \x1b[>0c for DA2).
+# CSI sequences with intermediate bytes pyte can't parse:
+# =/>/<  (kitty keyboard, DA2, etc.)
+# space  (cursor shape \x1b[0 q, etc.)
 _STRIP_CSI_EXT = re.compile(
-    r"\x1b\[[\d;]*[=><][\d;]*[a-zA-Z]"
+    r"\x1b\[\??[\d;]*[=><][\d;]*[a-zA-Z]"
+    r"|\x1b\[\??[\d;]* [a-zA-Z]"
 )
 
 
-def _prefilter(data: str) -> str:
-    """Strip escape sequences that confuse pyte."""
-    data = _STRIP_SEQ.sub("", data)
-    data = _STRIP_CSI_EXT.sub("", data)
-    return data
+class _SeqFilter:
+    """Stateful filter that strips escape sequences pyte can't handle.
+
+    Handles DCS (ESC P), APC (ESC _), PM (ESC ^), and SOS (ESC X)
+    sequences even when they span multiple data chunks.  OSC (ESC ])
+    is left alone — pyte handles it.
+    """
+
+    _OPENERS = frozenset("P_^X")
+
+    def __init__(self) -> None:
+        self._stripping = False   # inside a sequence to discard
+        self._esc_pending = False  # last chunk ended with bare ESC
+
+    def feed(self, data: str) -> str:
+        # Fast path — no state and no ESC in data
+        if not self._stripping and not self._esc_pending and "\x1b" not in data:
+            return data
+
+        out: list[str] = []
+        i = 0
+        n = len(data)
+
+        while i < n:
+            ch = data[i]
+
+            # ── resolve a pending ESC from the previous chunk ──
+            if self._esc_pending:
+                self._esc_pending = False
+                if self._stripping:
+                    if ch == "\\":          # ST terminator → end strip
+                        self._stripping = False
+                        i += 1
+                        continue
+                    i += 1                  # still inside stripped seq
+                    continue
+                else:
+                    if ch in self._OPENERS:
+                        self._stripping = True
+                        i += 1
+                        continue
+                    out.append("\x1b")      # wasn't an opener → emit ESC
+                    out.append(ch)
+                    i += 1
+                    continue
+
+            # ── stripping mode: consume until BEL or ST ──
+            if self._stripping:
+                if ch == "\x07":
+                    self._stripping = False
+                elif ch == "\x1b":
+                    if i + 1 < n:
+                        if data[i + 1] == "\\":
+                            self._stripping = False
+                            i += 2
+                            continue
+                        # ESC not followed by \ — still stripping
+                    else:
+                        self._esc_pending = True
+                i += 1
+                continue
+
+            # ── normal mode ──
+            if ch == "\x1b":
+                if i + 1 < n:
+                    if data[i + 1] in self._OPENERS:
+                        self._stripping = True
+                        i += 2
+                        continue
+                    out.append(ch)
+                    i += 1
+                    continue
+                else:
+                    self._esc_pending = True
+                    i += 1
+                    continue
+
+            out.append(ch)
+            i += 1
+
+        result = "".join(out)
+        return _STRIP_CSI_EXT.sub("", result)
 
 
 # ── Color helpers ──────────────────────────────────────────────────
@@ -198,6 +267,7 @@ class TerminalWidget(Widget, can_focus=True):
         self._nrow = 24
         self._screen = _Screen(self._ncol, self._nrow)
         self._stream = _Stream(self._screen)
+        self._seq_filter = _SeqFilter()
         self._mouse_tracking = False
 
         # PTY state
@@ -314,7 +384,7 @@ class TerminalWidget(Widget, can_focus=True):
                     self._mouse_tracking = True
                 if "1000l" in params:
                     self._mouse_tracking = False
-        data = _prefilter(data)
+        data = self._seq_filter.feed(data)
         try:
             self._stream.feed(data)
         except Exception:
