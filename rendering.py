@@ -658,18 +658,22 @@ def _render_notification_option(notif, max_width: int = 40) -> str:
 
 
 def _render_notified_session_option(
-    s: ClaudeSession, act: ThreadActivity, notif,
+    s: ClaudeSession, act: ThreadActivity, notif=None,
     throbber_frame: int = 0, title_width: int = 48,
     ws_repo_path: str = "", seen: bool = False,
     line_width: int = 0,
 ) -> str:
-    """Render a session like normal but replace the snippet line with notification.
+    """Render a session in elevated/notified style.
+
+    When notif is provided, line 4 shows the notification message.
+    When notif is None (your-turn session without notification), line 4
+    shows the tail snippet text in green.
 
     Layout — 4 lines (same height as _render_session_option):
       {icon} {title}                                     {badge}
          {model}  {msgs}  {tokens}  {duration}  {age}    {sid}
          ▏▏▏▏▏░░░  app.py sessions.py +4                {project}
-         {notification_message}                           {notif_age}
+         {notification_message or green snippet}          {notif_age}
     """
     INDENT = "    "
     if line_width > 0:
@@ -743,32 +747,47 @@ def _render_notified_session_option(
     else:
         line3 = f"{INDENT}{left}"
 
-    # Line 4: notification message (replaces snippet — no dot icon)
-    freshness = notif.freshness
-    if notif.dismissed:
-        notif_color = C_DIM
-    elif freshness == "fresh":
-        notif_color = C_GREEN
-    elif freshness == "recent":
-        notif_color = C_ORANGE
-    else:
-        notif_color = C_DIM
+    # Line 4: notification message, or green snippet for un-notified your-turn sessions
+    if notif is not None:
+        freshness = notif.freshness
+        if notif.dismissed:
+            notif_color = C_DIM
+        elif freshness == "fresh":
+            notif_color = C_GREEN
+        elif freshness == "recent":
+            notif_color = C_ORANGE
+        else:
+            notif_color = C_DIM
 
-    notif_age = _relative_time(notif.timestamp)
-    msg_raw = notif.message.replace("\n", " ").strip()
-    max_msg = LINE_WIDTH - 4 - len(notif_age) - 2
-    if len(msg_raw) > max_msg:
-        msg_raw = msg_raw[:max_msg - 1] + "…"
-    msg_esc = _rich_escape(msg_raw)
-    age_gap = max(2, LINE_WIDTH - 4 - len(msg_raw) - len(notif_age))
-    line4 = f"{INDENT}[{notif_color}]{msg_esc}[/{notif_color}]{' ' * age_gap}[{C_DIM}]{notif_age}[/{C_DIM}]"
+        notif_age = _relative_time(notif.timestamp)
+        msg_raw = notif.message.replace("\n", " ").strip()
+        max_msg = LINE_WIDTH - 4 - len(notif_age) - 2
+        if len(msg_raw) > max_msg:
+            msg_raw = msg_raw[:max_msg - 1] + "…"
+        msg_esc = _rich_escape(msg_raw)
+        age_gap = max(2, LINE_WIDTH - 4 - len(msg_raw) - len(notif_age))
+        line4 = f"{INDENT}[{notif_color}]{msg_esc}[/{notif_color}]{' ' * age_gap}[{C_DIM}]{notif_age}[/{C_DIM}]"
+    else:
+        # No notification — show tail snippet in green
+        snippet_color = C_DIM if seen else C_GREEN
+        if s.last_message_text:
+            max_snippet = title_width + 12
+            snippet_raw = s.last_message_text[:max_snippet]
+            if len(s.last_message_text) > max_snippet:
+                snippet_raw += "…"
+            snippet_esc = _rich_escape(snippet_raw)
+            is_user = s.last_message_role == "user"
+            prefix = f"[{C_MID}]you:[/{C_MID}] " if is_user else ""
+            line4 = f"{INDENT}{prefix}[italic {snippet_color}]{snippet_esc}[/italic {snippet_color}]"
+        else:
+            line4 = f"{INDENT}[{C_FAINT}]{'─' * 6}[/{C_FAINT}]"
 
     return "\n".join([line1, line2, line3, line4])
 
 
 # ─── Quiet session separator ──────────────────────────────────────
 
-QUIET_SEPARATOR_LABEL = f"[{C_DIM}]─── quiet ─────────────────────────────────────[/{C_DIM}]"
+QUIET_SEPARATOR_LABEL = f"[{C_DIM}]──────────────────────────────────────────────[/{C_DIM}]"
 
 
 # ─── Todo rendering ────────────────────────────────────────────────
