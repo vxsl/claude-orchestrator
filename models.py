@@ -234,6 +234,7 @@ class Store:
     def __init__(self, path: Optional[Path] = None):
         self.path = path or Path.home() / "dev" / "claude-orchestrator" / "data.json"
         self.workstreams: list[Workstream] = []
+        self._known_todo_ids: set[str] = set()  # todo IDs seen at last load
         self.load()
 
     def load(self):
@@ -246,11 +247,49 @@ class Store:
                 self.workstreams = []
         else:
             self.workstreams = []
+        self._known_todo_ids = {t.id for ws in self.workstreams for t in ws.todos}
 
     def save(self):
         self.path.parent.mkdir(parents=True, exist_ok=True)
+        # Merge in externally-added todos (e.g. from CLI crystallize) before writing,
+        # so the in-memory state doesn't clobber them.
+        self._merge_external_todos()
         data = {"workstreams": [w.to_dict() for w in self.workstreams]}
         self.path.write_text(json.dumps(data, indent=2) + "\n")
+        # Update known IDs so next save knows about everything we just wrote
+        self._known_todo_ids = {t.id for ws in self.workstreams for t in ws.todos}
+
+    def _merge_external_todos(self):
+        """Merge todos added externally (by CLI) into in-memory workstreams.
+
+        Only merges todos that are on disk but NOT in memory AND were NOT known
+        at load time (i.e. they were added by another process after we loaded).
+        Todos that were known at load but removed from memory (deleted by us)
+        are not resurrected.
+        """
+        if not self.path.exists():
+            return
+        try:
+            disk_data = json.loads(self.path.read_text())
+        except (json.JSONDecodeError, OSError):
+            return
+        disk_ws_map = {}
+        for wd in disk_data.get("workstreams", []):
+            disk_ws_map[wd.get("id", "")] = wd
+        for ws in self.workstreams:
+            disk_wd = disk_ws_map.get(ws.id)
+            if not disk_wd:
+                continue
+            mem_ids = {t.id for t in ws.todos}
+            for td in disk_wd.get("todos", []):
+                if not isinstance(td, dict) or not td.get("id"):
+                    continue
+                tid = td["id"]
+                # Only merge if: not in memory AND not previously known (truly external)
+                if tid not in mem_ids and tid not in self._known_todo_ids:
+                    td.setdefault("origin", "manual")
+                    ws.todos.append(TodoItem(**td))
+                    self._known_todo_ids.add(tid)
 
     def backup(self) -> Path:
         """Create a timestamped backup of the data file."""
