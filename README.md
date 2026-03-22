@@ -31,9 +31,10 @@ The app uses a tabbed interface — each opened workstream gets its own persiste
 | `Ctrl+H` / `Backspace` | Back / dismiss |
 
 The **Home tab** (always present) shows the workstream list with:
-- Status icons and activity indicators
+- Activity icons auto-derived from session state (thinking, your turn, idle)
 - Git branch name (yellow if dirty, +N/-N for ahead/behind)
-- Session count and token usage
+- Jira ticket key + status, MR badge, ticket-solve status (when enriched)
+- Session count, token usage, and relative timestamps
 - Preview pane with sessions, notes, and context
 
 ## Keybindings
@@ -62,7 +63,7 @@ The **Home tab** (always present) shows the workstream list with:
 | `E` | Rename |
 | `L` | Add link |
 | `o` | Open links |
-| `x` | Archive / unarchive |
+| `u` | Archive / unarchive |
 | `d` | Delete |
 
 ### Dev-Workflow Integration
@@ -83,27 +84,19 @@ The **Home tab** (always present) shows the workstream list with:
 
 ## Command Palette
 
-Press `:` for vim-style commands. All dev-workflow tools are accessible:
+Press `:` to open a **fuzzy-searchable command palette**. Type to filter across all 25+ commands — no need to remember exact names.
 
-```
-:ship / :oneshot / :publish    Ship staged changes
-:ticket / :jira [query]        Browse Jira tickets
-:tc [title]                    Create Jira ticket
-:solve UB-1234                 Run ticket-solve headlessly
-:branches                      Browse branches & worktrees
-:files                         Open file picker (fzedit)
-:wip                           Quick WIP commit
-:restage                       Unstage WIP commits
+Commands include:
 
-:status <status>               Set workstream status
-:link <kind:value>             Add link
-:note <text>                   Add todo
-:search <query>                Search
-:sort / :filter                Sort/filter workstreams
-:export [path]                 Export to markdown
-:brain <text>                  Parse brain dump inline
-:help                          Help
-```
+| Category | Commands |
+|----------|----------|
+| Sessions | `spawn`, `resume` |
+| Workstreams | `add`, `brain`, `rename`, `archive`, `unarchive`, `delete` |
+| Editing | `note`, `link`, `open` |
+| Dev-workflow | `ship`, `ticket`, `ticket-create`, `solve`, `branches`, `files`, `wip`, `restage` |
+| Navigation | `search`, `filter`, `sort`, `export`, `help`, `refresh` |
+
+Commands that need a selected workstream are dimmed when none is selected.
 
 ## Claude Session Screen
 
@@ -120,6 +113,21 @@ When you launch or resume a Claude session, you get a full embedded terminal wit
 | `Ctrl+J/K` | Cycle between terminal and tig panels |
 | `Ctrl+H` | Detach (process survives, reattach later) |
 | `Ctrl+D` | Exit session |
+
+## Worktree Auto-Discovery
+
+Orch scans your known repos every 30 seconds for git worktrees. When it finds one:
+
+1. **Auto-creates a workstream** named from the Jira ticket summary (via branch name convention `UB-1234-slug`) or the branch name
+2. **Enriches the row** with live data from dev-workflow-tools caches:
+   - Jira ticket status (color-coded: cyan for in-progress, green for done)
+   - MR indicator (purple badge when a merge request exists)
+   - ticket-solve status (yellow "solving" / green "solved")
+3. **Auto-archives** workstreams whose worktree directories no longer exist
+
+Category is auto-detected from the git remote: `gitlab` repos default to Work, `github` to Personal.
+
+Skips `main`, `master`, `develop`, `dev`, `staging`, `production` branches.
 
 ## Auto-Session Discovery
 
@@ -145,10 +153,10 @@ These appear where contextually relevant — ticket actions from the home view, 
 ```
 app.py              — Textual shell: tabs, compose, event routing
 ├── widgets.py      — FuzzyPicker, ModalForm, TabBar, InlineInput
-├── state.py        — AppState + TabManager (pure Python, no Textual)
+├── state.py        — AppState + TabManager + command registry (pure Python, no Textual)
 ├── screens.py      — Modal screens (Detail, Todo, pickers, forms)
 ├── rendering.py    — Color palette, Rich markup, display formatting
-├── actions.py      — Git status, Jira cache, dev-tool integration
+├── actions.py      — Git status, Jira/MR/ticket-solve caches, worktree discovery, dev-tool integration
 ├── config.py       — Keybinding configuration with user overrides
 ├── models.py       — Workstream, Store, Status, Category, Link
 ├── sessions.py     — Claude session discovery from JSONL
@@ -156,7 +164,7 @@ app.py              — Textual shell: tabs, compose, event routing
 ├── claude_session_screen.py — Embedded Claude terminal with live stats
 ├── brain.py        — Stream-of-consciousness parser
 ├── threads.py      — Thread clustering and activity detection
-└── tests/          — 270+ tests (state, models, actions, widgets, app)
+└── tests/          — 630+ tests (state, models, actions, widgets, app)
 ```
 
 ### Design Principles
@@ -178,4 +186,6 @@ app.py              — Textual shell: tabs, compose, event routing
 - **Store:** `~/.claude/data.json`
 - **Backups:** automatic, keeps last 20
 - **Sessions:** `~/.claude/projects/<project>/<session>.jsonl`
-- **Jira cache:** `~/.cache/jira-fzf/tickets.json` (from dev-workflow-tools)
+- **Jira cache:** `~/.cache/jira-fzf/tickets.json` (read-only, from dev-workflow-tools)
+- **MR cache:** `~/.cache/jira-fzf/mr_cache.json` (read-only, from dev-workflow-tools)
+- **Ticket-solve:** `~/.cache/ticket-solve/<TICKET>.json` (read-only, from ticket-solve)

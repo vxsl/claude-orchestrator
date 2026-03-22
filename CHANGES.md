@@ -1,102 +1,96 @@
-# What Changed — Redesign Session (2026-03-22)
+# What Changed — Full Redesign (2026-03-22)
 
-This document covers what I did in the overnight redesign session, what's new, what works differently, and what ambiguities I ran into.
+Two sessions completed a 6-step redesign that removed dead concepts and deeply integrated dev-workflow-tools data into the orchestrator.
 
-## TL;DR
+## What's new for users
 
-8 commits, ~1800 lines added/changed. The app now has:
-- A **tab bar** for workstream navigation (was: 3-view Tab cycling)
-- **Dev-workflow-tools** integrated into the command palette and keybindings
-- **Git branch/status** shown on workstream rows
-- **Jira ticket cache** reading (no API calls, reads your existing jira-fzf cache)
-- All **picker screens** rebuilt on a shared FuzzyPicker widget (fuzzy search everywhere)
-- All **form screens** rebuilt on a shared ModalForm base
-- **Searchable help screen** (was: static text)
-- **"Thought to thread"** flow: brain dump → launch, ticket → workstream, quick start
+### Worktree auto-discovery (Step 4 — the centerpiece)
 
-## New Interaction Patterns
+If you use git worktrees, orch now **automatically creates workstreams** for each one. Every 30 seconds it scans your known repos, and for any non-main worktree branch:
 
-### Tabs replace view cycling
-- **Tab/Shift+Tab** now cycles through open workstream tabs (was: cycles Workstreams/Sessions/Archived views)
-- Opening a workstream (Enter) adds it as a tab and pushes its DetailScreen
-- **Ctrl+W** closes the current tab
-- **Home tab** is always present — it's the workstream list
-- Sessions view merged into the home preview pane (no separate tab)
-- **Archived view replaced with filter 6** — press `6` to see archived workstreams in the same list
+- Creates a workstream named from the Jira ticket summary (e.g. `UB-1234: Fix login timeout`) if the branch follows the `UB-1234-slug` convention and the ticket is in your Jira cache. Falls back to branch name.
+- Enriches the workstream row with **Jira status** (color-coded), **MR badge** (when a merge request exists), and **ticket-solve status** (when active).
+- Auto-archives when the worktree directory disappears (branch deleted/merged).
 
-### Dev-workflow shortcuts
-- **P** — ship staged changes (runs `oneshot`)
-- **T** — browse Jira tickets from cache, link to workstream or create new one
-- **B** — browse branches and worktrees for the selected workstream's repo
-- All accessible from `:` command palette too (`:ship`, `:ticket`, `:branches`, `:solve`, `:wip`, `:restage`, `:files`)
+**Why it matters:** You no longer need to manually create workstreams for branches. Start a worktree with `rr.sh`, and orch picks it up within 30 seconds with full Jira context already filled in.
 
-### Fuzzy search everywhere
-Every picker screen now has fuzzy search (was: flat lists or ad-hoc). Type to filter, j/k to navigate, Enter to select. This applies to: repo picker, workstream picker, session linker, help screen, ticket picker, branch picker.
+### Fuzzy command palette (Step 5)
 
-### Brain dump → launch
-- In the brain dump preview, press `l` (was: only `y` to add)
-- "Add & Launch" mode creates the workstreams AND immediately opens the first one in a tab
+Pressing `:` now opens a **fuzzy-searchable picker** over all 25+ commands instead of a raw text input. Type a few characters to find what you need — no need to remember exact command names or aliases.
 
-## File Changes
+Commands that require a selected workstream are dimmed when none is selected, so you can see what's available without trial-and-error.
 
-| File | What changed |
-|------|-------------|
-| `widgets.py` | **NEW** — FuzzyPicker, FuzzyPickerScreen, ModalForm, TabBar, InlineInput |
-| `state.py` | Added TabManager (pure Python tab tracking), archived filter mode, dev-workflow command palette commands |
-| `app.py` | Tab system wiring, git status polling, dev-workflow action handlers, thought-to-thread flows |
-| `screens.py` | Rebuilt RepoPickerScreen, WorkstreamPickerScreen, LinkSessionScreen on FuzzyPickerScreen. Rebuilt AddScreen, AddLinkScreen on ModalForm. Rebuilt HelpScreen as searchable FuzzyPicker. Enhanced BrainPreviewScreen with launch mode. |
-| `rendering.py` | Added `git_status` parameter to `_render_ws_option` for branch display |
-| `actions.py` | Added: `get_worktree_git_status`, `get_jira_cache`, `get_worktree_list`, `get_recent_branches`, `run_git_action`, `run_dev_tool`, `dev_tools_available` |
-| `config.py` | Added keybindings: close_tab (Ctrl+W), ship (P), ticket (T), branches (B), filter archived (6) |
-| `README.md` | Complete rewrite reflecting new architecture and features |
-| `tests/` | ~40 new tests for TabManager, FuzzyPicker, git status, Jira cache, worktree list, branches, git actions, dev-workflow commands |
+**Why it matters:** The old `:` input required knowing exact command names. Now you can type `sh` to find `ship`, `br` to find `branches`, etc. New users can browse all available commands.
 
-## Ambiguities & Design Decisions
+### Category auto-detection (Step 3)
 
-### Tab state preservation
-Tabs currently **don't preserve DetailScreen state** when switching. Each tab switch dismisses the current DetailScreen and pushes a new one. This means scroll position and focused pane reset. I chose this over converting DetailScreen from ModalScreen to Widget because:
-1. DetailScreen has ~1400 lines of deeply integrated ModalScreen patterns
-2. The reconstruction is fast (reads from store)
-3. The user said "not concerned about hackiness, concerned about performance"
+Repos with a `gitlab` remote auto-categorize as **Work**. Repos with a `github` remote stay **Personal**. Only applies when the workstream hasn't been manually categorized.
 
-**If you want true state preservation**, the next step would be using Textual's ContentSwitcher with DetailScreen as an embedded Widget. That's a bigger refactor of screens.py.
+**Why it matters:** No more manually setting category for every workstream. Your work repos are work, your personal repos are personal.
 
-### ViewMode enum still exists
-I didn't fully remove `ViewMode` because the sessions table (accessible via `:sessions` command) still uses it. The enum is vestigial — in normal usage, only `WORKSTREAMS` is active. It could be cleaned up in a follow-up.
+### File picker from DetailScreen (Step 6)
 
-### Status enum untouched
-The plan called for replacing manual Status (QUEUED/IN_PROGRESS/etc) with auto-derived status from git state. I **didn't do this** because:
-1. It's deeply embedded (126 references across 12 files)
-2. Removing it would break DetailScreen (which we're not touching)
-3. The git status info is now *available* (shown on rows), so the auto-derivation could layer on top later
+Press `f` in a DetailScreen to open fzedit (file picker) in the workstream's directory.
 
-The `s/S` keybinding for manual status cycling still works.
+**Why it matters:** You can jump into code from the detail view without going back to the home screen.
 
-### Origin enum untouched
-Plan called for removing it. Decided to leave it — it's only 10 references and removing it would require a data migration for existing data.json files.
+### Origin enum removed (Step 1)
 
-### Dev-workflow tools: graceful degradation
-All dev-workflow actions check `dev_tools_available()` first. If `~/bin/dev-workflow-tools` doesn't exist, actions show a helpful error. The Jira cache reader also degrades gracefully — returns empty if no cache file exists.
+The `origin` field (manual vs discovered) has been removed from workstreams. All workstreams are now equal — there's no "discovered" tag or different treatment based on how they were created.
 
-### Ship action runs via `suspend()`
-Ship (P) and file picker (f) use `self.suspend()` to hand control to the shell script. This means the TUI disappears momentarily while the tool runs. For interactive tools like `oneshot` and `fzedit`, this is correct. For background jobs like `ticket-solve`, we also use `suspend()` for now — a future improvement would be embedding them in a TerminalWidget.
+**Why it matters:** Simpler data model. AI-discovered workstreams behave identically to manually created ones.
 
-### Jira ticket picker creates workstreams
-When you pick a ticket with `T` and no workstream is selected, it creates a new workstream named after the ticket summary and opens it immediately. This is the "thought to thread" path. If a workstream IS selected, it just links the ticket.
+### ViewMode enum removed (Step 2)
 
-## What I didn't get to
+The three-view system (Workstreams / Sessions / Archived) is gone. There is now a single workstream table. Sessions appear in the preview pane and in DetailScreen. Archived items are accessible via filter `6`.
 
-1. **File picker from DetailScreen** (`f` key) — the action_files exists but isn't wired to DetailScreen's bindings (it's on the home view). Adding it to DetailScreen would require modifying that screen.
-2. **ticket-bot status indicator** in the status bar
-3. **Worktree auto-discovery** (each git worktree = a workstream) — the infrastructure is there (`get_worktree_list`) but the auto-creation flow isn't wired up
-4. **Category auto-detection** from git remote (gitlab = work, github = personal)
-5. **Command palette as FuzzyPicker** — still uses the text input. Converting it would mean replacing the `:` binding with a FuzzyPickerScreen over all registered commands.
+**Why it matters:** The sessions and archived views added complexity but weren't used — sessions are always visible in the preview pane, and the archived filter gives the same access with less UI chrome.
 
-## Test Coverage
+## Enrichment data shown on workstream rows
 
-- 271 core tests pass (state, models, actions, widgets)
-- App tests have 5 pre-existing flaky failures (async race conditions with `#preview-content` query, unrelated to these changes)
-- 1 pre-existing rendering test failure (throbber animation)
-- All 32 backspace/ctrl+h binding tests pass (was: 2 failing for RepoPickerScreen)
+Each row in the home view can now show a chain of metadata:
 
-Run: `python -m pytest tests/ -x -q`
+```
+ ● UB-1234: Fix login timeout  ⚡branches  UB-1234-fix*+2
+     work · UB-1234 In Progress · MR · solving · ~/dev/repo-wt · 3 sess · 1.2M · 5m ago
+     Fix the login timeout bug when session expires during...
+```
+
+Line 2 metadata (left to right): category, ticket key + Jira status, MR badge, ticket-solve status, worktree path, session count, token usage, last updated.
+
+## Technical details
+
+### What was removed
+- `Origin` enum and `origin` field (models.py, state.py, rendering.py, synthesizer)
+- `ViewMode` enum and 3-view system (rendering.py, state.py, app.py, config.py)
+- `action_cycle_status` / `s`/`S` keybindings (status is auto-derived from session state)
+- `CommandInput` inline widget (replaced by FuzzyPickerScreen)
+- Sessions table and archived table `OptionList` widgets
+
+### What was added
+- **models.py:** 5 transient enrichment fields (`ticket_key`, `ticket_summary`, `ticket_status`, `mr_url`, `ticket_solve_status`) — not persisted to disk
+- **actions.py:** `get_mr_cache()`, `get_ticket_solve_status()`, `discover_worktrees()`, `extract_ticket_key()`, `get_git_remote_host()`, `open_file_picker()`
+- **state.py:** `CommandDef` + `COMMAND_REGISTRY` (25 commands), `get_command_items()`, `discover_and_enrich_worktrees()`, `_infer_category_from_remote()`
+- **rendering.py:** Jira/MR/ticket-solve badges on workstream row line 2
+- **app.py:** 30s worktree discovery poll, FuzzyPickerScreen command palette
+- **screens.py:** File picker binding in DetailScreen
+
+### Implementation order (across two sessions)
+
+| Step | Commit | What |
+|------|--------|------|
+| 1 | `60b1911` | Remove Origin enum |
+| 2 | `1d7bf26` | Remove ViewMode enum |
+| 3 | `236915e` | Category auto-detection from git remote |
+| 6 | `f38d5ce` | File picker from DetailScreen |
+| 5 | `01bb0c9` | Command palette as FuzzyPicker |
+| 4 | `cec2fd3` | Worktree auto-discovery + Jira/MR/ticket-solve enrichment |
+
+Steps 1-3 and 6 were done via parallel worktree agents in session 1. Steps 5 and 4 were done sequentially in session 2 (parallel agents caused 11 merge conflicts in app.py in session 1).
+
+### Test coverage
+
+631 tests pass. 3 pre-existing failures unrelated to the redesign:
+- `test_thinking_animated` — throbber frame assertion
+- `test_last_user_activity_falls_back` — timestamp fallback
+- `test_note_adds_to_workstream` — checks `.notes` instead of `.todos`
