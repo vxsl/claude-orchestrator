@@ -54,6 +54,10 @@ DEFAULT_KEYS: dict[str, tuple[str, str, bool, bool]] = {
     "sort('name')": ("f5", "", False, False),
     # Tabs
     "close_tab": ("ctrl+w", "", False, True),
+    # Dev-workflow
+    "ship": ("P", "", False, False),
+    "ticket": ("T", "", False, False),
+    "branches": ("B", "", False, False),
     # Command palette
     "command_palette": ("colon", ":", True, False),
     # Other

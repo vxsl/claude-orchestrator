@@ -501,3 +501,138 @@ def get_jira_ticket_info(ticket_id: str) -> JiraTicketInfo | None:
     """Look up a single ticket in the Jira cache."""
     cache = get_jira_cache()
     return cache.get(ticket_id)
+
+
+# ─── Dev-Workflow Tool Integration ───────────────────────────────────
+
+_DEV_TOOLS_DIR = Path.home() / "bin" / "dev-workflow-tools"
+
+
+def dev_tools_available() -> bool:
+    """Check if dev-workflow-tools are installed."""
+    return _DEV_TOOLS_DIR.is_dir()
+
+
+def run_dev_tool(tool_name: str, args: list[str] | None = None,
+                 cwd: str | None = None) -> list[str]:
+    """Build the command list for a dev-workflow-tool.
+
+    Returns the command to run (caller handles execution in terminal or subprocess).
+    """
+    tool_path = _DEV_TOOLS_DIR / "bin" / tool_name
+    if not tool_path.exists():
+        return []
+    cmd = [str(tool_path)]
+    if args:
+        cmd.extend(args)
+    return cmd
+
+
+def get_worktree_list(repo_path: str) -> list[dict]:
+    """Get all git worktrees for a repo.
+
+    Returns list of dicts with: path, branch, bare, HEAD.
+    """
+    worktrees = []
+    try:
+        result = subprocess.run(
+            ["git", "-C", repo_path, "worktree", "list", "--porcelain"],
+            capture_output=True, text=True, timeout=5,
+        )
+        if result.returncode != 0:
+            return worktrees
+
+        current: dict = {}
+        for line in result.stdout.split("\n"):
+            if line.startswith("worktree "):
+                if current:
+                    worktrees.append(current)
+                current = {"path": line[9:].strip()}
+            elif line.startswith("HEAD "):
+                current["HEAD"] = line[5:].strip()
+            elif line.startswith("branch "):
+                # Strip refs/heads/ prefix
+                branch = line[7:].strip()
+                if branch.startswith("refs/heads/"):
+                    branch = branch[11:]
+                current["branch"] = branch
+            elif line == "bare":
+                current["bare"] = True
+        if current:
+            worktrees.append(current)
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+        pass
+
+    return worktrees
+
+
+def get_recent_branches(repo_path: str, limit: int = 20) -> list[dict]:
+    """Get recent branches from git reflog for a repo.
+
+    Returns list of dicts with: branch, checkout_time.
+    """
+    branches = []
+    seen = set()
+    try:
+        result = subprocess.run(
+            ["git", "-C", repo_path, "reflog", "--format=%gd %gs",
+             "--date=iso"],
+            capture_output=True, text=True, timeout=5,
+        )
+        if result.returncode != 0:
+            return branches
+
+        for line in result.stdout.split("\n"):
+            if "checkout: moving from" in line:
+                # Extract the target branch
+                parts = line.split("checkout: moving from ")
+                if len(parts) >= 2:
+                    rest = parts[1]
+                    if " to " in rest:
+                        target = rest.split(" to ")[1].strip()
+                        if target and target not in seen:
+                            seen.add(target)
+                            branches.append({"branch": target})
+                            if len(branches) >= limit:
+                                break
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+        pass
+
+    return branches
+
+
+def run_git_action(action: str, cwd: str) -> tuple[bool, str]:
+    """Run a simple git action in a directory.
+
+    Returns (success, message).
+    """
+    if action == "wip":
+        # Quick WIP commit
+        try:
+            subprocess.run(["git", "-C", cwd, "add", "-A"],
+                          capture_output=True, timeout=10)
+            result = subprocess.run(
+                ["git", "-C", cwd, "commit", "--no-verify", "-m", "wip"],
+                capture_output=True, text=True, timeout=10,
+            )
+            if result.returncode == 0:
+                return True, "WIP commit created"
+            return False, result.stderr.strip()[:100]
+        except Exception as e:
+            return False, str(e)[:100]
+
+    elif action == "restage":
+        # Unstage last 2 WIP commits, keep oldest staged
+        tool_cmd = run_dev_tool("restage")
+        if tool_cmd:
+            try:
+                result = subprocess.run(
+                    tool_cmd, cwd=cwd,
+                    capture_output=True, text=True, timeout=30,
+                )
+                return result.returncode == 0, result.stdout.strip()[:200]
+            except Exception as e:
+                return False, str(e)[:100]
+        return False, "restage tool not found"
+
+    return False, f"Unknown git action: {action}"

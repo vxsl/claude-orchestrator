@@ -1142,6 +1142,38 @@ class AppState:
         elif cmd == "help":
             return {"action": "help"}
 
+        # ── Dev-workflow tool commands ──
+
+        # Ship (oneshot / publish-changes)
+        elif cmd in ("ship", "publish", "oneshot"):
+            return {"action": "ship", "mode": cmd}
+
+        # Ticket operations
+        elif cmd in ("ticket", "jira"):
+            return {"action": "ticket", "query": arg}
+        elif cmd in ("ticket-create", "jira-create", "tc"):
+            return {"action": "ticket-create", "title": arg}
+
+        # Solve (headless ticket-solve)
+        elif cmd == "solve":
+            return {"action": "solve", "ticket": arg}
+
+        # Branch/worktree management
+        elif cmd in ("branches", "branch", "br"):
+            return {"action": "branches"}
+        elif cmd in ("worktree", "wt"):
+            return {"action": "worktree", "arg": arg}
+
+        # File picker
+        elif cmd in ("files", "file", "edit"):
+            return {"action": "files"}
+
+        # Git actions
+        elif cmd == "restage":
+            return {"action": "git-action", "cmd": "restage"}
+        elif cmd == "wip":
+            return {"action": "git-action", "cmd": "wip"}
+
         return {"action": "error", "msg": f"Unknown command: {cmd}"}
 
     def do_export(self, path: str = "") -> tuple[str, int]:

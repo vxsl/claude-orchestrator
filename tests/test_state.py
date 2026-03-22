@@ -679,6 +679,48 @@ class TestCommandExecution:
         assert result["action"] == "export"
         assert result["path"] == "/tmp/test.md"
 
+    # Dev-workflow commands
+    def test_ship_command(self, state):
+        result = state.execute_command("ship")
+        assert result["action"] == "ship"
+
+    def test_oneshot_command(self, state):
+        result = state.execute_command("oneshot")
+        assert result["action"] == "ship"
+
+    def test_ticket_command(self, state):
+        result = state.execute_command("ticket UB-1234")
+        assert result["action"] == "ticket"
+        assert result["query"] == "UB-1234"
+
+    def test_ticket_create_command(self, state):
+        result = state.execute_command("tc Fix the bug")
+        assert result["action"] == "ticket-create"
+        assert result["title"] == "Fix the bug"
+
+    def test_solve_command(self, state):
+        result = state.execute_command("solve UB-5678")
+        assert result["action"] == "solve"
+        assert result["ticket"] == "UB-5678"
+
+    def test_branches_command(self, state):
+        result = state.execute_command("branches")
+        assert result["action"] == "branches"
+
+    def test_files_command(self, state):
+        result = state.execute_command("files")
+        assert result["action"] == "files"
+
+    def test_wip_command(self, state):
+        result = state.execute_command("wip")
+        assert result["action"] == "git-action"
+        assert result["cmd"] == "wip"
+
+    def test_restage_command(self, state):
+        result = state.execute_command("restage")
+        assert result["action"] == "git-action"
+        assert result["cmd"] == "restage"
+
 
 # ─── Export ──────────────────────────────────────────────────────────
 

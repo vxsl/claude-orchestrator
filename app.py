@@ -1681,6 +1681,197 @@ class OrchestratorApp(App):
             self.action_delete_item()
         elif action == "unarchive":
             self.action_unarchive()
+        # Dev-workflow actions
+        elif action == "ship":
+            self.action_ship()
+        elif action == "ticket":
+            self.action_ticket(result.get("query", ""))
+        elif action == "ticket-create":
+            self.action_ticket_create(result.get("title", ""))
+        elif action == "branches":
+            self.action_branches()
+        elif action == "files":
+            self.action_files()
+        elif action == "git-action":
+            self._do_git_action(result.get("cmd", ""))
+        elif action == "solve":
+            self._do_solve(result.get("ticket", ""))
+        elif action == "worktree":
+            self.action_branches()
+
+    # ── Dev-workflow actions ──
+
+    def action_ship(self):
+        """Ship staged changes — run oneshot or publish-changes in a terminal."""
+        from actions import run_dev_tool, ws_working_dir, dev_tools_available
+        if not dev_tools_available():
+            self.notify("dev-workflow-tools not found at ~/bin/dev-workflow-tools", severity="error", timeout=3)
+            return
+        ws = self._selected_ws()
+        if not ws:
+            self.notify("No workstream selected", timeout=2)
+            return
+        cwd = ws_working_dir(ws)
+        cmd = run_dev_tool("oneshot")
+        if cmd:
+            with self.suspend():
+                subprocess.run(cmd, cwd=cwd)
+            self._poll_git_status()
+
+    def action_ticket(self, query: str = ""):
+        """Open ticket picker — browse Jira tickets from cache."""
+        from actions import get_jira_cache
+        cache = get_jira_cache()
+        if not cache:
+            self.notify("No Jira tickets cached. Run jira-fzf to populate.", severity="warning", timeout=3)
+            return
+
+        items = []
+        for key, info in cache.items():
+            status_color = C_DIM
+            if "progress" in info.status.lower():
+                status_color = C_CYAN
+            elif "done" in info.status.lower() or "closed" in info.status.lower():
+                status_color = C_GREEN
+            label = (
+                f"[bold]{_rich_escape(key)}[/bold]  "
+                f"{_rich_escape(info.summary[:60])}  "
+                f"[{status_color}]{_rich_escape(info.status)}[/{status_color}]"
+            )
+            if info.assignee:
+                label += f"  [{C_DIM}]{_rich_escape(info.assignee)}[/{C_DIM}]"
+            items.append((key, label))
+
+        def on_ticket(ticket_key: str | None):
+            if not ticket_key:
+                return
+            ws = self._selected_ws()
+            if ws:
+                ws.add_link(kind="ticket", value=ticket_key, label=ticket_key)
+                self.state.store.update(ws)
+                self._refresh_ws_table()
+                self.notify(f"Linked {ticket_key} to {ws.name}", timeout=2)
+
+        from widgets import FuzzyPickerScreen
+        screen = FuzzyPickerScreen(title="Select Ticket")
+        screen._get_items = lambda: items
+        screen._on_selected = lambda item_id: (screen.dismiss(item_id),)
+        self.push_screen(screen, callback=on_ticket)
+
+    def action_ticket_create(self, title: str = ""):
+        """Create a new Jira ticket via dev-workflow-tools."""
+        from actions import run_dev_tool, dev_tools_available
+        if not dev_tools_available():
+            self.notify("dev-workflow-tools not found", severity="error", timeout=3)
+            return
+        cmd = run_dev_tool("create-jira-ticket")
+        if title:
+            cmd.extend(["--summary", title])
+        if cmd:
+            with self.suspend():
+                subprocess.run(cmd)
+
+    def action_branches(self):
+        """Open branch/worktree picker for the selected workstream's repo."""
+        from actions import get_worktree_list, get_recent_branches, ws_working_dir
+        ws = self._selected_ws()
+        repo = ws.repo_path if ws else None
+        if not repo:
+            self.notify("No repo linked to workstream", timeout=2)
+            return
+
+        worktrees = get_worktree_list(repo)
+        branches = get_recent_branches(repo)
+
+        items = []
+        wt_branches = {wt.get("branch", ""): wt.get("path", "") for wt in worktrees}
+
+        for wt in worktrees:
+            branch = wt.get("branch", "unknown")
+            path = wt.get("path", "")
+            short_path = path.replace(str(Path.home()), "~")
+            label = f"[bold {C_CYAN}]\u26a1 {_rich_escape(branch)}[/bold {C_CYAN}]  [{C_DIM}]{short_path}[/{C_DIM}]"
+            items.append((path, label))
+
+        for br in branches:
+            branch = br["branch"]
+            if branch not in wt_branches:
+                label = f"[{C_DIM}]  {_rich_escape(branch)}[/{C_DIM}]"
+                items.append((f"branch:{branch}", label))
+
+        def on_branch(selection: str | None):
+            if not selection:
+                return
+            if selection.startswith("branch:"):
+                # Just a branch, no worktree — could create one
+                self.notify(f"Branch: {selection[7:]}", timeout=2)
+            else:
+                # It's a worktree path — could cd there
+                self.notify(f"Worktree: {selection}", timeout=2)
+
+        from widgets import FuzzyPickerScreen
+        screen = FuzzyPickerScreen(title="Branches & Worktrees")
+        screen._get_items = lambda: items
+        screen._on_selected = lambda item_id: (screen.dismiss(item_id),)
+        self.push_screen(screen, callback=on_branch)
+
+    def action_files(self):
+        """Open file picker for the selected workstream's directory."""
+        ws = self._selected_ws()
+        if not ws:
+            self.notify("No workstream selected", timeout=2)
+            return
+        from actions import ws_working_dir
+        cwd = ws_working_dir(ws)
+        editor = os.environ.get("EDITOR", "vim")
+        # Use fzedit if available, otherwise fall back to basic fzf
+        from actions import run_dev_tool, dev_tools_available
+        if dev_tools_available():
+            cmd = run_dev_tool("fzedit")
+            if cmd:
+                with self.suspend():
+                    subprocess.run(cmd, cwd=cwd)
+                return
+        # Fallback: suspend to $EDITOR
+        with self.suspend():
+            subprocess.run([editor, "."], cwd=cwd)
+
+    def _do_git_action(self, action_name: str):
+        """Run a git action in the selected workstream's directory."""
+        from actions import run_git_action, ws_working_dir
+        ws = self._selected_ws()
+        if not ws:
+            self.notify("No workstream selected", timeout=2)
+            return
+        cwd = ws_working_dir(ws)
+        success, msg = run_git_action(action_name, cwd)
+        if success:
+            self.notify(msg, timeout=2)
+            self._poll_git_status()
+        else:
+            self.notify(msg, severity="error", timeout=3)
+
+    def _do_solve(self, ticket: str = ""):
+        """Run ticket-solve for a ticket."""
+        from actions import run_dev_tool, dev_tools_available, ws_working_dir
+        if not dev_tools_available():
+            self.notify("dev-workflow-tools not found", severity="error", timeout=3)
+            return
+        if not ticket:
+            # Try to get ticket from current workstream
+            ws = self._selected_ws()
+            if ws:
+                for link in ws.links:
+                    if link.kind == "ticket":
+                        ticket = link.value
+                        break
+        if not ticket:
+            self.notify("No ticket specified. Usage: :solve UB-1234", severity="error", timeout=3)
+            return
+        cmd = run_dev_tool("ticket-solve", [ticket])
+        if cmd:
+            with self.suspend():
+                subprocess.run(cmd)
 
     # ── Tmux polling ──
 

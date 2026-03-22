@@ -306,3 +306,97 @@ class TestJiraCache:
         assert info is not None
         assert info.summary == "Test"
         assert get_jira_ticket_info("UB-999") is None
+
+
+# ─── Dev-Workflow Integration ────────────────────────────────────────
+
+from actions import (
+    get_worktree_list, get_recent_branches, run_git_action,
+    dev_tools_available, run_dev_tool,
+)
+
+
+class TestWorktreeList:
+    def test_real_repo(self, tmp_path):
+        """Test worktree listing on a real git repo."""
+        import subprocess
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        subprocess.run(["git", "init"], cwd=repo, capture_output=True)
+        subprocess.run(["git", "config", "user.email", "test@test.com"], cwd=repo, capture_output=True)
+        subprocess.run(["git", "config", "user.name", "Test"], cwd=repo, capture_output=True)
+        (repo / "file.txt").write_text("hello")
+        subprocess.run(["git", "add", "."], cwd=repo, capture_output=True)
+        subprocess.run(["git", "commit", "-m", "init"], cwd=repo, capture_output=True)
+
+        worktrees = get_worktree_list(str(repo))
+        assert len(worktrees) >= 1
+        assert worktrees[0]["path"] == str(repo)
+        assert "branch" in worktrees[0]
+
+    def test_nonexistent_dir(self):
+        worktrees = get_worktree_list("/nonexistent/repo")
+        assert worktrees == []
+
+
+class TestRecentBranches:
+    def test_real_repo(self, tmp_path):
+        """Test branch listing on a real git repo."""
+        import subprocess
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        subprocess.run(["git", "init"], cwd=repo, capture_output=True)
+        subprocess.run(["git", "config", "user.email", "test@test.com"], cwd=repo, capture_output=True)
+        subprocess.run(["git", "config", "user.name", "Test"], cwd=repo, capture_output=True)
+        (repo / "file.txt").write_text("hello")
+        subprocess.run(["git", "add", "."], cwd=repo, capture_output=True)
+        subprocess.run(["git", "commit", "-m", "init"], cwd=repo, capture_output=True)
+        # Create a branch and checkout
+        subprocess.run(["git", "checkout", "-b", "feature-1"], cwd=repo, capture_output=True)
+        subprocess.run(["git", "checkout", "-"], cwd=repo, capture_output=True)
+
+        branches = get_recent_branches(str(repo))
+        # Should find at least the main branch from the checkout
+        branch_names = [b["branch"] for b in branches]
+        assert any(b in ("main", "master") for b in branch_names)
+
+    def test_nonexistent_dir(self):
+        branches = get_recent_branches("/nonexistent/repo")
+        assert branches == []
+
+
+class TestRunGitAction:
+    def test_wip_commit(self, tmp_path):
+        """Test WIP commit action."""
+        import subprocess
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        subprocess.run(["git", "init"], cwd=repo, capture_output=True)
+        subprocess.run(["git", "config", "user.email", "test@test.com"], cwd=repo, capture_output=True)
+        subprocess.run(["git", "config", "user.name", "Test"], cwd=repo, capture_output=True)
+        (repo / "file.txt").write_text("hello")
+        subprocess.run(["git", "add", "."], cwd=repo, capture_output=True)
+        subprocess.run(["git", "commit", "-m", "init"], cwd=repo, capture_output=True)
+
+        # Make a change
+        (repo / "file.txt").write_text("changed")
+        success, msg = run_git_action("wip", str(repo))
+        assert success
+        assert "WIP" in msg
+
+    def test_unknown_action(self, tmp_path):
+        success, msg = run_git_action("nonexistent", str(tmp_path))
+        assert not success
+
+
+class TestDevToolsAvailable:
+    def test_check(self):
+        # Just ensure it doesn't crash
+        result = dev_tools_available()
+        assert isinstance(result, bool)
+
+    def test_run_dev_tool_nonexistent(self):
+        cmd = run_dev_tool("nonexistent-tool-xyz")
+        # If dev-tools dir doesn't exist, returns empty
+        # If it exists but tool doesn't, also returns empty
+        assert isinstance(cmd, list)
