@@ -301,7 +301,7 @@ class TestRefreshSessionTail:
         f = tmp_path / "s.jsonl"
         self._write_jsonl(f, [
             {"type": "user", "timestamp": "2026-03-20T10:00:00Z"},
-            {"type": "assistant", "message": {"usage": {}}, "timestamp": "2026-03-20T10:01:00Z"},
+            {"type": "assistant", "message": {"content": [{"type": "text", "text": "Done."}], "usage": {}}, "timestamp": "2026-03-20T10:01:00Z"},
         ])
         s = ClaudeSession(session_id="s", project_dir="d", project_path="/p",
                           jsonl_path=str(f), last_message_role="user",
@@ -374,7 +374,8 @@ class TestRefreshSessionTail:
                           last_activity="")
         refresh_session_tail(s)
         assert s.turn_complete is True
-        assert s.last_message_role == "user"
+        # Interrupt marker has no extractable text, so role stays unchanged
+        assert s.last_message_role == ""
 
     def test_reads_only_tail(self, tmp_path):
         """With a large file, still correctly reads the last entries."""
@@ -382,7 +383,7 @@ class TestRefreshSessionTail:
         # Write a bunch of padding lines followed by the real data
         lines = [{"type": "user", "timestamp": f"2026-03-20T09:{i:02d}:00Z"}
                  for i in range(50)]
-        lines.append({"type": "assistant", "message": {"usage": {}},
+        lines.append({"type": "assistant", "message": {"content": [{"type": "text", "text": "Done."}], "usage": {}},
                        "timestamp": "2026-03-20T10:05:00Z"})
         self._write_jsonl(f, lines)
         s = ClaudeSession(session_id="s", project_dir="d", project_path="/p",

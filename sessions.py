@@ -354,12 +354,12 @@ def parse_session(jsonl_path: Path) -> Optional[ClaudeSession]:
 
                 # Track last message role (user or assistant)
                 if msg_type in ("user", "assistant"):
-                    session.last_message_role = msg_type
                     session.turn_complete = False  # new message resets turn completion
                     if msg_type == "user" and ts:
                         session.last_user_message_at = ts
                     snippet = _extract_message_text(data)
                     if snippet:
+                        session.last_message_role = msg_type
                         session.last_message_text = snippet
                     # Interrupted turns: the "[Request interrupted" user
                     # message means Claude is back at the prompt.
@@ -452,12 +452,12 @@ def refresh_session_tail(session: ClaudeSession, tail_bytes: int = 8192) -> bool
 
             msg_type = data.get("type", "")
             if msg_type in ("user", "assistant"):
-                session.last_message_role = msg_type
                 session.turn_complete = False
                 if msg_type == "user" and ts:
                     session.last_user_message_at = ts
                 snippet = _extract_message_text(data)
                 if snippet:
+                    session.last_message_role = msg_type
                     session.last_message_text = snippet
                 if msg_type == "user" and _is_interrupt_marker(data):
                     session.turn_complete = True
