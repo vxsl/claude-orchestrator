@@ -509,8 +509,7 @@ def _render_session_option(
         if len(s.last_message_text) > max_snippet:
             snippet += "…"
         is_user = s.last_message_role == "user"
-        role_color = C_GREEN if is_user else C_PURPLE
-        prefix = f"[{role_color}]you:[/{role_color}] " if is_user else ""
+        prefix = f"[{C_DIM}]you:[/{C_DIM}] " if is_user else ""
         lines.append(f"{INDENT}{prefix}[{C_DIM}]{snippet}[/{C_DIM}]")
 
     return "\n".join(lines)
@@ -615,7 +614,7 @@ def _render_content_search_result(
     # Snippet line — role colored
     is_user = hit.role == "user"
     highlighted = _highlight_snippet(hit.snippet, hit.match_ranges)
-    prefix = f"[{C_GREEN}]you:[/{C_GREEN}] " if is_user else ""
+    prefix = f"[{C_DIM}]you:[/{C_DIM}] " if is_user else ""
     lines.append(f"{INDENT}{prefix}{highlighted}")
     return "\n".join(lines)
 
