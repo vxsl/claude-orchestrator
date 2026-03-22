@@ -197,7 +197,18 @@ class OrchestratorApp(App):
         self._throbber_timer = None
         self._session_watcher: SessionWatcher | None = None
 
+    async def on_event(self, event) -> None:
+        """Override to log key events BEFORE Textual's binding check."""
+        from textual.events import Key
+        if isinstance(event, Key) and not event.is_forwarded:
+            with open("/tmp/orch_keys.log", "a") as f:
+                f.write(f"App.on_event: key={event.key!r} char={event.character!r}\n")
+        await super().on_event(event)
+
     def on_key(self, event) -> None:
+        # DEBUG: log keys that reach App.on_key (after bubbling)
+        with open("/tmp/orch_keys.log", "a") as f:
+            f.write(f"App.on_key: key={event.key!r} forwarded={event.is_forwarded}\n")
         if event.key in ("ctrl+j", "ctrl+k"):
             event.prevent_default()
             event.stop()
