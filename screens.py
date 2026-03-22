@@ -1693,7 +1693,7 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         # Just reset the dismiss timer — don't re-render on repeats
         if self._peek_timer is not None:
             self._peek_timer.stop()
-        self._peek_timer = self.set_timer(0.4, self._peek_release)
+        self._peek_timer = self.set_timer(0.8, self._peek_release)
 
     def _peek_release(self):
         """Timer fired — user released space."""
