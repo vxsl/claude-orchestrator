@@ -338,11 +338,12 @@ def _render_ws_option(
     last_seen: dict[str, str],
     tmux_check=None,
     line_width: int = 0,
+    git_status=None,
 ) -> str:
     """Render a workstream as a formatted 3-line OptionList entry.
 
     Layout:
-      {icon} {name}  {indicators}
+      {icon} {name}  {indicators}  {branch}
          {status} · {category} · {worktree} · {N sess} · {tokens} · {updated}
          {description}
     """
@@ -366,13 +367,26 @@ def _render_ws_option(
         color = STATUS_THEME.get(ws.status, C_DIM)
         icon = f"[{color}]{STATUS_ICONS[ws.status]}[/{color}]"
 
-    # ── Line 1: icon + name + indicators ──
+    # ── Line 1: icon + name + indicators + branch ──
     name_esc = _rich_escape(ws.name)
     indicators = ""
     if not is_discovered:
         indicators = _ws_indicators(ws, tmux_check=tmux_check)
     ind_markup = f"  [{C_DIM}]{indicators}[/{C_DIM}]" if indicators else ""
-    line1 = f" {icon} [bold {C_LIGHT}]{name_esc}[/bold {C_LIGHT}]{ind_markup}"
+
+    branch_markup = ""
+    if git_status and git_status.branch and not git_status.error:
+        branch_name = _rich_escape(git_status.branch)
+        if git_status.is_dirty:
+            branch_markup = f"  [{C_YELLOW}]{branch_name}*[/{C_YELLOW}]"
+        else:
+            branch_markup = f"  [{C_DIM}]{branch_name}[/{C_DIM}]"
+        if git_status.ahead:
+            branch_markup += f"[{C_GREEN}]+{git_status.ahead}[/{C_GREEN}]"
+        if git_status.behind:
+            branch_markup += f"[{C_RED}]-{git_status.behind}[/{C_RED}]"
+
+    line1 = f" {icon} [bold {C_LIGHT}]{name_esc}[/bold {C_LIGHT}]{ind_markup}{branch_markup}"
 
     # ── Line 2: metadata chain separated by dim dots ──
     sep = f" [{C_FAINT}]·[/{C_FAINT}] "

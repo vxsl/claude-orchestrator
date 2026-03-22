@@ -419,6 +419,7 @@ class AppState:
         self._sessions_for_ws_cache: dict[str, list[ClaudeSession]] = {}
         self._last_seen_valid: bool = False
         self._session_mtimes: dict[str, float] = {}  # session_id -> last known mtime
+        self.git_status_cache: dict[str, object] = {}  # path -> WorktreeStatus
         self.infer_repo_paths()
 
     # ── View navigation ──

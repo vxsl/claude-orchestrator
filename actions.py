@@ -367,3 +367,137 @@ def refresh_liveness(sessions: list[ClaudeSession]) -> None:
     live_ids = get_live_session_ids()
     for s in sessions:
         s.is_live = s.session_id in live_ids
+
+
+# ─── Git Status ─────────────────────────────────────────────────────
+
+from dataclasses import dataclass, field
+
+
+@dataclass
+class WorktreeStatus:
+    """Git status for a worktree directory."""
+    path: str = ""
+    branch: str = ""
+    is_dirty: bool = False
+    has_staged: bool = False
+    has_unstaged: bool = False
+    ahead: int = 0
+    behind: int = 0
+    error: str = ""
+
+
+def get_worktree_git_status(path: str) -> WorktreeStatus:
+    """Run `git status --porcelain --branch` in a directory and parse the result.
+
+    Returns a WorktreeStatus with branch name, dirty state, and ahead/behind.
+    Non-blocking — catches all errors and returns an error status.
+    """
+    status = WorktreeStatus(path=path)
+    if not path or not os.path.isdir(path):
+        status.error = "not a directory"
+        return status
+
+    try:
+        result = subprocess.run(
+            ["git", "-C", path, "status", "--porcelain=v1", "--branch"],
+            capture_output=True, text=True, timeout=5,
+        )
+        if result.returncode != 0:
+            status.error = result.stderr.strip()[:100]
+            return status
+
+        for line in result.stdout.split("\n"):
+            if line.startswith("## "):
+                # Parse branch info: "## branch...origin/branch [ahead 1, behind 2]"
+                branch_line = line[3:]
+                # Extract branch name (before ...)
+                if "..." in branch_line:
+                    status.branch = branch_line.split("...")[0]
+                else:
+                    # No tracking info
+                    status.branch = branch_line.split()[0] if branch_line.split() else ""
+
+                # Parse ahead/behind
+                if "[" in branch_line:
+                    bracket = branch_line[branch_line.index("[") + 1:branch_line.index("]")]
+                    for part in bracket.split(","):
+                        part = part.strip()
+                        if part.startswith("ahead"):
+                            try:
+                                status.ahead = int(part.split()[-1])
+                            except ValueError:
+                                pass
+                        elif part.startswith("behind"):
+                            try:
+                                status.behind = int(part.split()[-1])
+                            except ValueError:
+                                pass
+            elif line and not line.startswith("## "):
+                # File status line
+                index_status = line[0] if len(line) > 0 else " "
+                worktree_status = line[1] if len(line) > 1 else " "
+                if index_status not in (" ", "?"):
+                    status.has_staged = True
+                if worktree_status not in (" ", "?"):
+                    status.has_unstaged = True
+                status.is_dirty = True
+
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as e:
+        status.error = str(e)[:100]
+
+    return status
+
+
+# ─── Jira Cache ──────────────────────────────────────────────────────
+
+@dataclass
+class JiraTicketInfo:
+    """Cached Jira ticket metadata from dev-workflow-tools."""
+    key: str = ""          # e.g. "UB-1234"
+    summary: str = ""      # ticket title
+    status: str = ""       # e.g. "In Progress", "Done"
+    assignee: str = ""     # display name
+
+
+_JIRA_CACHE_PATH = Path.home() / ".cache" / "jira-fzf" / "tickets.json"
+
+
+def get_jira_cache() -> dict[str, JiraTicketInfo]:
+    """Read the dev-workflow-tools Jira ticket cache.
+
+    Returns a dict of ticket_key -> JiraTicketInfo.
+    No API calls — reads only the existing cache file.
+    """
+    import json
+
+    cache: dict[str, JiraTicketInfo] = {}
+    if not _JIRA_CACHE_PATH.exists():
+        return cache
+
+    try:
+        data = json.loads(_JIRA_CACHE_PATH.read_text())
+        # The cache format is a list of ticket objects
+        tickets = data if isinstance(data, list) else data.get("issues", [])
+        for ticket in tickets:
+            key = ticket.get("key", "")
+            if not key:
+                continue
+            fields = ticket.get("fields", {})
+            assignee = fields.get("assignee") or {}
+            cache[key] = JiraTicketInfo(
+                key=key,
+                summary=fields.get("summary", ""),
+                status=(fields.get("status") or {}).get("name", ""),
+                assignee=assignee.get("displayName", "") if isinstance(assignee, dict) else "",
+            )
+    except (json.JSONDecodeError, OSError, KeyError):
+        pass
+
+    return cache
+
+
+def get_jira_ticket_info(ticket_id: str) -> JiraTicketInfo | None:
+    """Look up a single ticket in the Jira cache."""
+    cache = get_jira_cache()
+    return cache.get(ticket_id)

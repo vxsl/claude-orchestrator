@@ -175,3 +175,134 @@ class TestSwitchToTmuxWindow:
         """If we can't determine the current tmux session, bail out."""
         mock_run.return_value = MagicMock(stdout="", returncode=0)
         assert switch_to_tmux_window("@232") is False
+
+
+# ─── Git Status ──────────────────────────────────────────────────────
+
+from actions import get_worktree_git_status, WorktreeStatus
+
+
+class TestWorktreeGitStatus:
+    def test_nonexistent_dir(self):
+        status = get_worktree_git_status("/nonexistent/path")
+        assert status.error == "not a directory"
+        assert status.branch == ""
+
+    def test_real_git_repo(self, tmp_path):
+        """Test against a real temporary git repo."""
+        import subprocess
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        subprocess.run(["git", "init"], cwd=repo, capture_output=True)
+        subprocess.run(["git", "config", "user.email", "test@test.com"], cwd=repo, capture_output=True)
+        subprocess.run(["git", "config", "user.name", "Test"], cwd=repo, capture_output=True)
+        # Create initial commit
+        (repo / "file.txt").write_text("hello")
+        subprocess.run(["git", "add", "."], cwd=repo, capture_output=True)
+        subprocess.run(["git", "commit", "-m", "init"], cwd=repo, capture_output=True)
+
+        status = get_worktree_git_status(str(repo))
+        assert status.error == ""
+        assert status.branch in ("main", "master")
+        assert not status.is_dirty
+
+    def test_dirty_repo(self, tmp_path):
+        """Test dirty detection."""
+        import subprocess
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        subprocess.run(["git", "init"], cwd=repo, capture_output=True)
+        subprocess.run(["git", "config", "user.email", "test@test.com"], cwd=repo, capture_output=True)
+        subprocess.run(["git", "config", "user.name", "Test"], cwd=repo, capture_output=True)
+        (repo / "file.txt").write_text("hello")
+        subprocess.run(["git", "add", "."], cwd=repo, capture_output=True)
+        subprocess.run(["git", "commit", "-m", "init"], cwd=repo, capture_output=True)
+        # Dirty it
+        (repo / "file.txt").write_text("changed")
+
+        status = get_worktree_git_status(str(repo))
+        assert status.is_dirty
+        assert status.has_unstaged
+
+    def test_staged_changes(self, tmp_path):
+        """Test staged change detection."""
+        import subprocess
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        subprocess.run(["git", "init"], cwd=repo, capture_output=True)
+        subprocess.run(["git", "config", "user.email", "test@test.com"], cwd=repo, capture_output=True)
+        subprocess.run(["git", "config", "user.name", "Test"], cwd=repo, capture_output=True)
+        (repo / "file.txt").write_text("hello")
+        subprocess.run(["git", "add", "."], cwd=repo, capture_output=True)
+        subprocess.run(["git", "commit", "-m", "init"], cwd=repo, capture_output=True)
+        # Stage a change
+        (repo / "file.txt").write_text("staged")
+        subprocess.run(["git", "add", "."], cwd=repo, capture_output=True)
+
+        status = get_worktree_git_status(str(repo))
+        assert status.has_staged
+
+    def test_empty_string_path(self):
+        status = get_worktree_git_status("")
+        assert status.error == "not a directory"
+
+
+# ─── Jira Cache ──────────────────────────────────────────────────────
+
+from actions import get_jira_cache, get_jira_ticket_info, JiraTicketInfo
+
+
+class TestJiraCache:
+    def test_missing_cache_returns_empty(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("actions._JIRA_CACHE_PATH", tmp_path / "nonexistent.json")
+        cache = get_jira_cache()
+        assert cache == {}
+
+    def test_valid_cache(self, tmp_path, monkeypatch):
+        import json
+        cache_path = tmp_path / "tickets.json"
+        cache_path.write_text(json.dumps([
+            {
+                "key": "UB-1234",
+                "fields": {
+                    "summary": "Fix the bug",
+                    "status": {"name": "In Progress"},
+                    "assignee": {"displayName": "Kyle"}
+                }
+            },
+            {
+                "key": "UB-5678",
+                "fields": {
+                    "summary": "Add feature",
+                    "status": {"name": "Done"},
+                    "assignee": None
+                }
+            }
+        ]))
+        monkeypatch.setattr("actions._JIRA_CACHE_PATH", cache_path)
+        cache = get_jira_cache()
+        assert "UB-1234" in cache
+        assert cache["UB-1234"].summary == "Fix the bug"
+        assert cache["UB-1234"].status == "In Progress"
+        assert cache["UB-1234"].assignee == "Kyle"
+        assert "UB-5678" in cache
+        assert cache["UB-5678"].assignee == ""
+
+    def test_corrupt_cache(self, tmp_path, monkeypatch):
+        cache_path = tmp_path / "tickets.json"
+        cache_path.write_text("not json")
+        monkeypatch.setattr("actions._JIRA_CACHE_PATH", cache_path)
+        cache = get_jira_cache()
+        assert cache == {}
+
+    def test_get_ticket_info(self, tmp_path, monkeypatch):
+        import json
+        cache_path = tmp_path / "tickets.json"
+        cache_path.write_text(json.dumps([
+            {"key": "UB-1", "fields": {"summary": "Test", "status": {"name": "Open"}, "assignee": None}}
+        ]))
+        monkeypatch.setattr("actions._JIRA_CACHE_PATH", cache_path)
+        info = get_jira_ticket_info("UB-1")
+        assert info is not None
+        assert info.summary == "Test"
+        assert get_jira_ticket_info("UB-999") is None

@@ -329,6 +329,8 @@ class OrchestratorApp(App):
 
         self._poll_tmux()
         self.set_interval(30, self._poll_tmux)
+        self._poll_git_status()
+        self.set_interval(30, self._poll_git_status)
 
         self._session_watcher = SessionWatcher(
             on_liveness=lambda: self.call_from_thread(self._refresh_session_liveness),
@@ -921,10 +923,16 @@ class OrchestratorApp(App):
             table.clear_options()
             for ws in items:
                 ws_sessions = self.state.sessions_for_ws(ws)
+                # Get cached git status for this workstream's repo
+                git_st = None
+                repo = ws.repo_path
+                if repo:
+                    git_st = self.state.git_status_cache.get(repo)
                 prompt = _render_ws_option(
                     ws, ws_sessions, last_seen,
                     tmux_check=self.state.ws_has_tmux,
                     line_width=lw,
+                    git_status=git_st,
                 )
                 table.add_option(Option(prompt, id=ws.id))
             self._olist_restore_cursor(table, old_key, old_idx)
@@ -1707,6 +1715,39 @@ class OrchestratorApp(App):
     def _apply_tmux_status(self, paths: set[str], names: set[str]):
         if self.state.update_tmux_status(paths, names):
             self._refresh_ws_table_debounced()
+
+    # ── Git status polling ──
+
+    def _poll_git_status(self):
+        self._do_git_status_check()
+
+    @work(thread=True, exclusive=True, group="git_status")
+    def _do_git_status_check(self):
+        from actions import get_worktree_git_status
+        # Collect all unique repo paths
+        repo_paths: set[str] = set()
+        for ws in list(self.state.store.active) + list(self.state.discovered_ws):
+            if ws.repo_path:
+                repo_paths.add(ws.repo_path)
+
+        new_cache: dict[str, object] = {}
+        for path in repo_paths:
+            new_cache[path] = get_worktree_git_status(path)
+
+        # Check if anything changed
+        old_keys = set(self.state.git_status_cache.keys())
+        if old_keys != set(new_cache.keys()) or any(
+            getattr(new_cache.get(k), 'is_dirty', None) != getattr(self.state.git_status_cache.get(k), 'is_dirty', None)
+            or getattr(new_cache.get(k), 'branch', None) != getattr(self.state.git_status_cache.get(k), 'branch', None)
+            or getattr(new_cache.get(k), 'ahead', None) != getattr(self.state.git_status_cache.get(k), 'ahead', None)
+            or getattr(new_cache.get(k), 'behind', None) != getattr(self.state.git_status_cache.get(k), 'behind', None)
+            for k in new_cache
+        ):
+            self.call_from_thread(self._apply_git_status, new_cache)
+
+    def _apply_git_status(self, new_cache: dict):
+        self.state.git_status_cache = new_cache
+        self._refresh_ws_table_debounced()
 
     # ── Other ──
 
