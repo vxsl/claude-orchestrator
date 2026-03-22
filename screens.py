@@ -102,90 +102,74 @@ class _SearchInput(Input):
 
 # ─── Help Screen ────────────────────────────────────────────────────
 
-class HelpScreen(ModalScreen[None]):
-    BINDINGS = [
-        Binding("question_mark,escape", "dismiss", "Close"),
-        Binding("backspace,ctrl+h", "go_back", "^H back"),
+class HelpScreen(FuzzyPickerScreen):
+    """Searchable keyboard reference — built on FuzzyPickerScreen."""
+
+    # Organized keybinding reference as (id, display) tuples
+    _HELP_ITEMS = [
+        # Navigation
+        ("nav-down", f"[{C_YELLOW}]j / \u2193[/{C_YELLOW}]  Move down"),
+        ("nav-up", f"[{C_YELLOW}]k / \u2191[/{C_YELLOW}]  Move up"),
+        ("nav-pgdn", f"[{C_YELLOW}]Ctrl+D[/{C_YELLOW}]  Half-page down"),
+        ("nav-pgup", f"[{C_YELLOW}]Ctrl+U[/{C_YELLOW}]  Half-page up"),
+        ("nav-top", f"[{C_YELLOW}]g[/{C_YELLOW}]  Jump to top"),
+        ("nav-bottom", f"[{C_YELLOW}]G[/{C_YELLOW}]  Jump to bottom"),
+        ("nav-drill", f"[{C_YELLOW}]Ctrl+L[/{C_YELLOW}]  Drill in / resume"),
+        ("nav-back", f"[{C_YELLOW}]Ctrl+H[/{C_YELLOW}]  Back / close"),
+        ("nav-enter", f"[{C_YELLOW}]Enter[/{C_YELLOW}]  Confirm / open"),
+        ("nav-tab", f"[{C_YELLOW}]Tab[/{C_YELLOW}]  Next tab"),
+        ("nav-closetab", f"[{C_YELLOW}]Ctrl+W[/{C_YELLOW}]  Close tab"),
+        # Workstream actions
+        ("ws-add", f"[{C_YELLOW}]a[/{C_YELLOW}]  Add new workstream"),
+        ("ws-brain", f"[{C_YELLOW}]b[/{C_YELLOW}]  Brain dump (multi-line)"),
+        ("ws-note", f"[{C_YELLOW}]n[/{C_YELLOW}]  Quick todo"),
+        ("ws-spawn", f"[{C_YELLOW}]c[/{C_YELLOW}]  New Claude session"),
+        ("ws-repo", f"[{C_YELLOW}]C[/{C_YELLOW}]  Spawn in repo"),
+        ("ws-resume", f"[{C_YELLOW}]r[/{C_YELLOW}]  Resume session"),
+        ("ws-link", f"[{C_YELLOW}]L[/{C_YELLOW}]  Add link"),
+        ("ws-todos", f"[{C_YELLOW}]e[/{C_YELLOW}]  Todo list"),
+        ("ws-rename", f"[{C_YELLOW}]E[/{C_YELLOW}]  Rename"),
+        ("ws-open", f"[{C_YELLOW}]o[/{C_YELLOW}]  Open links"),
+        ("ws-archive", f"[{C_YELLOW}]x[/{C_YELLOW}]  Archive / unarchive"),
+        ("ws-delete", f"[{C_YELLOW}]d[/{C_YELLOW}]  Delete"),
+        # Session
+        ("sess-exit", f"[{C_YELLOW}]Ctrl+D[/{C_YELLOW}]  Exit Claude session"),
+        ("sess-extract", f"[{C_YELLOW}]Ctrl+E[/{C_YELLOW}]  Extract todo from session"),
+        ("sess-panels", f"[{C_YELLOW}]Ctrl+J/K[/{C_YELLOW}]  Cycle panels"),
+        # Filters
+        ("flt-all", f"[{C_YELLOW}]1[/{C_YELLOW}]  Filter: All"),
+        ("flt-work", f"[{C_YELLOW}]2[/{C_YELLOW}]  Filter: Work"),
+        ("flt-personal", f"[{C_YELLOW}]3[/{C_YELLOW}]  Filter: Personal"),
+        ("flt-active", f"[{C_YELLOW}]4[/{C_YELLOW}]  Filter: Active"),
+        ("flt-stale", f"[{C_YELLOW}]5[/{C_YELLOW}]  Filter: Stale"),
+        ("flt-archived", f"[{C_YELLOW}]6[/{C_YELLOW}]  Filter: Archived"),
+        ("flt-search", f"[{C_YELLOW}]/[/{C_YELLOW}]  Search workstreams"),
+        # Sort
+        ("srt-status", f"[{C_YELLOW}]F1[/{C_YELLOW}]  Sort: Status"),
+        ("srt-updated", f"[{C_YELLOW}]F2[/{C_YELLOW}]  Sort: Updated"),
+        ("srt-created", f"[{C_YELLOW}]F3[/{C_YELLOW}]  Sort: Created"),
+        ("srt-category", f"[{C_YELLOW}]F4[/{C_YELLOW}]  Sort: Category"),
+        ("srt-name", f"[{C_YELLOW}]F5[/{C_YELLOW}]  Sort: Name"),
+        # Other
+        ("cmd-palette", f"[{C_YELLOW}]:[/{C_YELLOW}]  Command palette"),
+        ("preview", f"[{C_YELLOW}]p[/{C_YELLOW}]  Toggle preview"),
+        ("refresh", f"[{C_YELLOW}]R[/{C_YELLOW}]  Refresh"),
+        ("help", f"[{C_YELLOW}]?[/{C_YELLOW}]  This help"),
+        ("quit", f"[{C_YELLOW}]q[/{C_YELLOW}]  Quit"),
     ]
 
-    def action_go_back(self):
-        self.dismiss()
+    def __init__(self):
+        super().__init__(
+            title=f"[bold {C_PURPLE}]Keyboard Reference[/bold {C_PURPLE}]",
+            hint=f"[{C_DIM}]Type to search  ^H back  Esc close[/{C_DIM}]",
+        )
 
-    DEFAULT_CSS = f"""
-    HelpScreen {{
-        align: center middle;
-    }}
-    #help-container {{
-        width: 64;
-        height: auto;
-        max-height: 90%;
-        padding: 1 2;
-        background: {BG_BASE};
-        border: round $primary 30%;
-    }}
-    #help-content {{
-        padding: 0 1;
-    }}
-    """
+    def _get_items(self) -> list[tuple[str, str]]:
+        return list(self._HELP_ITEMS)
 
-    def compose(self) -> ComposeResult:
-        help_text = f"""\
-[bold {C_PURPLE}] ORCHESTRATOR KEYBOARD REFERENCE [/bold {C_PURPLE}]
-
-[bold {C_CYAN}]Navigation[/bold {C_CYAN}]
-  [{C_YELLOW}]j / \u2193 / Ctrl+N[/{C_YELLOW}]   Move down
-  [{C_YELLOW}]k / \u2191 / Ctrl+P[/{C_YELLOW}]   Move up
-  [{C_YELLOW}]Ctrl+D / Ctrl+U[/{C_YELLOW}]  Half-page down / up
-  [{C_YELLOW}]g / G[/{C_YELLOW}]            Jump to top / bottom
-  [{C_YELLOW}]Ctrl+L[/{C_YELLOW}]           Drill in / resume session
-  [{C_YELLOW}]Ctrl+H[/{C_YELLOW}]           Back / close
-  [{C_YELLOW}]Enter[/{C_YELLOW}]            Confirm / resume session
-  [{C_YELLOW}]Tab[/{C_YELLOW}]              Cycle views
-
-[bold {C_CYAN}]Actions (Workstreams)[/bold {C_CYAN}]
-  [{C_YELLOW}]a[/{C_YELLOW}]   Add new workstream
-  [{C_YELLOW}]b[/{C_YELLOW}]   Brain dump (multi-line)
-  [{C_YELLOW}]n[/{C_YELLOW}]   Quick todo (inline)
-  [{C_YELLOW}]s/S[/{C_YELLOW}] Cycle status forward / backward
-  [{C_YELLOW}]c[/{C_YELLOW}]   New Claude session (with context)
-  [{C_YELLOW}]r[/{C_YELLOW}]   Resume most recent session
-  [{C_YELLOW}]l[/{C_YELLOW}]   Add link
-  [{C_YELLOW}]e[/{C_YELLOW}]   Todo list (full screen)
-  [{C_YELLOW}]E[/{C_YELLOW}]   Rename workstream
-  [{C_YELLOW}]o[/{C_YELLOW}]   Open links
-  [{C_YELLOW}]x[/{C_YELLOW}]   Archive
-  [{C_YELLOW}]d[/{C_YELLOW}]   Delete
-
-[bold {C_CYAN}]Inside Claude Session[/bold {C_CYAN}]
-  [{C_YELLOW}]Ctrl+D[/{C_YELLOW}]  Clean exit (returns to orch)
-  [{C_YELLOW}]/exit[/{C_YELLOW}]   Clean exit (alternative)
-  [{C_DIM}]Session auto-links to workstream on exit[/{C_DIM}]
-  [{C_DIM}]Header bar shows live stats[/{C_DIM}]
-
-[bold {C_CYAN}]Actions (Sessions)[/bold {C_CYAN}]
-  [{C_YELLOW}]r[/{C_YELLOW}]   Resume selected session
-  [{C_YELLOW}]l[/{C_YELLOW}]   Link session to workstream
-
-[bold {C_CYAN}]Actions (Archived)[/bold {C_CYAN}]
-  [{C_YELLOW}]u[/{C_YELLOW}]   Unarchive workstream
-  [{C_YELLOW}]d[/{C_YELLOW}]   Permanently delete
-
-[bold {C_CYAN}]Filters[/bold {C_CYAN}]
-  [{C_YELLOW}]1[/{C_YELLOW}]   All          [{C_YELLOW}]2[/{C_YELLOW}] Work
-  [{C_YELLOW}]3[/{C_YELLOW}]   Personal     [{C_YELLOW}]4[/{C_YELLOW}] Active
-  [{C_YELLOW}]5[/{C_YELLOW}]   Stale        [{C_YELLOW}]/[/{C_YELLOW}] Search
-
-[bold {C_CYAN}]Sort[/bold {C_CYAN}]
-  [{C_YELLOW}]F1[/{C_YELLOW}]  Status  [{C_YELLOW}]F2[/{C_YELLOW}] Updated  [{C_YELLOW}]F3[/{C_YELLOW}] Created
-  [{C_YELLOW}]F4[/{C_YELLOW}]  Category  [{C_YELLOW}]F5[/{C_YELLOW}] Name
-
-[bold {C_CYAN}]Other[/bold {C_CYAN}]
-  [{C_YELLOW}]:[/{C_YELLOW}]   Command palette    [{C_YELLOW}]p[/{C_YELLOW}] Toggle preview
-  [{C_YELLOW}]R[/{C_YELLOW}]   Refresh            [{C_YELLOW}]?[/{C_YELLOW}] This help
-  [{C_YELLOW}]q[/{C_YELLOW}]   Quit\
-"""
-        with Vertical(id="help-container"):
-            yield Static(help_text, id="help-content")
+    def _on_selected(self, item_id: str) -> None:
+        # Selecting a help item just dismisses
+        self.dismiss(None)
 
 
 # ─── Quick Note Screen ───────────────────────────────────────────────
@@ -820,38 +804,26 @@ class LinksScreen(_VimOptionListMixin, ModalScreen[None]):
 
 # ─── Add Screen ─────────────────────────────────────────────────────
 
-class AddScreen(ModalScreen[Workstream | None]):
-    BINDINGS = [
-        Binding("backspace,ctrl+h", "go_back", "^H back"),
-        Binding("escape", "go_back", "Esc back"),
-    ]
+from widgets import ModalForm
 
-    def action_go_back(self):
-        self.dismiss(None)
 
-    DEFAULT_CSS = f"""
-    AddScreen {{ align: center middle; }}
-    #add-container {{
-        width: 70; height: auto; max-height: 80%;
-        padding: 1 2; background: {BG_BASE}; border: round $primary 30%;
-    }}
-    #add-title {{ text-style: bold; color: {C_PURPLE}; padding-bottom: 1; }}
-    #add-container Input {{ margin: 0 0 1 0; }}
-    #add-container Select {{ margin: 0 0 1 0; }}
-    #add-hint {{ text-align: center; color: {C_DIM}; padding-top: 1; }}
-    """
+class AddScreen(ModalForm):
+    """Create a new workstream. Built on ModalForm base."""
 
-    def compose(self) -> ComposeResult:
-        with Vertical(id="add-container"):
-            yield Label("New Workstream", id="add-title")
-            yield Input(placeholder="Name", id="add-name")
-            yield Input(placeholder="Description (optional)", id="add-desc")
-            yield Select(
-                [(c.value, c) for c in Category],
-                value=Category.PERSONAL,
-                id="add-category",
-            )
-            yield Static(f"[{C_DIM}]Enter[/{C_DIM}] create  [{C_DIM}]^H[/{C_DIM}] back", id="add-hint")
+    def __init__(self):
+        super().__init__(
+            title="New Workstream",
+            hint=f"[{C_DIM}]Enter[/{C_DIM}] create  [{C_DIM}]Tab[/{C_DIM}] next field  [{C_DIM}]^H[/{C_DIM}] back",
+        )
+
+    def compose_form(self) -> ComposeResult:
+        yield Input(placeholder="Name", id="add-name")
+        yield Input(placeholder="Description (optional)", id="add-desc")
+        yield Select(
+            [(c.value, c) for c in Category],
+            value=Category.PERSONAL,
+            id="add-category",
+        )
 
     def on_mount(self):
         self.query_one("#add-name", Input).focus()
@@ -872,9 +844,6 @@ class AddScreen(ModalScreen[Workstream | None]):
         desc = self.query_one("#add-desc", Input).value.strip()
         cat = self.query_one("#add-category", Select).value
         self.dismiss(Workstream(name=name, description=desc, category=cat))
-
-    def action_cancel(self):
-        self.dismiss(None)
 
 
 # ─── Detail Screen ──────────────────────────────────────────────────
@@ -2370,40 +2339,40 @@ class BrainPreviewScreen(ModalScreen[bool]):
 
 # ─── Add Link Screen ────────────────────────────────────────────────
 
-class AddLinkScreen(ModalScreen[Link | None]):
-    BINDINGS = [
-        Binding("backspace,ctrl+h", "go_back", "^H back"),
-        Binding("escape", "go_back", "Esc back"),
-    ]
+class AddLinkScreen(ModalForm):
+    """Add a link to a workstream. Built on ModalForm base."""
 
-    def action_go_back(self):
-        self.dismiss(None)
-
-    DEFAULT_CSS = f"""
-    AddLinkScreen {{ align: center middle; }}
-    #addlink-container {{
-        width: 70; height: auto; max-height: 80%;
-        padding: 1 2; background: {BG_BASE}; border: round $primary 30%;
-    }}
-    #addlink-title {{ text-style: bold; color: {C_PURPLE}; padding-bottom: 1; }}
-    #addlink-container Input {{ margin: 0 0 1 0; }}
-    #addlink-container Select {{ margin: 0 0 1 0; }}
-    #addlink-hint {{ text-align: center; color: {C_DIM}; padding-top: 1; }}
-    """
+    LINK_DESCRIPTIONS = {
+        "worktree": "Git worktree path (e.g. ~/dev/project)",
+        "ticket": "Jira/GitHub ticket ID (e.g. UB-1234)",
+        "url": "Web URL",
+        "file": "Local directory or file path",
+        "claude-session": "Claude session ID",
+        "slack": "Slack channel or thread URL",
+    }
 
     def __init__(self, ws_name: str):
-        super().__init__()
         self.ws_name = ws_name
+        super().__init__(
+            title=f"Add Link: {ws_name}",
+            hint=f"[{C_DIM}]Enter[/{C_DIM}] add  [{C_DIM}]^H[/{C_DIM}] back",
+        )
 
-    def compose(self) -> ComposeResult:
-        with Vertical(id="addlink-container"):
-            yield Label(f"Add Link: {self.ws_name}", id="addlink-title")
-            yield Select([(k, k) for k in LINK_KINDS], value="url", id="addlink-kind")
-            yield Input(placeholder="Value (URL, path, ticket ID, session ID...)", id="addlink-value")
-            yield Static(f"[{C_DIM}]Enter[/{C_DIM}] add  [{C_DIM}]^H[/{C_DIM}] back", id="addlink-hint")
+    def compose_form(self) -> ComposeResult:
+        yield Select([(k, k) for k in LINK_KINDS], value="url", id="addlink-kind")
+        yield Input(placeholder="Value (URL, path, ticket ID...)", id="addlink-value")
+        yield Static(f"[{C_DIM}]{self.LINK_DESCRIPTIONS.get('url', '')}[/{C_DIM}]", id="addlink-desc")
 
     def on_mount(self):
         self.query_one("#addlink-value", Input).focus()
+
+    @on(Select.Changed, "#addlink-kind")
+    def _on_kind_changed(self, event: Select.Changed):
+        desc = self.LINK_DESCRIPTIONS.get(str(event.value), "")
+        try:
+            self.query_one("#addlink-desc", Static).update(f"[{C_DIM}]{desc}[/{C_DIM}]")
+        except Exception:
+            pass
 
     @on(Input.Submitted, "#addlink-value")
     def on_value_submitted(self):
@@ -2416,9 +2385,6 @@ class AddLinkScreen(ModalScreen[Link | None]):
             self.app.notify("Value cannot be empty", severity="error", timeout=2)
             return
         self.dismiss(Link(kind=kind, label=kind, value=value))
-
-    def action_cancel(self):
-        self.dismiss(None)
 
 
 # ─── Link Session Screen ────────────────────────────────────────────
