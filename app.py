@@ -876,6 +876,14 @@ class OrchestratorApp(App):
             sessions.extend(t.sessions)
         sessions.sort(key=lambda s: s.last_activity or "", reverse=True)
 
+        # Chip away at untitled session backlog (one batch per poll cycle)
+        untitled = [s for s in sessions if not get_session_title(s)]
+        if untitled:
+            title_sessions(untitled)
+            self.call_from_thread(self._refresh_sessions_table)
+            for screen in self.screen_stack:
+                screen.post_message(SessionsChanged())
+
         def _fingerprint(sl):
             return {(s.session_id, s.is_live, s.last_message_role, s.last_activity) for s in sl}
         old_ids = {s.session_id for s in self.state.sessions}
@@ -907,6 +915,8 @@ class OrchestratorApp(App):
             apply_cached_names(threads)
 
         # Generate AI titles for sessions that don't have them yet
+        # title_sessions processes one BATCH_SIZE chunk per call; repeated polls
+        # will chip away at the backlog over time
         untitled = [s for s in sessions if not get_session_title(s)]
         if untitled:
             title_sessions(untitled)
