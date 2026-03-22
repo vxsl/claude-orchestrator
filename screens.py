@@ -1201,7 +1201,8 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
                 notified.append(s)
             else:
                 act = session_activity(s, self._last_seen_cache)
-                if act in (ThreadActivity.AWAITING_INPUT, ThreadActivity.RESPONSE_READY):
+                seen = _is_session_seen(s, self._last_seen_cache)
+                if not seen and act in (ThreadActivity.AWAITING_INPUT, ThreadActivity.RESPONSE_READY):
                     elevated.append(s)
                 else:
                     quiet.append(s)
@@ -1418,7 +1419,7 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         olist.clear_options()
         animating = []
 
-        # Split into notified, elevated (your-turn without notification), and quiet
+        # Split into notified, elevated (unseen your-turn without notification), and quiet
         notified = []
         elevated = []
         quiet = []
@@ -1427,7 +1428,8 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
                 notified.append(s)
             else:
                 act = session_activity(s, self._last_seen_cache)
-                if act in (ThreadActivity.AWAITING_INPUT, ThreadActivity.RESPONSE_READY):
+                seen = _is_session_seen(s, self._last_seen_cache)
+                if not seen and act in (ThreadActivity.AWAITING_INPUT, ThreadActivity.RESPONSE_READY):
                     elevated.append(s)
                 else:
                     quiet.append(s)
