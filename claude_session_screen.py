@@ -17,23 +17,19 @@ import time
 import uuid
 from pathlib import Path
 
-from rich.text import Text
-
 from textual import work
 from textual.binding import Binding
 from textual.app import ComposeResult
 from textual.containers import Horizontal, Vertical
 from textual.screen import Screen
-from textual.widget import Widget
 from textual.widgets import Static
 
 from models import Link, Store, Workstream
 from rendering import (
-    BG_RAISED, BG_BASE, BG_SURFACE,
-    C_BLUE, C_CYAN, C_DIM, C_FAINT, C_GREEN, C_MID, C_ORANGE,
-    C_PURPLE, C_RED, C_YELLOW,
+    BG_RAISED, BG_BASE,
+    C_BLUE, C_CYAN, C_DIM, C_FAINT, C_MID, C_ORANGE,
+    C_PURPLE, C_YELLOW,
     STATUS_THEME, CATEGORY_THEME,
-    _session_title,
 )
 from sessions import ClaudeSession, parse_session
 from terminal import TerminalWidget
@@ -65,7 +61,6 @@ class SessionHeaderWidget(Static):
         ws_name: str,
         ws_status: str,
         ws_category: str,
-        ws_desc: str,
         session_id: str,
         jsonl_path: str,
         initial_title: str = "",
@@ -74,15 +69,25 @@ class SessionHeaderWidget(Static):
         self._ws_name = ws_name
         self._ws_status = ws_status
         self._ws_category = ws_category
-        self._ws_desc = ws_desc
         self._session_id = session_id
         self._jsonl_path = jsonl_path
         self._initial_title = initial_title
         self._start_time = time.time()
+        # Resolve status/category colors once
+        self._sc = C_DIM
+        self._cc = C_DIM
+        for k, v in STATUS_THEME.items():
+            if k and k.value == ws_status:
+                self._sc = v
+                break
+        for k, v in CATEGORY_THEME.items():
+            if k and k.value == ws_category:
+                self._cc = v
+                break
 
     def on_mount(self) -> None:
-        self._refresh_display()
-        self.set_interval(5.0, self._refresh_display)
+        self._render_static()
+        self.set_interval(5.0, self._refresh_async)
 
     def _format_elapsed(self) -> str:
         secs = int(time.time() - self._start_time)
@@ -93,16 +98,27 @@ class SessionHeaderWidget(Static):
         else:
             return f"{secs // 3600}h{(secs % 3600) // 60:02d}m"
 
-    def _refresh_display(self) -> None:
+    def _render_static(self) -> None:
+        """Initial render before any JSONL data is available."""
+        elapsed = self._format_elapsed()
+        sid_short = self._session_id[:8]
+        title = self._initial_title or self._ws_name
+        line1 = f"[bold]{_esc(title)}[/bold]  [{C_DIM}]{elapsed}[/]  [{C_FAINT}]{sid_short}[/]"
+        line2 = f"[{C_BLUE}]ORCH[/]  [{C_PURPLE}]{_esc(self._ws_name)}[/]  [{self._sc}]{self._ws_status}[/]  [{self._cc}]{self._ws_category}[/]"
+        line3 = f"[{C_FAINT}]{'─' * 8}[/]"
+        self.update(f"{line1}\n{line2}\n{line3}")
+
+    @work(thread=True)
+    def _refresh_async(self) -> None:
+        """Parse JSONL in a thread so we don't block the event loop."""
         elapsed = self._format_elapsed()
         sid_short = self._session_id[:8]
 
-        # Parse live session data
         title = ""
         model = ""
         msgs = 0
         asst_msgs = 0
-        tokens_str = "-"
+        tokens_str = "—"
         duration = ""
         age = ""
         files: list[str] = []
@@ -126,45 +142,23 @@ class SessionHeaderWidget(Static):
                     last_msg = s.last_user_message_text or s.last_message_text or ""
                     last_role = "user" if s.last_user_message_text else (s.last_message_role or "")
                     title = get_session_title(s) or ""
-                    if not title:
-                        fm = s.last_message_text or ""
-                        if fm:
-                            line = fm.split("\n")[0].strip()
-                            if line.startswith("#"):
-                                line = line.lstrip("# ")
-                            title = line
             except Exception:
                 pass
 
         if not title:
             title = self._initial_title or self._ws_name
 
-        sc = STATUS_THEME.get(None, C_DIM)
-        cc = CATEGORY_THEME.get(None, C_DIM)
-        # Look up by string value
-        for k, v in STATUS_THEME.items():
-            if k and k.value == self._ws_status:
-                sc = v
-                break
-        for k, v in CATEGORY_THEME.items():
-            if k and k.value == self._ws_category:
-                cc = v
-                break
-
-        # Line 1: title + model + elapsed + sid
+        # Build markup
         r1_parts = []
-        if model and model != "-":
+        if model and model != "—":
             r1_parts.append(f"[{C_CYAN}]{model}[/]")
         r1_parts.append(f"[{C_DIM}]{elapsed}[/]")
         r1_parts.append(f"[{C_FAINT}]{sid_short}[/]")
-        right1 = "  ".join(r1_parts)
-        line1 = f"[bold]{_esc(title)}[/bold]  {right1}"
+        line1 = f"[bold]{_esc(title)}[/bold]  {'  '.join(r1_parts)}"
 
-        # Line 2: ORCH ws status category | msg counts tokens
-        l2 = f"[{C_BLUE}]ORCH[/]  [{C_PURPLE}]{_esc(self._ws_name)}[/]  [{sc}]{self._ws_status}[/]  [{cc}]{self._ws_category}[/]"
+        l2 = f"[{C_BLUE}]ORCH[/]  [{C_PURPLE}]{_esc(self._ws_name)}[/]  [{self._sc}]{self._ws_status}[/]  [{self._cc}]{self._ws_category}[/]"
         if msgs > 0:
-            r2_parts = [f"[{C_DIM}]{msgs}|{asst_msgs}[/]"]
-            # Token color by magnitude
+            r2_parts = [f"[{C_DIM}]{msgs}↑{asst_msgs}↓[/]"]
             tok_val = _parse_tokens(tokens_str)
             tc = C_ORANGE if tok_val >= 500_000 else C_YELLOW if tok_val >= 100_000 else C_DIM
             r2_parts.append(f"[{tc}]{tokens_str}[/]")
@@ -172,10 +166,9 @@ class SessionHeaderWidget(Static):
                 r2_parts.append(f"[{C_DIM}]{duration}[/]")
             if age:
                 r2_parts.append(f"[{C_MID}]{age}[/]")
-            l2 += f"  [{C_DIM}]|[/]  " + "  ".join(r2_parts)
+            l2 += f"  [{C_DIM}]│[/]  " + "  ".join(r2_parts)
         line2 = l2
 
-        # Line 3: tool bar + files | last message
         bar = _tool_bar_markup(tool_counts)
         flist = _file_list_markup(files)
         l3 = bar
@@ -185,12 +178,11 @@ class SessionHeaderWidget(Static):
             prefix = "you: " if last_role == "user" else ""
             clean = last_msg.replace("\n", " ").strip()
             if len(prefix + clean) > 60:
-                clean = clean[:60 - len(prefix) - 1] + "..."
-            snippet = f"[{C_FAINT}]{_esc(prefix + clean)}[/]"
-            l3 += f"  [{C_DIM}]|[/]  {snippet}"
+                clean = clean[:60 - len(prefix) - 1] + "…"
+            l3 += f"  [{C_DIM}]│[/]  [{C_FAINT}]{_esc(prefix + clean)}[/]"
         line3 = l3
 
-        self.update(f"{line1}\n{line2}\n{line3}")
+        self.app.call_from_thread(self.update, f"{line1}\n{line2}\n{line3}")
 
 
 # ── Footer Widget ────────────────────────────────────────────────────
@@ -206,34 +198,24 @@ class SessionFooterWidget(Static):
     }}
     """
 
-    def __init__(self, session_id: str, cwd: str, ws_name: str) -> None:
+    def __init__(self, session_id: str, cwd: str, ws_name: str, git_branch: str = "") -> None:
         super().__init__()
         self._session_id = session_id
         self._cwd = cwd
         self._ws_name = ws_name
+        self._git_branch = git_branch
 
     def on_mount(self) -> None:
         sid_short = self._session_id[:8]
         short_cwd = self._cwd.replace(os.path.expanduser("~"), "~")
 
-        git_branch = ""
-        try:
-            result = subprocess.run(
-                ["git", "-C", self._cwd, "branch", "--show-current"],
-                capture_output=True, text=True, timeout=5,
-            )
-            if result.returncode == 0:
-                git_branch = result.stdout.strip()
-        except Exception:
-            pass
-
         parts = [
             f"[{C_BLUE}]{sid_short}[/]",
             f"[{C_DIM}]{_esc(short_cwd)}[/]",
         ]
-        if git_branch:
-            parts.append(f"[{C_PURPLE}]{_esc(git_branch)}[/]")
-        parts.append(f"[{C_DIM}]|[/]")
+        if self._git_branch:
+            parts.append(f"[{C_PURPLE}]{_esc(self._git_branch)}[/]")
+        parts.append(f"[{C_DIM}]│[/]")
         parts.append(f"[{C_YELLOW}]C-e[/] [{C_DIM}]extract[/]")
         parts.append(f"[{C_YELLOW}]C-j/k[/] [{C_DIM}]panels[/]")
 
@@ -289,10 +271,22 @@ class ClaudeSessionScreen(Screen):
         self._cwd = cwd or self._resolve_cwd()
         self._is_new = session_id is None
         self._session_id = session_id or str(uuid.uuid4())
-        self._claude_context = self._build_context()
-        self._tigrc_path: str | None = None
+        self._sys_prompt = self._build_context()
         self._active_panel = "cs-terminal"
         self._start_time = time.time()
+
+        # Pre-compute everything compose() needs (no I/O in compose)
+        self._sync_slash_commands()
+        self._tigrc_path = self._generate_tigrc()
+        self._initial_title = self._resolve_initial_title()
+        self._claude_command = self._build_claude_command()
+        self._env = self._build_env()
+        self._tig_env = {"TIGRC_USER": self._tigrc_path}
+        self._git_branch = self._detect_git_branch()
+        self._jsonl = self._jsonl_path()
+
+        log.debug("ClaudeSessionScreen.__init__: sid=%s cwd=%s new=%s cmd_len=%d",
+                  self._session_id[:8], self._cwd, self._is_new, len(self._claude_command))
 
     def _resolve_cwd(self) -> str:
         from actions import ws_working_dir
@@ -342,7 +336,7 @@ class ClaudeSessionScreen(Screen):
             args += ["--session-id", self._session_id]
         else:
             args += ["--resume", self._session_id]
-        args += ["--append-system-prompt", self._claude_context]
+        args += ["--append-system-prompt", self._sys_prompt]
         args += ["-n", f"orch:{self._ws.name}"]
         if self._prompt:
             args.append(self._prompt)
@@ -359,6 +353,18 @@ class ClaudeSessionScreen(Screen):
     def _jsonl_path(self) -> str:
         encoded_dir = self._cwd.replace("/", "-")
         return str(Path.home() / ".claude" / "projects" / encoded_dir / f"{self._session_id}.jsonl")
+
+    def _detect_git_branch(self) -> str:
+        try:
+            result = subprocess.run(
+                ["git", "-C", self._cwd, "branch", "--show-current"],
+                capture_output=True, text=True, timeout=3,
+            )
+            if result.returncode == 0:
+                return result.stdout.strip()
+        except Exception:
+            pass
+        return ""
 
     # ── Slash command syncing ─────────────────────────────────────
 
@@ -389,8 +395,6 @@ class ClaudeSessionScreen(Screen):
 # orch-sidebar overrides — compact for 36-column pane
 set refresh-mode = periodic
 set refresh-interval = 3
-
-# Compact main view (commit log)
 set main-view-date = custom
 set main-view-date-format = "%m/%d"
 set main-view-author = no
@@ -398,14 +402,11 @@ set main-view-id = yes
 set main-view-id-width = 7
 set main-view-line-number = no
 set line-graphics = utf-8
-
-# Compact status view
 set status-view-show-untracked-dirs = no
 """
         fd, path = tempfile.mkstemp(suffix=".tigrc", prefix="orch-")
         os.write(fd, content.encode())
         os.close(fd)
-        self._tigrc_path = path
         return path
 
     # ── Initial title resolution ──────────────────────────────────
@@ -426,30 +427,23 @@ set status-view-show-untracked-dirs = no
             return self._prompt[:60]
         return ""
 
-    # ── Compose ───────────────────────────────────────────────────
+    # ── Compose (pure — no I/O) ───────────────────────────────────
 
     def compose(self) -> ComposeResult:
-        self._sync_slash_commands()
-        tigrc = self._generate_tigrc()
-        jsonl = self._jsonl_path()
-        initial_title = self._resolve_initial_title()
-        env = self._build_env()
-        tig_env = {"TIGRC_USER": tigrc}
-
+        log.debug("ClaudeSessionScreen.compose: starting")
         with Horizontal(id="cs-outer"):
             with Vertical(id="cs-main-col"):
                 yield SessionHeaderWidget(
                     ws_name=self._ws.name,
                     ws_status=self._ws.status.value if self._ws.status else "",
                     ws_category=self._ws.category.value if self._ws.category else "",
-                    ws_desc=self._ws.description or "",
                     session_id=self._session_id,
-                    jsonl_path=jsonl,
-                    initial_title=initial_title,
+                    jsonl_path=self._jsonl,
+                    initial_title=self._initial_title,
                 )
                 yield TerminalWidget(
-                    command=self._build_claude_command(),
-                    env=env,
+                    command=self._claude_command,
+                    env=self._env,
                     cwd=self._cwd,
                     passthrough_keys=_PASSTHROUGH_KEYS,
                     id="cs-terminal",
@@ -458,27 +452,35 @@ set status-view-show-untracked-dirs = no
                     session_id=self._session_id,
                     cwd=self._cwd,
                     ws_name=self._ws.name,
+                    git_branch=self._git_branch,
                 )
             with Vertical(id="cs-sidebar"):
                 yield TerminalWidget(
                     command="tig status",
-                    env=tig_env,
+                    env=self._tig_env,
                     cwd=self._cwd,
                     passthrough_keys=_PASSTHROUGH_KEYS,
                     id="cs-tig-status",
                 )
                 yield TerminalWidget(
                     command="tig",
-                    env=tig_env,
+                    env=self._tig_env,
                     cwd=self._cwd,
                     passthrough_keys=_PASSTHROUGH_KEYS,
                     id="cs-tig-log",
                 )
+        log.debug("ClaudeSessionScreen.compose: done")
 
     def on_mount(self) -> None:
+        log.debug("ClaudeSessionScreen.on_mount: starting terminals")
         for tw in self.query(TerminalWidget):
-            tw.start()
+            try:
+                tw.start()
+                log.debug("  started %s", tw.id)
+            except Exception as e:
+                log.error("  FAILED to start %s: %s", tw.id, e)
         self.query_one("#cs-terminal", TerminalWidget).focus()
+        log.debug("ClaudeSessionScreen.on_mount: done")
 
     def on_unmount(self) -> None:
         if self._tigrc_path:
@@ -490,9 +492,11 @@ set status-view-show-untracked-dirs = no
     # ── Post-session handling ─────────────────────────────────────
 
     def on_terminal_widget_finished(self, event: TerminalWidget.Finished) -> None:
-        sender = getattr(event, "_sender", None)
-        if not isinstance(sender, TerminalWidget) or sender.id != "cs-terminal":
+        widget = event._sender
+        if not isinstance(widget, TerminalWidget) or widget.id != "cs-terminal":
             return  # A sidebar terminal exited, ignore
+
+        log.debug("Claude terminal finished, cleaning up")
 
         # Auto-link session to workstream
         self._auto_link_session()
@@ -502,7 +506,7 @@ set status-view-show-untracked-dirs = no
 
         # Parse final session data for summary
         session = None
-        jp = Path(self._jsonl_path())
+        jp = Path(self._jsonl)
         if jp.exists():
             try:
                 session = parse_session(jp)
@@ -591,7 +595,7 @@ def _parse_tokens(tokens_str: str) -> float:
             return float(tokens_str[:-1]) * 1_000_000
         elif tokens_str.endswith("k"):
             return float(tokens_str[:-1]) * 1_000
-        elif tokens_str != "-":
+        elif tokens_str != "—":
             return float(tokens_str)
     except ValueError:
         pass
@@ -603,7 +607,7 @@ def _tool_bar_markup(tc: dict[str, int], width: int = 8) -> str:
     cats = [("mutate", C_ORANGE), ("bash", C_MID), ("read", C_DIM), ("agent", C_PURPLE)]
     total = sum(tc.values())
     if total == 0:
-        return f"[{C_FAINT}]{'-' * width}[/]"
+        return f"[{C_FAINT}]{'─' * width}[/]"
     parts = []
     used = 0
     for cat, color in cats:
@@ -613,10 +617,10 @@ def _tool_bar_markup(tc: dict[str, int], width: int = 8) -> str:
         chars = max(1, round(n / total * width))
         chars = min(chars, width - used)
         if chars > 0:
-            parts.append(f"[{color}]{'=' * chars}[/]")
+            parts.append(f"[{color}]{'▬' * chars}[/]")
             used += chars
     if used < width:
-        parts.append(f"[{C_FAINT}]{'-' * (width - used)}[/]")
+        parts.append(f"[{C_FAINT}]{'─' * (width - used)}[/]")
     return "".join(parts)
 
 
