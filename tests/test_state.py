@@ -116,10 +116,10 @@ class TestFiltering:
         assert len(items) == 1
 
     def test_filter_active(self, populated_state):
+        """Active now means 'has live sessions' — with no sessions, no workstreams are active."""
         populated_state.set_filter("active")
         items = populated_state.get_filtered_streams()
-        assert all(w.is_active for w in items)
-        assert len(items) == 3  # IN_PROGRESS (2) + AWAITING_REVIEW (1)
+        assert len(items) == 0  # No sessions = no active workstreams
 
     def test_filter_stale(self, populated_state):
         populated_state.set_filter("stale")
@@ -649,17 +649,7 @@ class TestCommandExecution:
         reloaded = populated_state.store.get(ws.id)
         assert any(t.text == "hello world" for t in reloaded.todos)
 
-    def test_status_command(self, populated_state):
-        ws = populated_state.store.active[0]
-        result = populated_state.execute_command("status done", ws.id)
-        assert result["action"] == "refresh"
-        reloaded = populated_state.store.get(ws.id)
-        assert reloaded.status == Status.DONE
-
-    def test_status_invalid(self, populated_state):
-        ws = populated_state.store.active[0]
-        result = populated_state.execute_command("status bogus", ws.id)
-        assert result["action"] == "error"
+    # Status command removed — status is auto-derived, not manually set
 
     def test_archive_command(self, populated_state):
         ws = populated_state.store.active[0]

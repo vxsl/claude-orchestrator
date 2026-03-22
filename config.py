@@ -26,8 +26,7 @@ DEFAULT_KEYS: dict[str, tuple[str, str, bool, bool]] = {
     # Actions
     "add": ("a", "Add", True, False),
     "brain_dump": ("b", "Brain", False, False),
-    "cycle_status": ("s", "Status", True, False),
-    "cycle_status_back": ("S", "Status←", False, False),
+    # s/S freed up (was: cycle status — removed, status is auto-derived now)
     "spawn": ("c", "Spawn", True, False),
     "repo_spawn": ("C", "Repo", True, False),
     "resume": ("r", "Resume", True, False),
@@ -47,7 +46,7 @@ DEFAULT_KEYS: dict[str, tuple[str, str, bool, bool]] = {
     "filter('archived')": ("6", "", False, False),
     "search": ("slash", "/", True, False),
     # Sort
-    "sort('status')": ("f1", "", False, False),
+    "sort('activity')": ("f1", "", False, False),
     "sort('updated')": ("f2", "", False, False),
     "sort('created')": ("f3", "", False, False),
     "sort('category')": ("f4", "", False, False),

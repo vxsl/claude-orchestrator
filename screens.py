@@ -145,7 +145,7 @@ class HelpScreen(FuzzyPickerScreen):
         ("flt-archived", f"[{C_YELLOW}]6[/{C_YELLOW}]  Filter: Archived"),
         ("flt-search", f"[{C_YELLOW}]/[/{C_YELLOW}]  Search workstreams"),
         # Sort
-        ("srt-status", f"[{C_YELLOW}]F1[/{C_YELLOW}]  Sort: Status"),
+        ("srt-activity", f"[{C_YELLOW}]F1[/{C_YELLOW}]  Sort: Activity"),
         ("srt-updated", f"[{C_YELLOW}]F2[/{C_YELLOW}]  Sort: Updated"),
         ("srt-created", f"[{C_YELLOW}]F3[/{C_YELLOW}]  Sort: Created"),
         ("srt-category", f"[{C_YELLOW}]F4[/{C_YELLOW}]  Sort: Category"),
@@ -853,8 +853,7 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         Binding("escape", "dismiss", "Back", priority=True),
         Binding("backspace,ctrl+h", "go_back", "^H back"),
         Binding("ctrl+l", "go_forward", "^L resume"),
-        Binding("s", "cycle_status", "Status"),
-        Binding("S", "cycle_status_back", "Status\u2190"),
+        # s/S freed (was: cycle status — removed, status is auto-derived)
         Binding("c", "spawn", "Spawn"),
         Binding("r", "resume", "Resume"),
         Binding("n", "quick_note", "+todo"),
@@ -1748,7 +1747,7 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         return f"[bold {C_PURPLE}]{_rich_escape(self.ws.name)}[/bold {C_PURPLE}]"
 
     def _render_meta(self) -> str:
-        parts = [_status_markup(self.ws.status), _category_markup(self.ws.category)]
+        parts = [_category_markup(self.ws.category)]
         if self._detail_sessions:
             n = len(self._detail_sessions)
             total_tok = sum(s.total_input_tokens + s.total_output_tokens for s in self._detail_sessions)
@@ -1795,7 +1794,7 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
 
     def _render_help(self) -> str:
         pairs = [
-            ("^L", "resume"), ("s/S", "status"), ("c", "spawn"),
+            ("^L", "resume"), ("c", "spawn"),
             ("n", "+todo"), ("e", "todos"), ("L", "+link"),
             ("o", "open"), ("x", "archive ws"),
             ("space", "archive/restore"),
@@ -2129,20 +2128,6 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
             self.query_one("#detail-body", Static).update(self._render_body())
             self._load_detail_sessions()
             self._load_feed()
-
-    def action_cycle_status(self):
-        statuses = list(Status)
-        idx = statuses.index(self.ws.status)
-        self.ws.set_status(statuses[(idx + 1) % len(statuses)])
-        self.store.update(self.ws)
-        self._refresh()
-
-    def action_cycle_status_back(self):
-        statuses = list(Status)
-        idx = statuses.index(self.ws.status)
-        self.ws.set_status(statuses[(idx - 1) % len(statuses)])
-        self.store.update(self.ws)
-        self._refresh()
 
     def action_quick_note(self):
         def on_note(text: str | None):

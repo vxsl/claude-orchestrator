@@ -597,7 +597,7 @@ class OrchestratorApp(App):
 
         lines = []
         lines.append(f"[bold {C_PURPLE}]{_rich_escape(ws.name)}[/bold {C_PURPLE}]")
-        lines.append(f"{_status_markup(ws.status)}  {_category_markup(ws.category)}")
+        lines.append(f"{_category_markup(ws.category)}")
         if archived:
             lines.append(f"[{C_DIM}]Archived[/{C_DIM}]")
         lines.append("")
@@ -657,7 +657,7 @@ class OrchestratorApp(App):
             lines.append(self._nav_hints())
         else:
             lines.append(self._hint_line([
-                ("r", "resume"), ("c", "new session"), ("s", "status"),
+                ("r", "resume"), ("c", "new session"),
                 ("n", "note"), ("o", "open"),
             ]))
 
@@ -762,20 +762,15 @@ class OrchestratorApp(App):
 
     def _render_status_bar(self) -> str:
         total = len(self.state.store.active)
-        in_prog = len([w for w in self.state.store.active if w.status == Status.IN_PROGRESS])
-        blocked = len([w for w in self.state.store.active if w.status == Status.BLOCKED])
-        review = len([w for w in self.state.store.active if w.status == Status.AWAITING_REVIEW])
-        done = len([w for w in self.state.store.active if w.status == Status.DONE])
+        live_sessions = sum(1 for s in self.state.sessions if s.is_live)
         stale = len(self.state.store.stale())
 
         parts = [
             f"[bold {C_BLUE}] ORCH [/bold {C_BLUE}]",
             f"[bold]{total}[/bold] streams",
-            f"[{C_CYAN}]{STATUS_ICONS[Status.IN_PROGRESS]} {in_prog}[/{C_CYAN}]",
-            f"[{C_RED}]{STATUS_ICONS[Status.BLOCKED]} {blocked}[/{C_RED}]",
-            f"[{C_PURPLE}]{STATUS_ICONS[Status.AWAITING_REVIEW]} {review}[/{C_PURPLE}]",
-            f"[{C_GREEN}]{STATUS_ICONS[Status.DONE]} {done}[/{C_GREEN}]",
         ]
+        if live_sessions:
+            parts.append(f"[{C_CYAN}]{live_sessions} live[/{C_CYAN}]")
         if stale:
             parts.append(f"[{C_DIM}]{stale} stale[/{C_DIM}]")
 
@@ -814,7 +809,7 @@ class OrchestratorApp(App):
                 parts.append(f"[{C_DIM}]{label}[/{C_DIM}]")
 
         sort_labels = {
-            "status": "Status", "updated": "Updated", "created": "Created",
+            "activity": "Activity", "updated": "Updated", "created": "Created",
             "category": "Category", "name": "Name",
         }
         sort_label = sort_labels.get(self.state.sort_mode, self.state.sort_mode)
@@ -1193,26 +1188,6 @@ class OrchestratorApp(App):
             self._refresh_ws_table()
 
         self.push_screen(AddScreen(), callback=on_result)
-
-    def action_cycle_status(self):
-        if self.state.view_mode != ViewMode.WORKSTREAMS:
-            return
-        ws = self._selected_ws()
-        if ws:
-            ws = self.state.cycle_status(ws.id)
-            if ws:
-                self._refresh_ws_table()
-                self.notify(f"{ws.name} \u2192 {STATUS_ICONS[ws.status]} {ws.status.value}", timeout=1)
-
-    def action_cycle_status_back(self):
-        if self.state.view_mode != ViewMode.WORKSTREAMS:
-            return
-        ws = self._selected_ws()
-        if ws:
-            ws = self.state.cycle_status(ws.id, forward=False)
-            if ws:
-                self._refresh_ws_table()
-                self.notify(f"{ws.name} \u2192 {STATUS_ICONS[ws.status]} {ws.status.value}", timeout=1)
 
     def action_quick_note(self):
         if self.state.view_mode != ViewMode.WORKSTREAMS:

@@ -456,7 +456,9 @@ class AppState:
         elif self.filter_mode == "personal":
             streams = [w for w in self.store.active if w.category == Category.PERSONAL]
         elif self.filter_mode == "active":
-            streams = [w for w in self.store.active if w.is_active]
+            # Active = has live sessions or recent activity
+            streams = [w for w in self.store.active
+                       if any(s.is_live for s in self.sessions_for_ws(w))]
         elif self.filter_mode == "stale":
             streams = self.store.stale()
         elif self.filter_mode == "archived":
@@ -1058,17 +1060,6 @@ class AppState:
         elif cmd == "archived":
             self.view_mode = ViewMode.ARCHIVED
             return {"action": "view"}
-
-        # Status
-        elif cmd in ("status", "st") and ws:
-            if not arg:
-                return {"action": "error", "msg": "Usage: status <queued|in-progress|awaiting-review|done|blocked>"}
-            try:
-                ws.set_status(Status(arg))
-                self.store.update(ws)
-                return {"action": "refresh", "msg": f"{ws.name} → {STATUS_ICONS[ws.status]} {ws.status.value}"}
-            except ValueError:
-                return {"action": "error", "msg": f"Invalid status: {arg}"}
 
         # Link
         elif cmd in ("link", "ln") and ws:

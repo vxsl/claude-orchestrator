@@ -352,20 +352,18 @@ def _render_ws_option(
     IND = "     "
     is_discovered = ws.origin == Origin.DISCOVERED
 
-    # ── Status icon ──
-    if is_discovered:
-        best = _best_activity(ws_sessions, last_seen)
-        all_seen = _all_sessions_seen(ws_sessions, last_seen)
-        if best == ThreadActivity.THINKING:
-            icon = f"[bold {C_CYAN}]◉[/bold {C_CYAN}]"
-        elif best in (ThreadActivity.AWAITING_INPUT, ThreadActivity.RESPONSE_READY):
-            color = C_DIM if all_seen else C_GREEN
-            icon = f"[{color}]●[/{color}]"
-        else:
-            icon = f"[{C_DIM}]·[/{C_DIM}]"
+    # ── Activity icon (auto-derived from session state, not manual status) ──
+    best = _best_activity(ws_sessions, last_seen)
+    all_seen = _all_sessions_seen(ws_sessions, last_seen)
+    if best == ThreadActivity.THINKING:
+        icon = f"[bold {C_CYAN}]◉[/bold {C_CYAN}]"
+    elif best in (ThreadActivity.AWAITING_INPUT, ThreadActivity.RESPONSE_READY):
+        color = C_DIM if all_seen else C_GREEN
+        icon = f"[{color}]●[/{color}]"
+    elif ws_sessions:
+        icon = f"[{C_DIM}]○[/{C_DIM}]"  # has sessions but idle
     else:
-        color = STATUS_THEME.get(ws.status, C_DIM)
-        icon = f"[{color}]{STATUS_ICONS[ws.status]}[/{color}]"
+        icon = f"[{C_FAINT}]·[/{C_FAINT}]"  # no sessions
 
     # ── Line 1: icon + name + indicators + branch ──
     name_esc = _rich_escape(ws.name)
@@ -392,14 +390,11 @@ def _render_ws_option(
     sep = f" [{C_FAINT}]·[/{C_FAINT}] "
     parts: list[str] = []
 
-    sc = STATUS_THEME.get(ws.status, C_DIM)
-    if is_discovered:
-        parts.append(f"[{C_DIM}]discovered[/{C_DIM}]")
-    else:
-        parts.append(f"[{sc}]{ws.status.value}[/{sc}]")
-
     cc = CATEGORY_THEME.get(ws.category, C_DIM)
     parts.append(f"[{cc}]{ws.category.value}[/{cc}]")
+
+    if is_discovered:
+        parts.append(f"[{C_DIM}]discovered[/{C_DIM}]")
 
     wt_text, wt_color = _worktree_styled(ws)
     if wt_text:
