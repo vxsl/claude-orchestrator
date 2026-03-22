@@ -118,8 +118,8 @@ if JSONL_PATH and Path(JSONL_PATH).exists():
             age = s.age
             files = s.files_mutated or []
             tool_counts = s.tool_counts or {}
-            last_msg = s.last_message_text or ''
-            last_role = s.last_message_role or ''
+            last_msg = s.last_user_message_text or s.last_message_text or ''
+            last_role = 'user' if s.last_user_message_text else (s.last_message_role or '')
 
             # Resolve title
             from thread_namer import get_session_title

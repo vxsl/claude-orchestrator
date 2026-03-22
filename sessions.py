@@ -234,6 +234,7 @@ class ClaudeSession:
     turn_complete: bool = False  # True when system:turn_duration logged after last user/assistant
     all_session_ids: list[str] = field(default_factory=list)  # All sessionIds found in JSONL (for resume matching)
     last_message_text: str = ""  # Snippet of last user or assistant message
+    last_user_message_text: str = ""  # Snippet of last human (non-interrupt) user message
     last_tool_name: str = ""     # Name of last tool_use in assistant message
     last_commit_sha: str = ""    # SHA from last git commit (if session ended with one)
     last_commit_summary: str = ""  # Commit message from last git commit
@@ -438,6 +439,8 @@ def parse_session(jsonl_path: Path) -> Optional[ClaudeSession]:
                     if snippet:
                         session.last_message_role = msg_type
                         session.last_message_text = snippet
+                        if msg_type == "user" and _is_human_turn(data):
+                            session.last_user_message_text = snippet
                     # Interrupted turns: the "[Request interrupted" user
                     # message means Claude is back at the prompt.
                     if msg_type == "user" and _is_interrupt_marker(data):
@@ -564,6 +567,8 @@ def refresh_session_tail(session: ClaudeSession, tail_bytes: int = 8192) -> bool
                 if snippet:
                     session.last_message_role = msg_type
                     session.last_message_text = snippet
+                    if msg_type == "user" and _is_human_turn(data):
+                        session.last_user_message_text = snippet
                 if msg_type == "user" and _is_interrupt_marker(data):
                     session.turn_complete = True
             if msg_type == "assistant" and "message" in data:
