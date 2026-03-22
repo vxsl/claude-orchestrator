@@ -1074,15 +1074,22 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         self.set_interval(10, self._periodic_refresh)
 
     def _mark_all_seen(self):
-        """Mark all sessions in this workstream as seen right now."""
+        """Mark all sessions in this workstream as seen right now — batched."""
         app = self.app
         if hasattr(app, 'state'):
             sessions = app.state.sessions_for_ws(self.ws, include_archived_sessions=True)
         else:
             sessions = self._detail_sessions + self._archived_sessions
+        if not sessions:
+            return
+        # Batch: single read + single write instead of N reads + N writes
+        data = load_last_seen()
+        now = datetime.now(timezone.utc).isoformat()
         for s in sessions:
-            mark_thread_seen(s.session_id)
-        self._last_seen_cache = load_last_seen()
+            data[s.session_id] = now
+        from threads import save_last_seen
+        save_last_seen(data)
+        self._last_seen_cache = data
 
     def _periodic_refresh(self):
         """Single merged timer: liveness check + feed poll."""
