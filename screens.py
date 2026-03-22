@@ -1656,6 +1656,12 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         log.debug("option_selected: sid=%s found=%s", sid, session is not None)
         if session:
             mark_thread_seen(session.session_id)
+            # Auto-dismiss notification when entering the session
+            notif = self._session_notifications.get(sid)
+            if notif and not notif.dismissed:
+                dismiss_notification(notif.id)
+                notif.dismissed = True
+                self._session_notifications.pop(sid, None)
             dirs = ws_directories(self.ws)
             resume_session_now(self.ws, session, dirs, self.app)
         else:
