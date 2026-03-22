@@ -411,14 +411,16 @@ def _render_session_option(
     else:
         line1 = f" {icon} {title_fmt}"
 
-    # Line 2: model in blue, stats in mid, age in mid, sid faint
+    # Line 2: only show model if not opus; stats dim, age mid, sid faint
+    model_part = "" if model == "opus" else f"[{C_BLUE}]{model:<8}[/{C_BLUE}]"
     dur_str = f"{duration:<8}" if duration else ""
     dur_len = 8 if duration else 0
-    meta_left_len = 4 + 8 + 10 + dur_len + len(age_str)
+    model_len = 0 if model == "opus" else 8
+    meta_left_len = 4 + model_len + 10 + dur_len + len(age_str)
     sid_gap = max(2, LINE_WIDTH - meta_left_len - 8)
 
     line2 = (
-        f"{INDENT}[{C_BLUE}]{model:<8}[/{C_BLUE}][{C_DIM}]{msgs_str:<10}"
+        f"{INDENT}{model_part}[{C_DIM}]{msgs_str:<10}"
         f"{dur_str}[/{C_DIM}]"
         f"[{C_MID}]{age_str}[/{C_MID}]"
         f"{' ' * sid_gap}[{C_FAINT}]{sid}[/{C_FAINT}]"
@@ -519,14 +521,16 @@ def _render_content_search_result(
     fill = max(2, LINE_WIDTH - prefix_w - len(title_raw) - len(hits_str))
     line1 = f" \u2738 {title}{' ' * fill}[{C_YELLOW}]{hits_str}[/{C_YELLOW}]"
 
-    # Line 2: model in blue, stats dim, age mid, sid faint
+    # Line 2: only show model if not opus; stats dim, age mid, sid faint
+    model_part = "" if model == "opus" else f"[{C_BLUE}]{model:<8}[/{C_BLUE}]"
     dur_str = f"{duration:<8}" if duration else ""
     dur_len = 8 if duration else 0
-    meta_left_len = 4 + 8 + 10 + dur_len + len(age_str)
+    model_len = 0 if model == "opus" else 8
+    meta_left_len = 4 + model_len + 10 + dur_len + len(age_str)
     sid_gap = max(2, LINE_WIDTH - meta_left_len - 8)
 
     line2 = (
-        f"{INDENT}[{C_BLUE}]{model:<8}[/{C_BLUE}][{C_DIM}]{msgs_str:<10}"
+        f"{INDENT}{model_part}[{C_DIM}]{msgs_str:<10}"
         f"{dur_str}[/{C_DIM}]"
         f"[{C_MID}]{age_str}[/{C_MID}]"
         f"{' ' * sid_gap}[{C_FAINT}]{sid}[/{C_FAINT}]"
