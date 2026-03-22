@@ -44,8 +44,8 @@ C_FAINT = "#484f58"      # near-invisible — IDs, decorative
 
 # ─── Background Palette ──────────────────────────────────────────────
 BG_BASE = "#000000"      # true black — matches terminal
-BG_SURFACE = "#0d1117"   # barely lifted — panels
-BG_RAISED = "#161b22"    # bars, headers, inputs
+BG_SURFACE = "#060606"   # barely lifted — focused panels
+BG_RAISED = "#0d1117"    # bars, headers, inputs
 
 
 # ─── Theme maps ─────────────────────────────────────────────────────
