@@ -868,6 +868,10 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         Binding("d", "dismiss_notification", "Dismiss", show=False),
         Binding("D", "dismiss_all_notifications", "Dismiss all", show=False),
         Binding("/", "search", "Search", show=False, priority=True),
+        # Delegate to app — OptionList type-ahead consumes these before
+        # they reach app-level bindings in a ModalScreen.
+        Binding("colon", "command_palette", ":", show=False),
+        Binding("question_mark", "help", "?", show=False),
     ] + _VimOptionListMixin.VIM_BINDINGS
 
     DEFAULT_CSS = f"""
@@ -2269,6 +2273,14 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
                 self._refresh()
                 self.app.notify(f"Added {link.kind} link", timeout=2)
         self.app.push_screen(AddLinkScreen(self.ws.name), callback=on_link)
+
+    def action_command_palette(self):
+        """Delegate to app's command palette."""
+        self.app.action_command_palette()
+
+    def action_help(self):
+        """Delegate to app's help screen."""
+        self.app.action_help()
 
 
 
