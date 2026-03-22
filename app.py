@@ -906,6 +906,14 @@ class OrchestratorApp(App):
         if named > 0:
             apply_cached_names(threads)
 
+        # Generate AI titles for sessions that don't have them yet
+        untitled = [s for s in sessions if not get_session_title(s)]
+        if untitled:
+            title_sessions(untitled)
+            self.call_from_thread(self._refresh_sessions_table)
+            for screen in self.screen_stack:
+                screen.post_message(SessionsChanged())
+
         new_count = synthesize_workstreams(threads, self.state.store.active)
         if new_count > 0 or named > 0:
             discovered = get_discovered_workstreams(threads)
