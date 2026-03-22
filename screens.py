@@ -2002,6 +2002,7 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
             messages = extract_session_content(session.jsonl_path) if session.jsonl_path else []
             self._content_cache[session.session_id] = messages
         if not messages:
+            self.app.notify("No conversation content to peek", timeout=2)
             return
         title_text = _session_title(session)
         header = (
