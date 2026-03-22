@@ -370,7 +370,7 @@ _BAR_LEGEND_LABELS = [
 
 def tool_bar_legend() -> str:
     """Return a Rich-markup legend for the tool usage bar."""
-    parts = [f"[{c}]▄ {label}[/{c}]" for label, c in _BAR_LEGEND_LABELS]
+    parts = [f"[not bold {c}]▄ {label}[/not bold {c}]" for label, c in _BAR_LEGEND_LABELS]
     return "  ".join(parts)
 
 
@@ -636,6 +636,124 @@ def _render_notification_option(notif, max_width: int = 40) -> str:
     line1 = f" [{color}]{icon}[/{color}]  [{color}]{msg}[/{color}]"
     line2 = f"      [{C_DIM}]{age} · {title_esc}[/{C_DIM}]"
     return f"{line1}\n{line2}"
+
+
+def _render_notified_session_option(
+    s: ClaudeSession, act: ThreadActivity, notif,
+    throbber_frame: int = 0, title_width: int = 48,
+    ws_repo_path: str = "", seen: bool = False,
+) -> str:
+    """Render a session with its notification front-and-center.
+
+    Layout — 4 lines:
+      {notif_icon} {notification_message}              {age}
+         {continuation…}
+         {activity_icon} {session_title} · {model} · {msgs}  {badge}
+         ▏▏▏▏▏░░░  app.py sessions.py +4
+    """
+    INDENT = "    "
+    LINE_WIDTH = title_width + 20
+
+    # Notification freshness styling
+    freshness = notif.freshness
+    if notif.dismissed:
+        notif_color = C_DIM
+        notif_icon = "·"
+    elif freshness == "fresh":
+        notif_color = C_GREEN
+        notif_icon = "●"
+    elif freshness == "recent":
+        notif_color = C_ORANGE
+        notif_icon = "●"
+    else:
+        notif_color = C_DIM
+        notif_icon = "○"
+
+    notif_age = _relative_time(notif.timestamp)
+
+    # Line 1: notification message (first line) + age right-aligned
+    msg_raw = notif.message.replace("\n", " ").strip()
+    max_msg_line1 = LINE_WIDTH - 3 - len(notif_age) - 2  # icon+space prefix, age suffix
+    if len(msg_raw) <= max_msg_line1:
+        msg_line1 = msg_raw
+        msg_line2 = ""
+    else:
+        # Word-wrap at max_msg_line1
+        cut = msg_raw.rfind(" ", 0, max_msg_line1)
+        if cut <= 0:
+            cut = max_msg_line1
+        msg_line1 = msg_raw[:cut]
+        msg_line2 = msg_raw[cut:].strip()
+
+    msg1_esc = _rich_escape(msg_line1)
+    age_gap = max(2, LINE_WIDTH - 3 - len(msg_line1) - len(notif_age))
+    line1 = f" [{notif_color}]{notif_icon}[/{notif_color}] [{notif_color}]{msg1_esc}[/{notif_color}]{' ' * age_gap}[{C_DIM}]{notif_age}[/{C_DIM}]"
+
+    # Line 2: continuation or empty padding
+    if msg_line2:
+        max_line2 = LINE_WIDTH - 4
+        if len(msg_line2) > max_line2:
+            msg_line2 = msg_line2[:max_line2 - 1] + "…"
+        msg2_esc = _rich_escape(msg_line2)
+        line2 = f"{INDENT}[{notif_color}]{msg2_esc}[/{notif_color}]"
+    else:
+        line2 = f"{INDENT}[{C_FAINT}]{'┄' * (LINE_WIDTH - 4)}[/{C_FAINT}]"
+
+    # Line 3: session identity — activity icon + title + compact meta + badge
+    icon = _activity_icon(act, throbber_frame, seen=seen)
+    badge = _activity_badge(act, seen=seen)
+    title_raw = _session_title(s)
+    model = _short_model(s.model)
+    msgs_str = f"{s.message_count} msgs"
+
+    # Build compact meta string
+    meta_parts = []
+    if model != "opus":
+        meta_parts.append(model)
+    meta_parts.append(msgs_str)
+    meta_str = " · ".join(meta_parts)
+
+    # Truncate title to fit: icon(3) + title + " · " + meta + gap + badge
+    badge_w = _BADGE_WIDTHS.get(act, 0)
+    avail_title = LINE_WIDTH - 3 - 3 - len(meta_str) - badge_w - 2
+    if len(title_raw) > avail_title:
+        title_raw = title_raw[:avail_title - 1] + "…"
+    title_esc = _rich_escape(title_raw)
+    title_fmt = f"[{C_LIGHT}]{title_esc}[/{C_LIGHT}]"
+
+    left3 = f" {icon} {title_fmt} [{C_DIM}]· {meta_str}[/{C_DIM}]"
+    if badge:
+        left3_plain_len = 3 + len(title_raw) + 3 + len(meta_str)
+        gap3 = max(2, LINE_WIDTH - left3_plain_len - badge_w)
+        line3 = f"{left3}{' ' * gap3}{badge}"
+    else:
+        line3 = left3
+
+    # Line 4: tool bar + file touchpoints (same as normal session)
+    bar = _tool_bar(s.tool_counts)
+    files = _file_touchpoints(s.files_mutated)
+    proj_label = ""
+    if ws_repo_path and s.project_path and s.project_path.rstrip("/") != ws_repo_path.rstrip("/"):
+        proj_label = f"[{C_FAINT}]{Path(s.project_path).name}[/{C_FAINT}]"
+
+    left4 = "  ".join(p for p in (bar, files) if p)
+    if not left4:
+        left4 = f"[{C_FAINT}]{'─' * 6}[/{C_FAINT}]"
+    if proj_label:
+        import re
+        left4_plain = re.sub(r"\[/?[^\]]*\]", "", left4)
+        proj_plain = re.sub(r"\[/?[^\]]*\]", "", proj_label)
+        gap4 = max(2, LINE_WIDTH - 4 - len(left4_plain) - len(proj_plain))
+        line4 = f"{INDENT}{left4}{' ' * gap4}{proj_label}"
+    else:
+        line4 = f"{INDENT}{left4}"
+
+    return "\n".join([line1, line2, line3, line4])
+
+
+# ─── Quiet session separator ──────────────────────────────────────
+
+QUIET_SEPARATOR_LABEL = f"[{C_DIM}]─── quiet ─────────────────────────────────────[/{C_DIM}]"
 
 
 # ─── Todo rendering ────────────────────────────────────────────────
