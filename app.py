@@ -1046,6 +1046,7 @@ class OrchestratorApp(App):
         if idx < len(self.state.preview_sessions):
             session = self.state.preview_sessions[idx]
             mark_thread_seen(session.session_id)
+            self.state._last_seen_valid = False
             ws = self._selected_ws()
             if ws:
                 dirs = ws_directories(ws)
