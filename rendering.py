@@ -343,10 +343,9 @@ def tool_bar_legend() -> str:
     return "  ".join(parts)
 
 
-def _tool_bar(tool_counts: dict[str, int], width: int = 8) -> str:
+def _tool_bar(tool_counts: dict[str, int], width: int = 6) -> str:
     """Render a mini stacked bar chart of tool usage by category.
 
-    Uses thin bar characters (▏) for lighter visual weight.
     Colors: coding=orange, bash=light, research=dim, agent=purple.
     Returns empty string if no tool usage.
     """
@@ -362,11 +361,10 @@ def _tool_bar(tool_counts: dict[str, int], width: int = 8) -> str:
         chars = max(1, round(n / total * width))
         chars = min(chars, width - used)
         if chars > 0:
-            parts.append(f"[{color}]{'▏' * chars}[/{color}]")
+            parts.append(f"[{color}]{'█' * chars}[/{color}]")
             used += chars
-    # Fill remainder
     if used < width:
-        parts.append(f"[{C_DIM}]{'▏' * (width - used)}[/{C_DIM}]")
+        parts.append(f"[{C_DIM}]{'░' * (width - used)}[/{C_DIM}]")
     return "".join(parts)
 
 
