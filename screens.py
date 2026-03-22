@@ -1299,12 +1299,11 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
             self._all_sessions = find_sessions_for_ws(self.ws, getattr(app, 'sessions', []))
             self._all_archived = []
 
-        # Apply search filter if active, otherwise show all
+        # If search is active, just update backing data silently — don't
+        # rebuild the results list mid-search (it resets scroll/highlight and
+        # causes visual disruption).  The next keystroke will re-search with
+        # the freshly updated _all_sessions/_all_archived.
         if self._search_text:
-            if self._content_ready:
-                self._run_content_search_sync()
-            else:
-                self._apply_title_filter()
             return
 
         # Stable merge when the user is focused on that pane (avoid jarring
