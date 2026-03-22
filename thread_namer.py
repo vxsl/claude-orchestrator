@@ -398,19 +398,30 @@ def refresh_thread_titles(threads: list[Thread]) -> int:
 # ─── Session-level titles ────────────────────────────────────────────
 
 
+_session_cache_memo: tuple[float, dict[str, str]] = (0.0, {})
+
+
 def _load_session_cache() -> dict[str, str]:
-    """Load {session_id: title} cache."""
+    """Load {session_id: title} cache.  Mtime-cached to avoid redundant reads."""
+    global _session_cache_memo
     if not SESSION_TITLE_CACHE.exists():
         return {}
     try:
-        return json.loads(SESSION_TITLE_CACHE.read_text())
+        mtime = SESSION_TITLE_CACHE.stat().st_mtime
+        if mtime == _session_cache_memo[0]:
+            return _session_cache_memo[1]
+        data = json.loads(SESSION_TITLE_CACHE.read_text())
+        _session_cache_memo = (mtime, data)
+        return data
     except (json.JSONDecodeError, OSError):
         return {}
 
 
 def _save_session_cache(cache: dict[str, str]):
+    global _session_cache_memo
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
     SESSION_TITLE_CACHE.write_text(json.dumps(cache, indent=2))
+    _session_cache_memo = (SESSION_TITLE_CACHE.stat().st_mtime, cache)
 
 
 def _extract_session_context(session: ClaudeSession) -> str:

@@ -1041,6 +1041,9 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         self._mark_all_seen()
         self._load_feed()  # must run before _load_detail_sessions so notification map is ready
         self._load_detail_sessions()
+        # Update header with session stats now that _detail_sessions is populated
+        self.query_one("#detail-meta", Static).update(self._render_meta())
+        self.query_one("#detail-body", Static).update(self._render_body())
         self.query_one("#detail-sessions", OptionList).focus()
         self._update_pane_labels()
         self.set_interval(10, self._periodic_refresh)
@@ -1143,6 +1146,11 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         "feed": "#detail-feed-pane",
     }
 
+    def _sessions_loading(self) -> bool:
+        """True if the initial session discovery hasn't completed yet."""
+        app = self.app
+        return hasattr(app, 'state') and not app.state.sessions_loaded
+
     def _update_pane_labels(self):
         sess_label = self.query_one("#detail-sessions-label", Static)
         arch_label = self.query_one("#detail-archived-label", Static)
@@ -1152,10 +1160,12 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
 
         legend = tool_bar_legend()
         notif_badge = f" [{C_GREEN}]({n_notified} new)[/{C_GREEN}]" if n_notified else ""
+        loading = self._sessions_loading()
+        count_str = "..." if loading and n_active == 0 else str(n_active)
         if self._active_pane == "sessions":
-            left = f"[bold {C_BLUE}]Sessions[/bold {C_BLUE}] [{C_DIM}]({n_active})[/{C_DIM}]{notif_badge}"
+            left = f"[bold {C_BLUE}]Sessions[/bold {C_BLUE}] [{C_DIM}]({count_str})[/{C_DIM}]{notif_badge}"
         else:
-            left = f"[{C_DIM}]Sessions ({n_active})[/{C_DIM}]{notif_badge}"
+            left = f"[{C_DIM}]Sessions ({count_str})[/{C_DIM}]{notif_badge}"
         sess_label.update(_label_with_legend(left, legend))
 
         if self._active_pane == "archived":
@@ -1177,7 +1187,10 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
     # _refresh_session_liveness replaced by _schedule_liveness_refresh + _do_liveness_refresh above
 
     def on_sessions_changed(self, event: SessionsChanged):
-        self._refresh()
+        # Debounce: coalesce rapid-fire SessionsChanged into one refresh
+        if hasattr(self, '_sessions_changed_timer') and self._sessions_changed_timer:
+            self._sessions_changed_timer.stop()
+        self._sessions_changed_timer = self.set_timer(0.1, self._refresh)
 
     def _update_animating_cache(self):
         anim_types = (ThreadActivity.THINKING, ThreadActivity.AWAITING_INPUT)
@@ -1269,7 +1282,8 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
 
                 alw = self._session_line_width("#detail-archived")
                 arch_olist = self.query_one("#detail-archived", OptionList)
-                for i, s in enumerate(self._archived_sessions):
+                limit = getattr(self, '_archived_show_count', self._ARCHIVED_PAGE_SIZE)
+                for i, s in enumerate(self._archived_sessions[:limit]):
                     if i < arch_olist.option_count:
                         act = session_activity(s, self._last_seen_cache)
                         seen = _is_session_seen(s, self._last_seen_cache)
@@ -1355,6 +1369,10 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         else:
             olist.display = False
             no_sess.display = True
+            if self._sessions_loading():
+                no_sess.update(f"[{C_DIM}]Loading sessions...[/{C_DIM}]")
+            else:
+                no_sess.update(f"[{C_DIM}]No sessions[/{C_DIM}]")
 
         arch_olist = self.query_one("#detail-archived", OptionList)
         no_arch = self.query_one("#detail-no-archived", Static)
@@ -1363,10 +1381,17 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         if self._archived_sessions:
             arch_olist.display = True
             no_arch.display = False
-            old_sid = self._highlighted_session_id(arch_olist)
-            old_arch_idx = arch_olist.highlighted
-            self._build_archived_list()
-            self._restore_highlight_by_sid(arch_olist, self._archived_sessions, old_sid, old_arch_idx)
+            # Skip rebuild if archived set hasn't changed
+            arch_fp = tuple(
+                (s.session_id, s.is_live, s.last_message_role)
+                for s in self._archived_sessions[:getattr(self, '_archived_show_count', self._ARCHIVED_PAGE_SIZE)]
+            )
+            if arch_fp != getattr(self, '_last_arch_fp', None):
+                self._last_arch_fp = arch_fp
+                old_sid = self._highlighted_session_id(arch_olist)
+                old_arch_idx = arch_olist.highlighted
+                self._build_archived_list()
+                self._restore_highlight_by_sid(arch_olist, self._archived_sessions, old_sid, old_arch_idx)
         else:
             arch_olist.display = False
             no_arch.display = True
@@ -1507,18 +1532,28 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         log.debug("build_session_list: %d notified + %d elevated + %d quiet, option_count=%d",
                   len(notified), len(elevated), len(quiet), olist.option_count)
 
+    _ARCHIVED_PAGE_SIZE = 30
+
     def _build_archived_list(self):
         olist = self.query_one("#detail-archived", OptionList)
         animating = []
         alw = self._session_line_width("#detail-archived")
         options = []
-        for i, s in enumerate(self._archived_sessions):
+        limit = getattr(self, '_archived_show_count', self._ARCHIVED_PAGE_SIZE)
+        display = self._archived_sessions[:limit]
+        for i, s in enumerate(display):
             act = session_activity(s, self._last_seen_cache)
             if act in (ThreadActivity.THINKING, ThreadActivity.AWAITING_INPUT):
                 animating.append((i, act))
             seen = _is_session_seen(s, self._last_seen_cache)
             prompt = _render_session_option(s, act, self._throbber_frame, ws_repo_path=self.ws.repo_path, seen=seen, line_width=alw)
             options.append(Option(prompt, id=f"a:{s.session_id}"))
+        remaining = len(self._archived_sessions) - limit
+        if remaining > 0:
+            options.append(Option(
+                f"[{C_DIM}]  ↓ {remaining} more archived sessions — press Enter to load[/{C_DIM}]",
+                id="__load_more_archived__",
+            ))
         olist.clear_options()
         olist.add_options(options)
         self._animating_archived = animating
@@ -1719,6 +1754,10 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
                 self._load_feed()
             return
 
+        if oid == "__load_more_archived__":
+            self._archived_show_count = getattr(self, '_archived_show_count', self._ARCHIVED_PAGE_SIZE) + self._ARCHIVED_PAGE_SIZE
+            self._build_archived_list()
+            return
         if oid is None or oid == "__separator__":
             if oid is None:
                 log.warning("option_selected: option_id is None!")
