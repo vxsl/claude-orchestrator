@@ -1254,53 +1254,55 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
             self._build_session_list()
             self._restore_highlight_by_sid(olist, self._detail_sessions, old_sid, old_idx)
         else:
-            # Structure unchanged — safe to update in place
-            lw = self._session_line_width("#detail-sessions")
-            idx = 0
-            for s in notified:
-                if idx < olist.option_count:
-                    act = session_activity(s, self._last_seen_cache)
-                    seen = _is_session_seen(s, self._last_seen_cache)
-                    notif = self._session_notifications[s.session_id]
-                    prompt = _render_notified_session_option(
-                        s, act, notif, self._throbber_frame,
-                        ws_repo_path=self.ws.repo_path, seen=seen,
-                        line_width=lw,
-                    )
-                    olist.replace_option_prompt_at_index(idx, prompt)
-                idx += 1
+            # Structure unchanged — safe to update in place.
+            # Wrap in batch_update to coalesce N cache clears into one render.
+            with self.app.batch_update():
+                lw = self._session_line_width("#detail-sessions")
+                idx = 0
+                for s in notified:
+                    if idx < olist.option_count:
+                        act = session_activity(s, self._last_seen_cache)
+                        seen = _is_session_seen(s, self._last_seen_cache)
+                        notif = self._session_notifications[s.session_id]
+                        prompt = _render_notified_session_option(
+                            s, act, notif, self._throbber_frame,
+                            ws_repo_path=self.ws.repo_path, seen=seen,
+                            line_width=lw,
+                        )
+                        olist.replace_option_prompt_at_index(idx, prompt)
+                    idx += 1
 
-            for s in elevated:
-                if idx < olist.option_count:
-                    act = session_activity(s, self._last_seen_cache)
-                    seen = _is_session_seen(s, self._last_seen_cache)
-                    prompt = _render_notified_session_option(
-                        s, act, None, self._throbber_frame,
-                        ws_repo_path=self.ws.repo_path, seen=seen,
-                        line_width=lw,
-                    )
-                    olist.replace_option_prompt_at_index(idx, prompt)
-                idx += 1
+                for s in elevated:
+                    if idx < olist.option_count:
+                        act = session_activity(s, self._last_seen_cache)
+                        seen = _is_session_seen(s, self._last_seen_cache)
+                        prompt = _render_notified_session_option(
+                            s, act, None, self._throbber_frame,
+                            ws_repo_path=self.ws.repo_path, seen=seen,
+                            line_width=lw,
+                        )
+                        olist.replace_option_prompt_at_index(idx, prompt)
+                    idx += 1
 
-            if has_separator:
-                idx += 1  # skip separator
+                if has_separator:
+                    idx += 1  # skip separator
 
-            for s in quiet:
-                if idx < olist.option_count:
-                    act = session_activity(s, self._last_seen_cache)
-                    seen = _is_session_seen(s, self._last_seen_cache)
-                    prompt = _render_session_option(s, act, self._throbber_frame, ws_repo_path=self.ws.repo_path, seen=seen, line_width=lw)
-                    olist.replace_option_prompt_at_index(idx, prompt)
-                idx += 1
+                for s in quiet:
+                    if idx < olist.option_count:
+                        act = session_activity(s, self._last_seen_cache)
+                        seen = _is_session_seen(s, self._last_seen_cache)
+                        prompt = _render_session_option(s, act, self._throbber_frame, ws_repo_path=self.ws.repo_path, seen=seen, line_width=lw)
+                        olist.replace_option_prompt_at_index(idx, prompt)
+                    idx += 1
 
-        alw = self._session_line_width("#detail-archived")
-        arch_olist = self.query_one("#detail-archived", OptionList)
-        for i, s in enumerate(self._archived_sessions):
-            if i < arch_olist.option_count:
-                act = session_activity(s, self._last_seen_cache)
-                seen = _is_session_seen(s, self._last_seen_cache)
-                prompt = _render_session_option(s, act, self._throbber_frame, ws_repo_path=self.ws.repo_path, seen=seen, line_width=alw)
-                arch_olist.replace_option_prompt_at_index(i, prompt)
+                alw = self._session_line_width("#detail-archived")
+                arch_olist = self.query_one("#detail-archived", OptionList)
+                for i, s in enumerate(self._archived_sessions):
+                    if i < arch_olist.option_count:
+                        act = session_activity(s, self._last_seen_cache)
+                        seen = _is_session_seen(s, self._last_seen_cache)
+                        prompt = _render_session_option(s, act, self._throbber_frame, ws_repo_path=self.ws.repo_path, seen=seen, line_width=alw)
+                        arch_olist.replace_option_prompt_at_index(i, prompt)
 
 
     @staticmethod
