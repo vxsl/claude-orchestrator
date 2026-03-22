@@ -139,6 +139,16 @@ tmux set-option -w @orch_session_id "$SESSION_ID" 2>/dev/null || true
 MAIN_PANE=$(tmux display-message -p '#{pane_id}')
 tmux set-option -w @orch_main_pane "$MAIN_PANE" 2>/dev/null || true
 
+# ─── Failsafe cleanup hook ─────────────────────────────────────
+# If the main pane dies unexpectedly (crash, kill-pane, etc.), the post-exit
+# cleanup below never runs and chrome panes leak.  This window-level hook
+# fires on ANY pane exit: if the main pane is gone, it kills the chrome panes.
+tmux set-hook -w pane-exited \
+    "if-shell 'tmux display-message -t \"$MAIN_PANE\" -p 2>/dev/null' '' \
+        'run-shell \"tmux kill-pane -t $HEADER_PANE 2>/dev/null; \
+                     tmux kill-pane -t $SIDEBAR_PANE 2>/dev/null; \
+                     tmux kill-pane -t $FOOTER_PANE 2>/dev/null; true\"'"
+
 # C-e: extract todo — only fires in orch session windows (checks for @orch_session_id tag)
 # Falls through to normal C-e when not in an orch window
 tmux bind -n C-e if-shell \
@@ -193,6 +203,8 @@ printf '%s  exit=%d  last_role=%s  last_type=%s  session=%s  ws=%s\n' \
     "${SESSION_ID:0:8}" "$WS_NAME" >> "$DIAG_LOG" 2>/dev/null || true
 
 # ─── Post-session: kill surrounding panes ────────────────────────
+# Remove the failsafe hook first so it doesn't fire during our own cleanup
+tmux set-hook -uw pane-exited 2>/dev/null || true
 tmux kill-pane -t "$SIDEBAR_PANE" 2>/dev/null || true
 tmux kill-pane -t "$HEADER_PANE" 2>/dev/null || true
 tmux kill-pane -t "$FOOTER_PANE" 2>/dev/null || true
