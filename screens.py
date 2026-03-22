@@ -1192,8 +1192,8 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
                 self._apply_title_filter()
             return
 
-        self._detail_sessions = list(self._all_sessions)
-        self._archived_sessions = list(self._all_archived)
+        self._detail_sessions = self._stable_merge(self._detail_sessions, self._all_sessions)
+        self._archived_sessions = self._stable_merge(self._archived_sessions, self._all_archived)
 
         # Don't rebuild OptionLists while peek is open — backing data is updated
         # but the visible list stays showing the conversation.
@@ -1254,6 +1254,30 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
                     olist.highlighted = i
                     return
         olist.highlighted = 0
+
+    @staticmethod
+    def _stable_merge(existing: list[ClaudeSession], fresh: list[ClaudeSession]) -> list[ClaudeSession]:
+        """Merge fresh session data into existing order.
+
+        Preserves the position of sessions already in the list (updating their
+        data), prepends genuinely new sessions at the top, and drops sessions
+        no longer present in fresh.  This prevents the list from re-sorting
+        every time active sessions receive new responses.
+        """
+        fresh_by_id = {s.session_id: s for s in fresh}
+        fresh_ids = set(fresh_by_id)
+
+        # Keep existing order for sessions still present, with updated objects
+        merged = []
+        seen = set()
+        for s in existing:
+            if s.session_id in fresh_ids:
+                merged.append(fresh_by_id[s.session_id])
+                seen.add(s.session_id)
+
+        # Prepend any new sessions (not previously in the list) at the top
+        new_sessions = [s for s in fresh if s.session_id not in seen]
+        return new_sessions + merged
 
     def _build_session_list(self):
         olist = self.query_one("#detail-sessions", OptionList)
