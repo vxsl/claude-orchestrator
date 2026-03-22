@@ -1,6 +1,6 @@
 """Rendering helpers — color palette, Rich markup, display formatting.
 
-Pure functions with no Textual dependency. Used by screens, app, and state.
+Pure functions with no Textual dependency. Used by screens, app, and state modules.
 """
 
 from __future__ import annotations
