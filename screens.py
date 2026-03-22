@@ -2486,9 +2486,9 @@ class RepoPickerScreen(ModalScreen[str | None]):
             yield Input(placeholder="Type to filter repos…", id="repopick-input")
             yield OptionList(id="repopick-list")
             yield Static("", id="repopick-hint")
-        self._rebuild_list("")
 
     def on_mount(self) -> None:
+        self._rebuild_list("")
         self.query_one("#repopick-input", Input).focus()
 
     def _rebuild_list(self, query: str) -> None:
