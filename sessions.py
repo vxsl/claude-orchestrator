@@ -86,6 +86,20 @@ def extract_session_content(jsonl_path: str) -> list[SessionMessage]:
     return messages
 
 
+def _is_interrupt_marker(data: dict) -> bool:
+    """Return True if this user message is a '[Request interrupted…]' marker."""
+    msg = data.get("message", {})
+    content = msg.get("content", "")
+    if isinstance(content, str):
+        return "[Request interrupted" in content
+    if isinstance(content, list):
+        for block in content:
+            if isinstance(block, dict) and block.get("type") == "text":
+                if "[Request interrupted" in (block.get("text") or ""):
+                    return True
+    return False
+
+
 def _extract_message_text(data: dict) -> str:
     """Extract a short text snippet from a user or assistant JSONL entry."""
     msg = data.get("message", {})
@@ -289,6 +303,10 @@ def parse_session(jsonl_path: Path) -> Optional[ClaudeSession]:
                     snippet = _extract_message_text(data)
                     if snippet:
                         session.last_message_text = snippet
+                    # Interrupted turns: the "[Request interrupted" user
+                    # message means Claude is back at the prompt.
+                    if msg_type == "user" and _is_interrupt_marker(data):
+                        session.turn_complete = True
 
                 # Turn completion: turn_duration is the primary signal,
                 # but idle-only entries (last-prompt, custom-title,
@@ -371,6 +389,8 @@ def refresh_session_tail(session: ClaudeSession, tail_bytes: int = 8192) -> bool
                 snippet = _extract_message_text(data)
                 if snippet:
                     session.last_message_text = snippet
+                if msg_type == "user" and _is_interrupt_marker(data):
+                    session.turn_complete = True
             if msg_type == "assistant" and "message" in data:
                 session.last_stop_reason = data["message"].get("stop_reason") or ""
             if (msg_type == "system" and data.get("subtype") in (

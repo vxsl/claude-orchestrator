@@ -143,6 +143,26 @@ class TestParseSession:
         assert session is not None
         assert session.message_count == 0
 
+    def test_interrupt_marker_sets_turn_complete(self, tmp_path):
+        """Full parse: '[Request interrupted]' user message marks turn complete."""
+        f = tmp_path / "projects" / "test" / "session.jsonl"
+        f.parent.mkdir(parents=True)
+        lines = [
+            json.dumps({"type": "user", "message": {"content": "do the thing"},
+                        "timestamp": "2026-03-20T10:00:00Z"}),
+            json.dumps({"type": "assistant", "message": {"model": "claude-opus-4-6",
+                        "content": [{"type": "tool_use", "name": "bash"}],
+                        "usage": {"input_tokens": 100, "output_tokens": 50},
+                        "stop_reason": "tool_use"},
+                        "timestamp": "2026-03-20T10:01:00Z"}),
+            json.dumps({"type": "user", "message": {"content": [
+                {"type": "text", "text": "[Request interrupted by user]"}
+            ]}, "timestamp": "2026-03-20T10:01:05Z"}),
+        ]
+        f.write_text("\n".join(lines) + "\n")
+        session = parse_session(f)
+        assert session.turn_complete is True
+
     def test_parse_malformed_json(self, tmp_path):
         bad = tmp_path / "projects" / "test" / "bad.jsonl"
         bad.parent.mkdir(parents=True)
@@ -338,6 +358,23 @@ class TestRefreshSessionTail:
                           last_activity="")
         refresh_session_tail(s)
         assert s.turn_complete is True
+
+    def test_interrupt_marker_sets_turn_complete(self, tmp_path):
+        """'[Request interrupted by user]' user message marks turn as complete."""
+        f = tmp_path / "s.jsonl"
+        self._write_jsonl(f, [
+            {"type": "assistant", "message": {"usage": {}, "stop_reason": "tool_use"},
+             "timestamp": "2026-03-20T10:00:00Z"},
+            {"type": "user", "message": {"content": [
+                {"type": "text", "text": "[Request interrupted by user]"}
+            ]}, "timestamp": "2026-03-20T10:00:01Z"},
+        ])
+        s = ClaudeSession(session_id="s", project_dir="d", project_path="/p",
+                          jsonl_path=str(f), last_message_role="",
+                          last_activity="")
+        refresh_session_tail(s)
+        assert s.turn_complete is True
+        assert s.last_message_role == "user"
 
     def test_reads_only_tail(self, tmp_path):
         """With a large file, still correctly reads the last entries."""
