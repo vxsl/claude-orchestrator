@@ -1098,6 +1098,15 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
                 refresh_session_tail(s)
         self.app.call_from_thread(self._rebuild_all_options)
 
+    def _session_line_width(self, olist_id: str = "#detail-sessions") -> int:
+        """Return usable character width for session rows, or 0 for default."""
+        try:
+            olist = self.query_one(olist_id, OptionList)
+            w = olist.size.width
+            return w - 2 if w > 20 else 0  # subtract padding/scrollbar; 0 = use default
+        except Exception:
+            return 0
+
     def _focused_olist(self) -> OptionList:
         if self._active_pane == "archived":
             return self.query_one("#detail-archived", OptionList)
@@ -1195,6 +1204,7 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
                 quiet.append(s)
         notified.sort(key=lambda s: self._session_notifications[s.session_id].dt, reverse=True)
 
+        lw = self._session_line_width("#detail-sessions")
         idx = 0
         for s in notified:
             if idx < olist.option_count:
@@ -1204,6 +1214,7 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
                 prompt = _render_notified_session_option(
                     s, act, notif, self._throbber_frame,
                     ws_repo_path=self.ws.repo_path, seen=seen,
+                    line_width=lw,
                 )
                 olist.replace_option_prompt_at_index(idx, prompt)
             idx += 1
@@ -1215,16 +1226,17 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
             if idx < olist.option_count:
                 act = session_activity(s, self._last_seen_cache)
                 seen = _is_session_seen(s, self._last_seen_cache)
-                prompt = _render_session_option(s, act, self._throbber_frame, ws_repo_path=self.ws.repo_path, seen=seen)
+                prompt = _render_session_option(s, act, self._throbber_frame, ws_repo_path=self.ws.repo_path, seen=seen, line_width=lw)
                 olist.replace_option_prompt_at_index(idx, prompt)
             idx += 1
 
+        alw = self._session_line_width("#detail-archived")
         arch_olist = self.query_one("#detail-archived", OptionList)
         for i, s in enumerate(self._archived_sessions):
             if i < arch_olist.option_count:
                 act = session_activity(s, self._last_seen_cache)
                 seen = _is_session_seen(s, self._last_seen_cache)
-                prompt = _render_session_option(s, act, self._throbber_frame, ws_repo_path=self.ws.repo_path, seen=seen)
+                prompt = _render_session_option(s, act, self._throbber_frame, ws_repo_path=self.ws.repo_path, seen=seen, line_width=alw)
                 arch_olist.replace_option_prompt_at_index(i, prompt)
 
 
@@ -1404,6 +1416,7 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
 
         # Build the unified list: notified first, separator, then quiet
         self._notified_count = len(notified)
+        lw = self._session_line_width("#detail-sessions")
         idx = 0
         for s in notified:
             act = session_activity(s, self._last_seen_cache)
@@ -1414,6 +1427,7 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
             prompt = _render_notified_session_option(
                 s, act, notif, self._throbber_frame,
                 ws_repo_path=self.ws.repo_path, seen=seen,
+                line_width=lw,
             )
             olist.add_option(Option(prompt, id=s.session_id))
             idx += 1
@@ -1427,7 +1441,7 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
             if act in (ThreadActivity.THINKING, ThreadActivity.AWAITING_INPUT):
                 animating.append((idx, act))
             seen = _is_session_seen(s, self._last_seen_cache)
-            prompt = _render_session_option(s, act, self._throbber_frame, ws_repo_path=self.ws.repo_path, seen=seen)
+            prompt = _render_session_option(s, act, self._throbber_frame, ws_repo_path=self.ws.repo_path, seen=seen, line_width=lw)
             olist.add_option(Option(prompt, id=s.session_id))
             idx += 1
 
@@ -1439,12 +1453,13 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         olist = self.query_one("#detail-archived", OptionList)
         olist.clear_options()
         animating = []
+        alw = self._session_line_width("#detail-archived")
         for i, s in enumerate(self._archived_sessions):
             act = session_activity(s, self._last_seen_cache)
             if act in (ThreadActivity.THINKING, ThreadActivity.AWAITING_INPUT):
                 animating.append((i, act))
             seen = _is_session_seen(s, self._last_seen_cache)
-            prompt = _render_session_option(s, act, self._throbber_frame, ws_repo_path=self.ws.repo_path, seen=seen)
+            prompt = _render_session_option(s, act, self._throbber_frame, ws_repo_path=self.ws.repo_path, seen=seen, line_width=alw)
             olist.add_option(Option(prompt, id=f"a:{s.session_id}"))
         self._animating_archived = animating
 
@@ -2469,12 +2484,21 @@ class SessionPickerScreen(_VimOptionListMixin, ModalScreen[ClaudeSession | None]
             title_sessions(untitled)
             self.app.call_from_thread(self._rebuild_options)
 
+    def _picker_line_width(self) -> int:
+        try:
+            olist = self.query_one("#threadpick-list", OptionList)
+            w = olist.size.width
+            return w - 2 if w > 20 else 0
+        except Exception:
+            return 0
+
     def _build_options(self) -> list[Option]:
+        lw = self._picker_line_width()
         options = []
         for i, s in enumerate(self.picker_sessions):
             act = session_activity(s, self._last_seen_cache)
             seen = _is_session_seen(s, self._last_seen_cache)
-            prompt = _render_session_option(s, act, self._throbber_frame, ws_repo_path=self.ws.repo_path, seen=seen)
+            prompt = _render_session_option(s, act, self._throbber_frame, ws_repo_path=self.ws.repo_path, seen=seen, line_width=lw)
             options.append(Option(prompt, id=str(i)))
         return options
 
