@@ -378,10 +378,10 @@ class TestSessionActivity:
                                last_tool_name="Bash")
         assert session_activity(s) == ThreadActivity.THINKING
 
-    def test_your_turn_when_not_live_and_last_is_user(self):
-        """Sessions with messages are always 'your turn', regardless of last role."""
+    def test_idle_when_not_live_and_last_is_user(self):
+        """Not live + last message from user → Claude stopped, not 'your turn'."""
         s = self._make_session(is_live=False, last_message_role="user")
-        assert session_activity(s) == ThreadActivity.RESPONSE_READY
+        assert session_activity(s) == ThreadActivity.IDLE
 
     def test_your_turn_when_not_live_and_has_messages(self):
         """Any session with message history is 'your turn'."""
@@ -392,9 +392,9 @@ class TestSessionActivity:
         s = self._make_session(is_live=False, last_message_role="assistant")
         assert session_activity(s) == ThreadActivity.RESPONSE_READY
 
-    def test_your_turn_when_not_live_and_user(self):
+    def test_idle_when_not_live_and_user(self):
         s = self._make_session(is_live=False, last_message_role="user")
-        assert session_activity(s) == ThreadActivity.RESPONSE_READY
+        assert session_activity(s) == ThreadActivity.IDLE
 
     def test_idle_only_when_no_messages(self):
         s = self._make_session(is_live=False, last_message_role="", message_count=0)
@@ -437,11 +437,11 @@ class TestThreadActivity:
                                                 last_stop_reason="tool_use")])
         assert t.activity == ThreadActivity.THINKING
 
-    def test_your_turn_thread(self):
-        """Any thread with message history is 'your turn'."""
+    def test_idle_thread_when_last_is_user(self):
+        """Not live + last message from user → idle, not 'your turn'."""
         t = Thread(thread_id="t1", name="test", project_path="/p",
                    sessions=[self._make_session(is_live=False, last_message_role="user")])
-        assert t.activity == ThreadActivity.RESPONSE_READY
+        assert t.activity == ThreadActivity.IDLE
 
     def test_your_turn_thread_assistant(self):
         old = (datetime.now().astimezone() - timedelta(hours=2)).isoformat()

@@ -93,8 +93,11 @@ def session_activity(session: ClaudeSession, last_seen: dict[str, str] | None = 
             return ThreadActivity.THINKING
         return ThreadActivity.AWAITING_INPUT
 
-    # Any message history at all → your turn
+    # Not live, has history — check who spoke last
     if session.message_count > 0:
+        # Last message from user → Claude stopped/crashed, not "your turn"
+        if session.last_message_role == "user":
+            return ThreadActivity.IDLE
         return ThreadActivity.RESPONSE_READY
 
     return ThreadActivity.IDLE
