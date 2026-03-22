@@ -66,7 +66,7 @@ from rendering import (
     _render_session_option, _render_ws_option, _session_title,
     _rich_escape,
 )
-from state import AppState
+from state import AppState, TabManager
 from actions import (
     ws_directories,
     do_resume, resume_session_now, open_link,
@@ -79,6 +79,7 @@ from screens import (
     AddLinkScreen, LinkSessionScreen, ConfirmScreen,
     RepoPickerScreen, WorkstreamPickerScreen, _SENTINEL_NEW,
 )
+from widgets import TabBar
 
 
 # ─── Inline Inputs ──────────────────────────────────────────────────
@@ -130,6 +131,9 @@ class OrchestratorApp(App):
     CSS = f"""
     Screen {{
         background: {BG_BASE};
+    }}
+    #tab-bar {{
+        height: 1; dock: top; background: {BG_BASE}; padding: 0 1;
     }}
     #top-bar {{
         height: auto; max-height: 3; padding: 0 1; background: {BG_BASE}; dock: top;
@@ -201,11 +205,13 @@ class OrchestratorApp(App):
         ))
         self.theme = "mellow"
         self.state = AppState(Store())
+        self.tabs = TabManager()
         self._throbber_timer = None
         self._session_watcher: SessionWatcher | None = None
         self._refresh_pending = False  # debounce flag for _refresh_ws_table
         self._preview_ws_id: str | None = None  # track current preview to skip redundant updates
         self._detached_terminals: dict[str, dict] = {}  # session_id -> detached state
+        self._detail_screen_active: bool = False  # True when a DetailScreen is pushed
 
     def on_key(self, event) -> None:
         if event.key in ("ctrl+j", "ctrl+k"):
@@ -294,6 +300,7 @@ class OrchestratorApp(App):
     # ── Compose ──
 
     def compose(self) -> ComposeResult:
+        yield TabBar(id="tab-bar")
         yield Static("", id="top-bar")
         with Horizontal(id="main-content"):
             yield OptionList(id="ws-table")
@@ -352,14 +359,77 @@ class OrchestratorApp(App):
     # ── View switching ──
 
     def action_next_view(self):
-        self.state.next_view()
-        self._apply_view()
+        """Tab key: cycle to next tab."""
+        if self._detail_screen_active:
+            # If we're in a detail screen, let it handle the tab switch
+            return
+        if self.tabs.next_tab():
+            self._apply_tab_switch()
 
     def action_prev_view(self):
-        self.state.prev_view()
-        self._apply_view()
+        """Shift+Tab: cycle to previous tab."""
+        if self._detail_screen_active:
+            return
+        if self.tabs.prev_tab():
+            self._apply_tab_switch()
+
+    def _apply_tab_switch(self):
+        """Handle tab switch — open DetailScreen or return to Home."""
+        tab = self.tabs.active_tab
+        self._sync_tab_bar()
+        if tab.ws_id:
+            ws = self.state.get_ws(tab.ws_id)
+            if ws:
+                self._push_detail_for_tab(ws)
+        else:
+            # Home tab — dismiss any open DetailScreen
+            if self._detail_screen_active:
+                self.screen.dismiss()
+
+    def _push_detail_for_tab(self, ws: Workstream):
+        """Push a DetailScreen for a workstream tab."""
+        if self._detail_screen_active:
+            # Dismiss current detail screen first, then push new one
+            self.screen.dismiss()
+        self._detail_screen_active = True
+        self.push_screen(
+            DetailScreen(ws, self.state.store),
+            callback=lambda _: self._on_detail_dismissed(),
+        )
+
+    def _on_detail_dismissed(self):
+        """Called when a DetailScreen is dismissed (back to Home)."""
+        self._detail_screen_active = False
+        self.tabs.switch_to(0)  # Return to Home
+        self._sync_tab_bar()
+        self._on_return_from_modal()
+
+    def action_close_tab(self):
+        """Ctrl+W: close the current workstream tab."""
+        if self.tabs.is_home:
+            return
+        closed_id = self.tabs.close_active_tab()
+        if closed_id:
+            self._sync_tab_bar()
+            if self._detail_screen_active:
+                self.screen.dismiss()
+                # _on_detail_dismissed will handle the rest
+
+    def _sync_tab_bar(self):
+        """Update the TabBar widget to match TabManager state."""
+        try:
+            tab_bar = self.query_one("#tab-bar", TabBar)
+            # Rebuild tabs from TabManager
+            tab_bar._tabs = [
+                (t.id, t.label, t.icon) for t in self.tabs.tabs
+            ]
+            tab_bar._active_idx = self.tabs.active_idx
+            tab_bar._render_tabs()
+        except Exception:
+            pass
 
     def _apply_view(self):
+        """Legacy: still needed for command palette view switching."""
         with self.batch_update():
             ws_table = self.query_one("#ws-table", OptionList)
             sessions_table = self.query_one("#sessions-table", OptionList)
@@ -717,23 +787,22 @@ class OrchestratorApp(App):
         return "  ".join(parts)
 
     def _render_view_bar(self) -> str:
-        views = [
-            (ViewMode.WORKSTREAMS, f"Workstreams ({len(self.state.store.active) + len(self.state.discovered_ws)})"),
-            (ViewMode.SESSIONS, f"Sessions ({len(self.state.sessions)})"),
-            (ViewMode.ARCHIVED, f"Archived ({len(self.state.store.archived)})"),
-        ]
+        # Show sessions and live count alongside the status bar
+        live_count = sum(1 for s in self.state.sessions if s.is_live)
         parts = []
-        for mode, label in views:
-            if self.state.view_mode == mode:
-                parts.append(f"[bold {C_CYAN}] \u25b8 {label} [/bold {C_CYAN}]")
-            else:
-                parts.append(f"[{C_DIM}]   {label} [/{C_DIM}]")
-        return "".join(parts)
+        if self.state.sessions:
+            parts.append(f"[{C_DIM}]{len(self.state.sessions)} sessions[/{C_DIM}]")
+            if live_count:
+                parts.append(f"[{C_GREEN}]{live_count} live[/{C_GREEN}]")
+        archived_count = len(self.state.store.archived)
+        if archived_count:
+            parts.append(f"[{C_DIM}]{archived_count} archived[/{C_DIM}]")
+        return "  ".join(parts)
 
     def _render_filter_bar(self) -> str:
         filters = {
             "all": "1:All", "work": "2:Work", "personal": "3:Personal",
-            "active": "4:Active", "stale": "5:Stale",
+            "active": "4:Active", "stale": "5:Stale", "archived": "6:Archived",
         }
         parts = []
         for key, label in filters.items():
@@ -755,18 +824,15 @@ class OrchestratorApp(App):
         return " ".join(parts)
 
     def _render_summary_bar(self) -> str:
-        if self.state.view_mode == ViewMode.WORKSTREAMS:
-            count = self._active_table().option_count
+        count = self._active_table().option_count
+        if self.state.filter_mode == "archived":
             return (
-                f"  {count} workstreams  "
+                f"  {count} archived  "
                 f"[{C_DIM}]\u2502[/{C_DIM}]  "
-                f"[{C_DIM}]r[/{C_DIM}] resume  "
-                f"[{C_DIM}]c[/{C_DIM}] new session  "
-                f"[{C_DIM}]n[/{C_DIM}] note  "
-                f"[{C_DIM}]s[/{C_DIM}] status  "
-                f"[{C_DIM}]/[/{C_DIM}] search  "
-                f"[{C_DIM}]?[/{C_DIM}] help  "
-                f"[{C_DIM}]Tab[/{C_DIM}] views"
+                f"[{C_DIM}]u[/{C_DIM}] unarchive  "
+                f"[{C_DIM}]d[/{C_DIM}] delete  "
+                f"[{C_DIM}]1[/{C_DIM}] back to all  "
+                f"[{C_DIM}]?[/{C_DIM}] help"
             )
         elif self.state.view_mode == ViewMode.SESSIONS:
             count = len(self.state.sessions)
@@ -779,13 +845,15 @@ class OrchestratorApp(App):
                 f"[{C_DIM}]R[/{C_DIM}] refresh"
             )
         else:
-            count = len(self.state.store.archived)
             return (
-                f"  {count} archived  "
+                f"  {count} workstreams  "
                 f"[{C_DIM}]\u2502[/{C_DIM}]  "
-                f"[{C_DIM}]u[/{C_DIM}] unarchive  "
-                f"[{C_DIM}]d[/{C_DIM}] delete  "
-                f"[{C_DIM}]Tab[/{C_DIM}] views"
+                f"[{C_DIM}]r[/{C_DIM}] resume  "
+                f"[{C_DIM}]c[/{C_DIM}] new session  "
+                f"[{C_DIM}]n[/{C_DIM}] note  "
+                f"[{C_DIM}]/[/{C_DIM}] search  "
+                f"[{C_DIM}]?[/{C_DIM}] help  "
+                f"[{C_DIM}]Tab[/{C_DIM}] tabs"
             )
 
     # ── Workstreams table ──
@@ -871,6 +939,9 @@ class OrchestratorApp(App):
         key = self._olist_cursor_key(table)
         if not key:
             return None
+        # In archived filter mode, look in archived store
+        if self.state.filter_mode == "archived":
+            return self.state.get_archived(key) or self.state.get_ws(key)
         return self.state.get_ws(key)
 
     def _sessions_for_ws(self, ws: Workstream, include_archived_sessions: bool = False) -> list[ClaudeSession]:
@@ -1032,7 +1103,9 @@ class OrchestratorApp(App):
     # ── Primary action (Enter) ──
 
     def action_select_item(self):
-        if self.state.view_mode == ViewMode.WORKSTREAMS:
+        if self.state.filter_mode == "archived":
+            self._open_archived_detail()
+        elif self.state.view_mode == ViewMode.WORKSTREAMS:
             self._open_detail()
         elif self.state.view_mode == ViewMode.SESSIONS:
             self._resume_session()
@@ -1071,17 +1144,26 @@ class OrchestratorApp(App):
     def _open_detail(self):
         ws = self._selected_ws()
         if ws:
+            # Add to tabs and push DetailScreen
+            icon = STATUS_ICONS.get(ws.status, "")
+            self.tabs.open_tab(ws.id, ws.name, icon)
+            self._sync_tab_bar()
+            self._detail_screen_active = True
             self.push_screen(
                 DetailScreen(ws, self.state.store),
-                callback=lambda _: self._on_return_from_modal(),
+                callback=lambda _: self._on_detail_dismissed(),
             )
 
     def _open_archived_detail(self):
         ws = self._selected_archived()
         if ws:
+            icon = STATUS_ICONS.get(ws.status, "")
+            self.tabs.open_tab(ws.id, ws.name, icon)
+            self._sync_tab_bar()
+            self._detail_screen_active = True
             self.push_screen(
                 DetailScreen(ws, self.state.store),
-                callback=lambda _: self._on_return_from_modal(),
+                callback=lambda _: self._on_detail_dismissed(),
             )
 
     # ── Workstream actions ──
@@ -1200,7 +1282,16 @@ class OrchestratorApp(App):
             self.notify("No links", timeout=1)
 
     def action_toggle_archive(self):
-        if self.state.view_mode == ViewMode.WORKSTREAMS:
+        if self.state.filter_mode == "archived":
+            # Unarchive when in archived filter view
+            ws = self._selected_ws()
+            if ws:
+                name = self.state.unarchive(ws.id)
+                if name:
+                    self.notify(f"Restored: {name}", timeout=2)
+                    self._refresh_ws_table()
+                    self._refresh_archived_table()
+        elif self.state.view_mode == ViewMode.WORKSTREAMS:
             ws = self._selected_ws()
             if ws:
                 name = self.state.archive(ws.id)
@@ -1229,7 +1320,9 @@ class OrchestratorApp(App):
             return
 
         ws = None
-        if self.state.view_mode == ViewMode.WORKSTREAMS:
+        if self.state.filter_mode == "archived":
+            ws = self._selected_ws()  # In archived filter, ws-table shows archived items
+        elif self.state.view_mode == ViewMode.WORKSTREAMS:
             ws = self._selected_ws()
         elif self.state.view_mode == ViewMode.ARCHIVED:
             ws = self._selected_archived()
@@ -1634,6 +1727,10 @@ class OrchestratorApp(App):
         self._preview_ws_id = None  # force preview rebuild
         self._refresh_ws_table()
         self._refresh_archived_table()
+
+    def _focus_main_list(self):
+        """Focus the main workstream list. Used by InlineInput on cancel."""
+        self._active_table().focus()
 
 
 if __name__ == "__main__":

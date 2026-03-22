@@ -1151,3 +1151,128 @@ class TestContentSearch:
         cache = {"test-session": _make_messages("Deploy the Feature")}
         results = content_search("deploy feature", [s], cache)
         assert len(results) == 1
+
+
+# ─── TabManager ──────────────────────────────────────────────────────
+
+from state import TabManager, TabState
+
+
+class TestTabManager:
+    def test_initial_state(self):
+        tm = TabManager()
+        assert len(tm.tabs) == 1
+        assert tm.active_idx == 0
+        assert tm.is_home
+        assert tm.active_tab_id == "home"
+
+    def test_open_tab(self):
+        tm = TabManager()
+        idx = tm.open_tab("ws-1", "Auth refactor", "●")
+        assert idx == 1
+        assert len(tm.tabs) == 2
+        assert tm.active_idx == 1  # auto-switches
+        assert tm.active_tab.ws_id == "ws-1"
+        assert not tm.is_home
+
+    def test_open_duplicate_reuses(self):
+        tm = TabManager()
+        idx1 = tm.open_tab("ws-1", "Auth refactor")
+        tm.switch_to(0)  # go home
+        idx2 = tm.open_tab("ws-1", "Auth refactor")
+        assert idx1 == idx2
+        assert len(tm.tabs) == 2
+        assert tm.active_idx == 1  # switched to existing
+
+    def test_close_tab(self):
+        tm = TabManager()
+        tm.open_tab("ws-1", "One")
+        tm.open_tab("ws-2", "Two")
+        assert len(tm.tabs) == 3
+        closed = tm.close_tab(1)  # close "One"
+        assert closed == "ws-1"
+        assert len(tm.tabs) == 2
+        assert tm.tabs[1].ws_id == "ws-2"
+
+    def test_cannot_close_home(self):
+        tm = TabManager()
+        result = tm.close_tab(0)
+        assert result is None
+        assert len(tm.tabs) == 1
+
+    def test_close_active_tab_moves_left(self):
+        tm = TabManager()
+        tm.open_tab("ws-1", "One")
+        tm.open_tab("ws-2", "Two")
+        assert tm.active_idx == 2  # ws-2
+        tm.close_active_tab()
+        assert tm.active_idx == 1  # ws-1
+        assert tm.active_tab.ws_id == "ws-1"
+
+    def test_close_tab_before_active_preserves(self):
+        tm = TabManager()
+        tm.open_tab("ws-1", "One")
+        tm.open_tab("ws-2", "Two")
+        assert tm.active_idx == 2  # ws-2
+        tm.close_tab(1)  # close ws-1
+        assert tm.active_idx == 1  # ws-2 is now at index 1
+        assert tm.active_tab.ws_id == "ws-2"
+
+    def test_next_tab_wraps(self):
+        tm = TabManager()
+        tm.open_tab("ws-1", "One")
+        assert tm.active_idx == 1
+        tm.next_tab()
+        assert tm.active_idx == 0  # wrapped to home
+
+    def test_prev_tab_wraps(self):
+        tm = TabManager()
+        tm.open_tab("ws-1", "One")
+        tm.switch_to(0)
+        tm.prev_tab()
+        assert tm.active_idx == 1  # wrapped to ws-1
+
+    def test_switch_to_id(self):
+        tm = TabManager()
+        tm.open_tab("ws-1", "One")
+        tm.open_tab("ws-2", "Two")
+        tm.switch_to_id("home")
+        assert tm.active_idx == 0
+        tm.switch_to_id("ws-1")
+        assert tm.active_idx == 1
+
+    def test_find_tab(self):
+        tm = TabManager()
+        tm.open_tab("ws-1", "One")
+        assert tm.find_tab("ws-1") == 1
+        assert tm.find_tab("ws-999") is None
+
+    def test_update_label(self):
+        tm = TabManager()
+        tm.open_tab("ws-1", "Old name")
+        tm.update_label("ws-1", "New name")
+        assert tm.tabs[1].label == "New name"
+
+    def test_close_active_home_returns_none(self):
+        tm = TabManager()
+        result = tm.close_active_tab()
+        assert result is None
+
+    def test_single_tab_next_does_nothing(self):
+        tm = TabManager()
+        result = tm.next_tab()
+        assert not result
+        assert tm.active_idx == 0
+
+
+class TestArchivedFilter:
+    """Test that filter_mode='archived' works in get_filtered_streams."""
+
+    def test_archived_filter(self, populated_state):
+        # Archive a workstream first
+        ws = populated_state.store.active[0]
+        populated_state.archive(ws.id)
+        populated_state.filter_mode = "archived"
+        result = populated_state.get_filtered_streams()
+        assert len(result) == 1
+        assert result[0].id == ws.id

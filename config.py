@@ -44,6 +44,7 @@ DEFAULT_KEYS: dict[str, tuple[str, str, bool, bool]] = {
     "filter('personal')": ("3", "", False, False),
     "filter('active')": ("4", "", False, False),
     "filter('stale')": ("5", "", False, False),
+    "filter('archived')": ("6", "", False, False),
     "search": ("slash", "/", True, False),
     # Sort
     "sort('status')": ("f1", "", False, False),
@@ -51,6 +52,8 @@ DEFAULT_KEYS: dict[str, tuple[str, str, bool, bool]] = {
     "sort('created')": ("f3", "", False, False),
     "sort('category')": ("f4", "", False, False),
     "sort('name')": ("f5", "", False, False),
+    # Tabs
+    "close_tab": ("ctrl+w", "", False, True),
     # Command palette
     "command_palette": ("colon", ":", True, False),
     # Other

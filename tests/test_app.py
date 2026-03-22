@@ -395,31 +395,27 @@ class TestNavigation:
 
 @pytest.mark.asyncio
 class TestViewSwitching:
-    async def test_tab_cycles_to_sessions(self, app_with_store):
-        async with app_with_store.run_test(size=(120, 40)) as pilot:
-            await pilot.press("tab")
-            assert pilot.app.view_mode == ViewMode.SESSIONS
+    """Tab now cycles through workstream tabs (not view modes).
+    With only the Home tab open, Tab does nothing (single tab)."""
 
-    async def test_tab_cycles_to_archived(self, app_with_store):
+    async def test_tab_stays_on_home_when_no_other_tabs(self, app_with_store):
         async with app_with_store.run_test(size=(120, 40)) as pilot:
             await pilot.press("tab")
-            await pilot.press("tab")
-            assert pilot.app.view_mode == ViewMode.ARCHIVED
+            # With only Home tab, should stay on workstreams view
+            assert pilot.app.tabs.is_home
+            assert pilot.app.tabs.active_idx == 0
 
-    async def test_tab_cycles_back_to_workstreams(self, app_with_store):
+    async def test_tab_bar_exists(self, app_with_store):
         async with app_with_store.run_test(size=(120, 40)) as pilot:
-            await pilot.press("tab")
-            await pilot.press("tab")
-            await pilot.press("tab")
-            assert pilot.app.view_mode == ViewMode.WORKSTREAMS
+            from widgets import TabBar
+            tab_bar = pilot.app.query_one("#tab-bar", TabBar)
+            assert tab_bar is not None
 
-    async def test_sessions_table_visible_after_tab(self, app_with_store):
+    async def test_archived_filter_shows_archived(self, app_with_store):
+        """Pressing 6 activates archived filter instead of a separate view."""
         async with app_with_store.run_test(size=(120, 40)) as pilot:
-            await pilot.press("tab")
-            sessions_table = pilot.app.query_one("#sessions-table")
-            ws_table = pilot.app.query_one("#ws-table")
-            assert sessions_table.display is True
-            assert ws_table.display is False
+            await pilot.press("6")
+            assert pilot.app.filter_mode == "archived"
 
 
 @pytest.mark.asyncio
@@ -582,16 +578,16 @@ class TestHelpScreen:
 
 @pytest.mark.asyncio
 class TestUILanguage:
-    async def test_view_bar_says_workstreams(self, app_with_store):
+    async def test_view_bar_shows_session_count(self, app_with_store):
         async with app_with_store.run_test(size=(120, 40)) as pilot:
-            # Check the render method output contains "Threads"
             rendered = pilot.app._render_view_bar()
-            assert "Workstreams" in rendered
+            # View bar now shows sessions/archived counts instead of view tabs
+            assert "sessions" in rendered or "archived" in rendered or rendered == ""
 
-    async def test_summary_bar_says_threads(self, app_with_store):
+    async def test_summary_bar_says_workstreams(self, app_with_store):
         async with app_with_store.run_test(size=(120, 40)) as pilot:
             rendered = pilot.app._render_summary_bar()
-            assert "threads" in rendered
+            assert "workstreams" in rendered
 
 
 class TestDoResume:

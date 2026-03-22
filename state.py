@@ -458,6 +458,8 @@ class AppState:
             streams = [w for w in self.store.active if w.is_active]
         elif self.filter_mode == "stale":
             streams = self.store.stale()
+        elif self.filter_mode == "archived":
+            streams = list(self.store.archived)
         else:
             streams = list(self.store.active)
 
@@ -1181,3 +1183,112 @@ class AppState:
         Path(output).parent.mkdir(parents=True, exist_ok=True)
         Path(output).write_text("\n".join(lines) + "\n")
         return output, len(streams)
+
+
+# ─── Tab Manager ─────────────────────────────────────────────────────
+
+@dataclass
+class TabState:
+    """State for a single tab."""
+    id: str           # "home" or workstream ID
+    ws_id: str | None  # None for home tab
+    label: str
+    icon: str = ""
+    # Saved cursor state for re-opening
+    highlighted_session_id: str | None = None
+    active_pane: str = "sessions"
+
+
+class TabManager:
+    """Tracks open tabs and the active tab index.
+
+    Pure Python — no Textual dependency. Testable.
+    """
+
+    def __init__(self):
+        self.tabs: list[TabState] = [TabState(id="home", ws_id=None, label="Home", icon="\u2302")]
+        self.active_idx: int = 0
+
+    @property
+    def active_tab(self) -> TabState:
+        return self.tabs[self.active_idx]
+
+    @property
+    def active_tab_id(self) -> str:
+        return self.active_tab.id
+
+    @property
+    def is_home(self) -> bool:
+        return self.active_idx == 0
+
+    def open_tab(self, ws_id: str, label: str, icon: str = "") -> int:
+        """Open a tab for a workstream. Returns tab index. Reuses if already open."""
+        for i, tab in enumerate(self.tabs):
+            if tab.ws_id == ws_id:
+                self.active_idx = i
+                return i
+        tab = TabState(id=ws_id, ws_id=ws_id, label=label, icon=icon)
+        self.tabs.append(tab)
+        self.active_idx = len(self.tabs) - 1
+        return self.active_idx
+
+    def close_tab(self, index: int) -> str | None:
+        """Close tab at index. Cannot close Home (index 0). Returns closed tab id."""
+        if index <= 0 or index >= len(self.tabs):
+            return None
+        tab_id = self.tabs[index].id
+        self.tabs.pop(index)
+        if self.active_idx >= len(self.tabs):
+            self.active_idx = len(self.tabs) - 1
+        elif self.active_idx > index:
+            self.active_idx -= 1
+        elif self.active_idx == index:
+            self.active_idx = max(0, index - 1)
+        return tab_id
+
+    def close_active_tab(self) -> str | None:
+        """Close the current tab. Returns closed tab id or None if on Home."""
+        if self.active_idx == 0:
+            return None
+        return self.close_tab(self.active_idx)
+
+    def switch_to(self, index: int) -> bool:
+        """Switch to tab at index. Returns True if actually switched."""
+        if 0 <= index < len(self.tabs) and index != self.active_idx:
+            self.active_idx = index
+            return True
+        return False
+
+    def switch_to_id(self, tab_id: str) -> bool:
+        """Switch to tab by ID."""
+        for i, tab in enumerate(self.tabs):
+            if tab.id == tab_id:
+                return self.switch_to(i)
+        return False
+
+    def next_tab(self) -> bool:
+        """Cycle to next tab. Returns True if switched."""
+        if len(self.tabs) <= 1:
+            return False
+        new_idx = (self.active_idx + 1) % len(self.tabs)
+        return self.switch_to(new_idx)
+
+    def prev_tab(self) -> bool:
+        """Cycle to previous tab. Returns True if switched."""
+        if len(self.tabs) <= 1:
+            return False
+        new_idx = (self.active_idx - 1) % len(self.tabs)
+        return self.switch_to(new_idx)
+
+    def find_tab(self, ws_id: str) -> int | None:
+        """Find tab index for a workstream ID."""
+        for i, tab in enumerate(self.tabs):
+            if tab.ws_id == ws_id:
+                return i
+        return None
+
+    def update_label(self, ws_id: str, label: str) -> None:
+        """Update the label of a tab (e.g. after rename)."""
+        for tab in self.tabs:
+            if tab.ws_id == ws_id:
+                tab.label = label
