@@ -43,19 +43,50 @@ class _Screen(pyte.Screen):
         """Silently ignore unsupported sequences."""
         pass
 
+    def csi_save_cursor(self, *args):
+        """CSI s — save cursor position (accepts and ignores params)."""
+        self.save_cursor()
+
+    def csi_restore_cursor(self, *args):
+        """CSI u — restore cursor position (accepts and ignores params)."""
+        self.restore_cursor()
+
+    def scroll_up(self, count=1):
+        """CSI S — scroll content up (new blank lines at bottom)."""
+        saved_y = self.cursor.y
+        bottom = self.margins.bottom if self.margins else self.lines - 1
+        for _ in range(count):
+            self.cursor.y = bottom
+            self.index()
+        self.cursor.y = saved_y
+
+    def scroll_down(self, count=1):
+        """CSI T — scroll content down (new blank lines at top)."""
+        saved_y = self.cursor.y
+        top = self.margins.top if self.margins else 0
+        for _ in range(count):
+            self.cursor.y = top
+            self.reverse_index()
+        self.cursor.y = saved_y
+
 
 class _Stream(pyte.Stream):
-    """Pyte stream with additional CSI handlers for tmux compat."""
+    """Pyte stream with additional CSI handlers.
+
+    Note: self.csi must be patched BEFORE super().__init__ because the
+    parser FSM is baked during __init__ → attach() → _initialize_parser().
+    """
 
     def __init__(self, *args, **kwargs):
+        # Patch csi table before the parser FSM is created
+        self.csi = dict(pyte.Stream.csi)
+        self.csi["s"] = "csi_save_cursor"      # cursor save (ANSI.SYS)
+        self.csi["u"] = "csi_restore_cursor"   # cursor restore (ANSI.SYS)
+        self.csi["S"] = "scroll_up"        # scroll up
+        self.csi["T"] = "scroll_down"      # scroll down
+        self.csi["t"] = "_ignore"          # window manipulation
+        self.csi["q"] = "_ignore"          # cursor shape
         super().__init__(*args, **kwargs)
-        # CSI s/u — cursor save/restore (ANSI.SYS style, used by tmux)
-        self.csi["s"] = "save_cursor"
-        self.csi["u"] = "restore_cursor"
-        # CSI t — window manipulation (xterm); ignore
-        self.csi["t"] = "_ignore"
-        # CSI q — cursor shape; ignore
-        self.csi["q"] = "_ignore"
 
 
 # ── Escape sequence filter ─────────────────────────────────────────
