@@ -1192,17 +1192,21 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
             return  # Don't overwrite search results or peek content
         olist = self.query_one("#detail-sessions", OptionList)
 
-        # Rebuild respecting the notified/separator/quiet structure
-        # Rather than tracking indices through the separator, just do a full rebuild
-        # which is safe since replace_option_prompt_at_index preserves highlight
+        # Rebuild respecting the notified/elevated/separator/quiet structure
         notified = []
+        elevated = []
         quiet = []
         for s in self._detail_sessions:
             if s.session_id in self._session_notifications:
                 notified.append(s)
             else:
-                quiet.append(s)
+                act = session_activity(s, self._last_seen_cache)
+                if act in (ThreadActivity.AWAITING_INPUT, ThreadActivity.RESPONSE_READY):
+                    elevated.append(s)
+                else:
+                    quiet.append(s)
         notified.sort(key=lambda s: self._session_notifications[s.session_id].dt, reverse=True)
+        all_elevated = notified + elevated
 
         lw = self._session_line_width("#detail-sessions")
         idx = 0
@@ -1219,7 +1223,19 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
                 olist.replace_option_prompt_at_index(idx, prompt)
             idx += 1
 
-        if notified and quiet:
+        for s in elevated:
+            if idx < olist.option_count:
+                act = session_activity(s, self._last_seen_cache)
+                seen = _is_session_seen(s, self._last_seen_cache)
+                prompt = _render_notified_session_option(
+                    s, act, None, self._throbber_frame,
+                    ws_repo_path=self.ws.repo_path, seen=seen,
+                    line_width=lw,
+                )
+                olist.replace_option_prompt_at_index(idx, prompt)
+            idx += 1
+
+        if all_elevated and quiet:
             idx += 1  # skip separator
 
         for s in quiet:
@@ -1402,20 +1418,26 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         olist.clear_options()
         animating = []
 
-        # Split into notified (have a notification) and quiet (no notification)
+        # Split into notified, elevated (your-turn without notification), and quiet
         notified = []
+        elevated = []
         quiet = []
         for s in self._detail_sessions:
             if s.session_id in self._session_notifications:
                 notified.append(s)
             else:
-                quiet.append(s)
+                act = session_activity(s, self._last_seen_cache)
+                if act in (ThreadActivity.AWAITING_INPUT, ThreadActivity.RESPONSE_READY):
+                    elevated.append(s)
+                else:
+                    quiet.append(s)
 
         # Sort notified by notification recency (newest first)
         notified.sort(key=lambda s: self._session_notifications[s.session_id].dt, reverse=True)
 
-        # Build the unified list: notified first, separator, then quiet
-        self._notified_count = len(notified)
+        # Build the unified list: notified first, then elevated, separator, then quiet
+        all_elevated = notified + elevated
+        self._notified_count = len(all_elevated)
         lw = self._session_line_width("#detail-sessions")
         idx = 0
         for s in notified:
@@ -1432,7 +1454,20 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
             olist.add_option(Option(prompt, id=s.session_id))
             idx += 1
 
-        if notified and quiet:
+        for s in elevated:
+            act = session_activity(s, self._last_seen_cache)
+            if act in (ThreadActivity.THINKING, ThreadActivity.AWAITING_INPUT):
+                animating.append((idx, act))
+            seen = _is_session_seen(s, self._last_seen_cache)
+            prompt = _render_notified_session_option(
+                s, act, None, self._throbber_frame,
+                ws_repo_path=self.ws.repo_path, seen=seen,
+                line_width=lw,
+            )
+            olist.add_option(Option(prompt, id=s.session_id))
+            idx += 1
+
+        if all_elevated and quiet:
             olist.add_option(Option(QUIET_SEPARATOR_LABEL, id="__separator__", disabled=True))
             idx += 1
 
@@ -1446,8 +1481,8 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
             idx += 1
 
         self._animating_sessions = animating
-        log.debug("build_session_list: %d notified + %d quiet, option_count=%d",
-                  len(notified), len(quiet), olist.option_count)
+        log.debug("build_session_list: %d notified + %d elevated + %d quiet, option_count=%d",
+                  len(notified), len(elevated), len(quiet), olist.option_count)
 
     def _build_archived_list(self):
         olist = self.query_one("#detail-archived", OptionList)
@@ -2630,6 +2665,10 @@ class RepoPickerScreen(ModalScreen[str | None]):
         if not self._filtered:
             ol.add_option(Option(f"[{C_DIM}](no matches)[/{C_DIM}]", id="__none__", disabled=True))
 
+        # Ensure first item is highlighted so arrow keys work even without focus
+        if self._filtered:
+            ol.highlighted = 0
+
         # Status line
         n_with = sum(1 for r in self._filtered if self.ws_counts.get(r, 0) > 0)
         hint = self.query_one("#repopick-hint", Static)
@@ -2647,13 +2686,19 @@ class RepoPickerScreen(ModalScreen[str | None]):
         ol = self.query_one("#repopick-list", OptionList)
         key = event.key
         if key in ("down", "ctrl+n"):
-            if ol.highlighted is not None and ol.highlighted < ol.option_count - 1:
-                ol.action_cursor_down()
+            if ol.option_count > 0:
+                if ol.highlighted is None:
+                    ol.highlighted = 0
+                elif ol.highlighted < ol.option_count - 1:
+                    ol.action_cursor_down()
             event.prevent_default()
             event.stop()
         elif key in ("up", "ctrl+p"):
-            if ol.highlighted is not None and ol.highlighted > 0:
-                ol.action_cursor_up()
+            if ol.option_count > 0:
+                if ol.highlighted is None:
+                    ol.highlighted = 0
+                elif ol.highlighted > 0:
+                    ol.action_cursor_up()
             event.prevent_default()
             event.stop()
 
