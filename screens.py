@@ -453,8 +453,9 @@ class TodoScreen(_VimOptionListMixin, ModalScreen[None]):
 
         self._update_pane_labels()
         self._update_context_preview()
-        # Restore focus — clear_options() can cause the OptionList to lose focus
-        self._focused_olist().focus()
+        # Restore focus — clear_options() can cause the OptionList to lose focus.
+        # Defer to after refresh so Textual finishes processing internal events first.
+        self.call_after_refresh(self._focused_olist().focus)
 
     @staticmethod
     def _highlighted_item_id(olist: OptionList, items: list[TodoItem]) -> str | None:
