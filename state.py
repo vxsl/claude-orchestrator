@@ -88,7 +88,7 @@ import re
 from dataclasses import dataclass, field
 
 from models import (
-    Category, Link, Origin, Status, Store, TodoItem, Workstream,
+    Category, Link, Status, Store, TodoItem, Workstream,
     STATUS_ICONS, _relative_time,
 )
 from sessions import ClaudeSession, SessionMessage, extract_session_content, get_live_session_ids, refresh_session_tail

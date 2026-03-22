@@ -10,7 +10,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
 
-from models import Category, Link, Status, Store, TodoItem, Workstream, Origin
+from models import Category, Link, Status, Store, TodoItem, Workstream
 from sessions import ClaudeSession
 from threads import Thread, ThreadActivity
 from state import (
@@ -208,7 +208,7 @@ class TestWorkstreamLookup:
         assert found is None
 
     def test_get_ws_finds_discovered(self, populated_state):
-        disc = Workstream(id="disc001", name="Discovered", origin=Origin.DISCOVERED)
+        disc = Workstream(id="disc001", name="Discovered")
         populated_state.discovered_ws = [disc]
         found = populated_state.get_ws("disc001")
         assert found is not None
@@ -584,14 +584,14 @@ class TestUnifiedItems:
         assert len(items) == 6
 
     def test_includes_discovered_workstreams(self, populated_state):
-        disc = Workstream(id="disc001", name="Discovered", origin=Origin.DISCOVERED,
+        disc = Workstream(id="disc001", name="Discovered",
                           category=Category.WORK)
         populated_state.discovered_ws = [disc]
         items = populated_state.get_unified_items()
         assert len(items) == 7
 
     def test_search_filters_discovered(self, populated_state):
-        disc = Workstream(id="disc001", name="Special Discovery", origin=Origin.DISCOVERED)
+        disc = Workstream(id="disc001", name="Special Discovery")
         populated_state.discovered_ws = [disc]
         populated_state.set_search("special")
         items = populated_state.get_unified_items()
@@ -599,7 +599,7 @@ class TestUnifiedItems:
         assert any(w.name == "Special Discovery" for w in items)
 
     def test_category_filter_applies_to_discovered(self, populated_state):
-        disc = Workstream(id="disc001", name="Personal disc", origin=Origin.DISCOVERED,
+        disc = Workstream(id="disc001", name="Personal disc",
                           category=Category.PERSONAL)
         populated_state.discovered_ws = [disc]
         populated_state.set_filter("work")

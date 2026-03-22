@@ -48,7 +48,7 @@ def bench_state_operations():
         _status_markup, _category_markup, _token_color_markup,
         STATUS_THEME, CATEGORY_THEME, C_DIM, C_CYAN, C_YELLOW, C_GREEN, C_BLUE, C_PURPLE,
     )
-    from models import STATUS_ICONS, _relative_time, Origin
+    from models import STATUS_ICONS, _relative_time
     from actions import ws_directories
 
     store = Store()
@@ -122,24 +122,11 @@ def bench_state_operations():
 
     # Benchmark full row data construction (minus Textual)
     if items:
-        from threads import ThreadActivity
-        _ACTIVITY_ICONS = {
-            ThreadActivity.THINKING: ("◉", C_CYAN),
-            ThreadActivity.AWAITING_INPUT: ("●", C_YELLOW),
-            ThreadActivity.RESPONSE_READY: ("●", C_YELLOW),
-            ThreadActivity.IDLE: ("·", C_DIM),
-        }
         def build_one_row():
             ws = items[0]
-            is_discovered = ws.origin == Origin.DISCOVERED
             ws_sessions = state.sessions_for_ws(ws)
-            if is_discovered:
-                best = _best_activity(ws_sessions, last_seen)
-                icon, color = _ACTIVITY_ICONS[best]
-                status_cell = Text(icon, style=color)
-            else:
-                status_cell = Text(STATUS_ICONS[ws.status], style=STATUS_THEME[ws.status])
-            indicators = "" if is_discovered else _ws_indicators(ws, tmux_check=state.ws_has_tmux)
+            status_cell = Text(STATUS_ICONS[ws.status], style=STATUS_THEME[ws.status])
+            indicators = _ws_indicators(ws, tmux_check=state.ws_has_tmux)
             name_str = _rich_escape(ws.name)
             if indicators:
                 name_str += "  " + indicators
@@ -156,15 +143,9 @@ def bench_state_operations():
 
         def build_all_rows():
             for ws in items:
-                is_discovered = ws.origin == Origin.DISCOVERED
                 ws_sessions = state.sessions_for_ws(ws)
-                if is_discovered:
-                    best = _best_activity(ws_sessions, last_seen)
-                    icon, color = _ACTIVITY_ICONS[best]
-                    status_cell = Text(icon, style=color)
-                else:
-                    status_cell = Text(STATUS_ICONS[ws.status], style=STATUS_THEME[ws.status])
-                indicators = "" if is_discovered else _ws_indicators(ws, tmux_check=state.ws_has_tmux)
+                status_cell = Text(STATUS_ICONS[ws.status], style=STATUS_THEME[ws.status])
+                indicators = _ws_indicators(ws, tmux_check=state.ws_has_tmux)
                 name_str = _rich_escape(ws.name)
                 if indicators:
                     name_str += "  " + indicators
