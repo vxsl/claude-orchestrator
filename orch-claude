@@ -127,7 +127,7 @@ elif [[ -n "$PROMPT" ]]; then
     INITIAL_TITLE="${PROMPT:0:60}"
 fi
 
-# ─── Launch header pane (2 lines, above main) ──────────────────
+# ─── Launch header pane (3 lines, above main) ──────────────────
 HEADER_ARGS=(
     "${ORCH_DIR}/orch-header"
     --ws-name "$WS_NAME"
@@ -139,7 +139,7 @@ HEADER_ARGS=(
 )
 [[ -n "$INITIAL_TITLE" ]] && HEADER_ARGS+=(--title "$INITIAL_TITLE")
 
-HEADER_PANE=$(tmux split-window -b -l 2 -P -F '#{pane_id}' "${HEADER_ARGS[@]}")
+HEADER_PANE=$(tmux split-window -b -l 3 -P -F '#{pane_id}' "${HEADER_ARGS[@]}")
 
 # Focus back to the main pane (below the header)
 tmux select-pane -D
@@ -289,7 +289,6 @@ if s:
     print(f'  ${C_DIM}model${C_RESET}    {s.model_short}')
     print(f'  ${C_DIM}msgs${C_RESET}     {s.message_count}')
     print(f'  ${C_DIM}tokens${C_RESET}   {s.tokens_display}')
-    print(f'  ${C_DIM}cost${C_RESET}     {s.cost_display}')
     print(f'  ${C_DIM}elapsed${C_RESET}  ${ELAPSED}')
 " 2>/dev/null || true
 else
