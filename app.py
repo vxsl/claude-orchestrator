@@ -58,7 +58,7 @@ from rendering import (
 )
 from state import AppState
 from actions import (
-    has_tmux, launch_orch_claude, ws_directories, ws_working_dir,
+    ws_directories, ws_working_dir,
     find_sessions_for_ws, do_resume, resume_session_now, open_link,
     refresh_liveness,
 )
@@ -1303,6 +1303,33 @@ class OrchestratorApp(App):
 
     # ── Spawn & resume ──
 
+    def launch_claude_session(
+        self,
+        ws: Workstream,
+        session_id: str | None = None,
+        prompt: str | None = None,
+        cwd: str | None = None,
+        callback=None,
+    ) -> None:
+        """Push a ClaudeSessionScreen for the given workstream."""
+        from claude_session_screen import ClaudeSessionScreen
+        def _on_dismiss(session):
+            if session:
+                self.notify(
+                    f"{session.model_short} | {session.message_count} msgs | {session.tokens_display}",
+                    timeout=5,
+                )
+            self._refresh_ws_table()
+            if callback:
+                callback(session)
+        self.push_screen(
+            ClaudeSessionScreen(
+                ws=ws, store=self.state.store,
+                session_id=session_id, prompt=prompt, cwd=cwd,
+            ),
+            callback=_on_dismiss,
+        )
+
     def action_spawn(self):
         if self.state.view_mode != ViewMode.WORKSTREAMS:
             return
@@ -1310,11 +1337,7 @@ class OrchestratorApp(App):
         if not ws:
             self.notify("No workstream selected", timeout=2)
             return
-        ok, err = launch_orch_claude(ws, store=self.state.store)
-        if ok:
-            self.notify("Session spawned", timeout=2)
-        else:
-            self.notify(f"Spawn failed: {err}", severity="error", timeout=4)
+        self.launch_claude_session(ws)
 
     def action_repo_spawn(self):
         repos = self.state.discover_all_repos()
@@ -1351,12 +1374,7 @@ class OrchestratorApp(App):
         self.push_screen(RepoPickerScreen(repos, ws_counts), callback=on_repo_picked)
 
     def _spawn_in_ws(self, ws: Workstream):
-        ok, err = launch_orch_claude(ws, store=self.state.store)
-        if ok:
-            self.notify(f"Spawned in {ws.name}", timeout=2)
-            self._refresh_ws_table()
-        else:
-            self.notify(f"Spawn failed: {err}", severity="error", timeout=4)
+        self.launch_claude_session(ws)
 
     def action_resume(self):
         if self.state.view_mode == ViewMode.WORKSTREAMS:
@@ -1375,7 +1393,7 @@ class OrchestratorApp(App):
 
         ws = self.state.find_ws_for_session(session)
         if ws:
-            launch_orch_claude(ws, session_id=session.session_id, cwd=session.project_path)
+            self.launch_claude_session(ws, session_id=session.session_id, cwd=session.project_path)
         else:
             self._suspend_claude(
                 ["claude", "--resume", session.session_id],

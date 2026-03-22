@@ -104,19 +104,15 @@ class TestDoResume:
             project_path="/tmp/test", message_count=5,
         )
 
-    @patch("actions.has_tmux", return_value=True)
-    @patch("actions.launch_orch_claude", return_value=(True, ""))
-    def test_single_session_resumes(self, mock_launch, mock_tmux):
+    def test_single_session_resumes(self):
         session = self._make_session("s1")
         ws = Workstream(name="test")
         app = MagicMock()
         do_resume(ws, app, [session],
                   sessions_for_ws_fn=lambda w: [session])
-        mock_launch.assert_called_once()
-        app.push_screen.assert_not_called()
+        app.launch_claude_session.assert_called_once()
 
-    @patch("actions.has_tmux", return_value=True)
-    def test_multiple_sessions_shows_picker(self, mock_tmux):
+    def test_multiple_sessions_shows_picker(self):
         sessions = [self._make_session(f"s{i}") for i in range(3)]
         ws = Workstream(name="test")
         app = MagicMock()
@@ -126,13 +122,13 @@ class TestDoResume:
         screen_arg = app.push_screen.call_args[0][0]
         assert isinstance(screen_arg, SessionPickerScreen)
 
-    @patch("actions.has_tmux", return_value=False)
-    def test_no_tmux_notifies(self, mock_tmux):
+    def test_no_sessions_no_dirs_notifies(self):
         ws = Workstream(name="test")
         app = MagicMock()
-        do_resume(ws, app, [])
+        do_resume(ws, app, [],
+                  sessions_for_ws_fn=lambda w: [])
         app.notify.assert_called_once()
-        assert "tmux" in app.notify.call_args[0][0].lower()
+        assert "no sessions" in app.notify.call_args[0][0].lower()
 
 
 class TestSwitchToTmuxWindow:

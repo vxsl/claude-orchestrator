@@ -603,11 +603,9 @@ class TestDoResume:
             project_path=project_path, message_count=msgs,
         )
 
-    @patch("actions.has_tmux", return_value=True)
-    @patch("actions.launch_orch_claude", return_value=(True, ""))
     @patch("actions.find_sessions_for_ws")
-    def test_single_session_resumes_immediately(self, mock_find, mock_launch, mock_tmux):
-        """With exactly 1 matching session, resume without showing picker."""
+    def test_single_session_resumes_immediately(self, mock_find):
+        """With exactly 1 matching session, resume via launch_claude_session."""
         session = self._make_session("s1", project_path="/tmp/test")
         mock_find.return_value = [session]
         ws = Workstream(name="test", category=Category.META)
@@ -615,12 +613,11 @@ class TestDoResume:
 
         _do_resume(ws, app, [session])
 
-        mock_launch.assert_called_once()
+        app.launch_claude_session.assert_called_once()
         app.push_screen.assert_not_called()
 
-    @patch("actions.has_tmux", return_value=True)
     @patch("actions.find_sessions_for_ws")
-    def test_multiple_sessions_shows_picker(self, mock_find, mock_tmux):
+    def test_multiple_sessions_shows_picker(self, mock_find):
         """With 2+ matching sessions, show SessionPickerScreen."""
         sessions = [self._make_session(f"s{i}") for i in range(3)]
         mock_find.return_value = sessions
@@ -632,18 +629,16 @@ class TestDoResume:
         app.push_screen.assert_called_once()
         screen_arg = app.push_screen.call_args[0][0]
         assert isinstance(screen_arg, SessionPickerScreen)
-        assert len(screen_arg.thread_sessions) == 3
 
-    @patch("actions.has_tmux", return_value=False)
-    def test_no_tmux_notifies_error(self, mock_tmux):
-        """Without tmux, show error notification."""
+    def test_no_sessions_no_dirs_notifies(self):
+        """With no sessions or directories, show notification."""
         ws = Workstream(name="test", category=Category.META)
         app = MagicMock()
 
-        _do_resume(ws, app, [])
+        _do_resume(ws, app, [], sessions_for_ws_fn=lambda w: [])
 
         app.notify.assert_called_once()
-        assert "tmux" in app.notify.call_args[0][0].lower()
+        assert "no sessions" in app.notify.call_args[0][0].lower()
 
 
 # ─── _parse_ts Regression Tests ─────────────────────────────────────

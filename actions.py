@@ -282,31 +282,15 @@ def find_sessions_for_ws(ws: Workstream, all_sessions: list[ClaudeSession]) -> l
 # ─── Resume Logic ────────────────────────────────────────────────────
 
 def resume_session_now(ws: Workstream, session: ClaudeSession, dirs: list[str], app):
-    """Resume a specific session immediately.
-
-    If the session is already running in a tmux window (detached), switches
-    to that window instead of spawning a duplicate.
-    """
+    """Resume a specific session immediately via ClaudeSessionScreen."""
     log.debug("resume_session_now: sid=%s title=%s", session.session_id, session.display_name)
     mark_thread_seen(session.session_id)
-
-    existing_wid = find_tmux_window_for_session(session.session_id)
-    log.debug("resume_session_now: existing_wid=%s", existing_wid)
-    if existing_wid and switch_to_tmux_window(existing_wid):
-        log.debug("resume_session_now: switched to existing window %s", existing_wid)
-        return
 
     cwd = session.project_path
     if not os.path.isdir(cwd):
         log.debug("resume_session_now: cwd %s not a dir, falling back", cwd)
         cwd = dirs[0] if dirs else os.getcwd()
-    ok, err = launch_orch_claude(ws, session_id=session.session_id, cwd=cwd)
-    log.debug("resume_session_now: launch_orch_claude ok=%s err=%r", ok, err)
-    if ok:
-        app.notify(f"Resuming: {session.display_name}", timeout=2)
-    else:
-        log.error("resume_session_now: FAILED sid=%s err=%s", session.session_id, err)
-        app.notify(f"Resume failed: {err}", severity="error", timeout=4)
+    app.launch_claude_session(ws, session_id=session.session_id, cwd=cwd)
 
 
 def do_resume(ws: Workstream, app, sessions: list[ClaudeSession] | None = None,
@@ -316,10 +300,6 @@ def do_resume(ws: Workstream, app, sessions: list[ClaudeSession] | None = None,
     With 1 matching session: resumes immediately.
     With 2+: opens a thread picker so the user can choose.
     """
-    if not has_tmux():
-        app.notify("Not in a tmux session", severity="error", timeout=2)
-        return
-
     if sessions_for_ws_fn:
         matching = sessions_for_ws_fn(ws)
     else:
@@ -339,8 +319,7 @@ def do_resume(ws: Workstream, app, sessions: list[ClaudeSession] | None = None,
         return
 
     if dirs:
-        launch_orch_claude(ws, cwd=dirs[0])
-        app.notify(f"New session in {dirs[0]}", timeout=2)
+        app.launch_claude_session(ws, cwd=dirs[0])
         return
 
     app.notify("No sessions or directories found", timeout=2)
@@ -372,7 +351,7 @@ def open_link(link, ws: Workstream | None = None, app=None):
             subprocess.Popen(["xdg-open", value], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     elif link.kind == "claude-session":
         if ws and app:
-            launch_orch_claude(ws, session_id=link.value)
+            app.launch_claude_session(ws, session_id=link.value)
         elif has_tmux():
             subprocess.Popen(
                 ["tmux", "new-window", "-n", f"claude:{link.label}",

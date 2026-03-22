@@ -57,8 +57,7 @@ from rendering import (
     _rich_escape,
 )
 from actions import (
-    launch_orch_claude, ws_directories, resume_session_now, open_link,
-    switch_to_tmux_window,
+    ws_directories, open_link,
 )
 from notifications import Notification, dismiss_notification, dismiss_all_for_dirs
 from state import fuzzy_match, content_search, SessionSearchResult
@@ -636,13 +635,9 @@ class TodoScreen(_VimOptionListMixin, ModalScreen[None]):
         prompt = item.text
         if item.context:
             prompt = f"{item.text}\n\n{item.context}"
-        ok, err = launch_orch_claude(self.ws, store=self.store, prompt=prompt)
-        if ok:
-            self._app_state.toggle_todo(self.ws.id, item.id)  # mark done
-            self._rebuild()
-            self.app.notify("Session spawned", timeout=2)
-        else:
-            self.app.notify(f"Spawn failed: {err}", severity="error", timeout=4)
+        self._app_state.toggle_todo(self.ws.id, item.id)  # mark done
+        self._rebuild()
+        self.app.launch_claude_session(self.ws, prompt=prompt)
 
     def action_edit_context(self):
         item = self._highlighted_item()
@@ -1710,8 +1705,10 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
                 if session:
                     mark_thread_seen(session.session_id)
                     self._last_seen_cache = load_last_seen()
-                    dirs = ws_directories(self.ws)
-                    resume_session_now(self.ws, session, dirs, self.app)
+                    self.app.launch_claude_session(
+                        self.ws, session_id=session.session_id,
+                        cwd=session.project_path,
+                    )
                     return
             # No session to jump to — dismiss instead
             if notif and not notif.dismissed:
@@ -1742,8 +1739,10 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
                     dismiss_notification(n.id)
                     n.dismissed = True
             self._session_notifications.pop(sid, None)
-            dirs = ws_directories(self.ws)
-            resume_session_now(self.ws, session, dirs, self.app)
+            self.app.launch_claude_session(
+                self.ws, session_id=session.session_id,
+                cwd=session.project_path,
+            )
         else:
             log.warning("option_selected: session not found for sid=%s, detail_sids=%s, archived_sids=%s",
                         sid, [s.session_id for s in self._detail_sessions],
@@ -2213,39 +2212,7 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         self._refresh()
 
     def action_spawn(self):
-        # If there's a live tmux window for this ws whose session hasn't
-        # appeared in our session list yet (still composing first prompt),
-        # switch to it instead of spawning a fresh one.
-        wid = self._find_composing_window()
-        if wid and switch_to_tmux_window(wid):
-            return
-        ok, err = launch_orch_claude(self.ws, store=self.store)
-        if ok:
-            self.app.notify("Session spawned", timeout=2)
-            self._add_spawning_placeholder()
-        else:
-            self.app.notify(f"Spawn failed: {err}", severity="error", timeout=4)
-
-    def _find_composing_window(self) -> str | None:
-        """Find a tmux window for this ws where the user hasn't submitted yet."""
-        from actions import find_tmux_windows_for_ws
-        all_sessions = self._all_sessions + self._all_archived
-        known_sids = {s.session_id for s in all_sessions}
-        known_sids |= {sid for s in all_sessions for sid in s.all_session_ids}
-        for sid, wid in find_tmux_windows_for_ws(self.ws.name):
-            if sid not in known_sids:
-                return wid
-        return None
-
-    def _add_spawning_placeholder(self):
-        olist = self.query_one("#detail-sessions", OptionList)
-        no_sess = self.query_one("#detail-no-sessions", Static)
-        olist.display = True
-        no_sess.display = False
-        line1 = f" [bold {C_CYAN}]◉[/bold {C_CYAN}]  [bold]Starting session…[/bold]"
-        line2 = f"      [{C_DIM}]waiting for Claude to initialize[/{C_DIM}]"
-        olist.add_option(Option(f"{line1}\n{line2}", id="spawning"))
-        self._refresh()
+        self.app.launch_claude_session(self.ws)
 
     def action_resume(self):
         """Resume the currently highlighted session (same as Enter)."""
@@ -2257,8 +2224,10 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
                 session = sessions[idx]
                 mark_thread_seen(session.session_id)
                 self._last_seen_cache = load_last_seen()
-                dirs = ws_directories(self.ws)
-                resume_session_now(self.ws, session, dirs, self.app)
+                self.app.launch_claude_session(
+                    self.ws, session_id=session.session_id,
+                    cwd=session.project_path,
+                )
 
     def action_add_link(self):
         def on_link(link: Link | None):
