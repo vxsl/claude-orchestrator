@@ -280,6 +280,20 @@ def _best_activity(sessions: list, last_seen: dict[str, str] | None = None) -> T
     return best
 
 
+def _parse_iso(ts: str):
+    """Parse ISO timestamp to aware datetime, or None."""
+    from datetime import datetime, timezone
+    if not ts:
+        return None
+    try:
+        dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt
+    except (ValueError, TypeError):
+        return None
+
+
 def _is_session_seen(session, last_seen: dict[str, str] | None = None) -> bool:
     """True if user has viewed this session since its last activity."""
     if not last_seen:
@@ -287,7 +301,11 @@ def _is_session_seen(session, last_seen: dict[str, str] | None = None) -> bool:
     seen_ts = last_seen.get(session.session_id)
     if not seen_ts or not session.last_activity:
         return False
-    return seen_ts >= session.last_activity
+    seen_dt = _parse_iso(seen_ts)
+    activity_dt = _parse_iso(session.last_activity)
+    if not seen_dt or not activity_dt:
+        return False
+    return seen_dt >= activity_dt
 
 
 def _all_sessions_seen(sessions: list, last_seen: dict[str, str] | None = None) -> bool:
