@@ -54,6 +54,7 @@ from rendering import (
     THROBBER_FRAMES, _ACTIVITY_PRIORITY,
     _activity_icon, _activity_badge, _best_activity,
     _render_session_option, _session_title,
+    _rich_escape,
 )
 from state import AppState
 from actions import (
@@ -507,7 +508,7 @@ class OrchestratorApp(App):
             return
 
         lines = []
-        lines.append(f"[bold {C_PURPLE}]{ws.name}[/bold {C_PURPLE}]")
+        lines.append(f"[bold {C_PURPLE}]{_rich_escape(ws.name)}[/bold {C_PURPLE}]")
         lines.append(f"{_status_markup(ws.status)}  {_category_markup(ws.category)}")
         if archived:
             lines.append(f"[{C_DIM}]Archived[/{C_DIM}]")
@@ -722,7 +723,7 @@ class OrchestratorApp(App):
         parts.append(f"  [{C_DIM}]Sort:[/{C_DIM}][bold {C_BLUE}]{sort_label}[/bold {C_BLUE}]")
 
         if self.state.search_text:
-            parts.append(f"  [{C_DIM}]Search:[/{C_DIM}][{C_YELLOW}]{self.state.search_text}[/{C_YELLOW}]")
+            parts.append(f"  [{C_DIM}]Search:[/{C_DIM}][{C_YELLOW}]{_rich_escape(self.state.search_text)}[/{C_YELLOW}]")
 
         return " ".join(parts)
 
@@ -796,7 +797,7 @@ class OrchestratorApp(App):
                 indicators = _ws_indicators(ws, tmux_check=self.state.ws_has_tmux)
             ws_sessions = self.state.sessions_for_ws(ws)
 
-            name_str = ws.name
+            name_str = _rich_escape(ws.name)
             if indicators:
                 name_str += "  " + indicators
             name_cell = Text.from_markup(name_str)
@@ -1203,7 +1204,7 @@ class OrchestratorApp(App):
                     self._refresh_archived_table()
 
             self.push_screen(
-                ConfirmScreen(f"[bold {C_RED}]Delete[/bold {C_RED}] [bold]{ws.name}[/bold]?"),
+                ConfirmScreen(f"[bold {C_RED}]Delete[/bold {C_RED}] [bold]{_rich_escape(ws.name)}[/bold]?"),
                 callback=on_confirm,
             )
 

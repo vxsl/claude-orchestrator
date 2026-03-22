@@ -780,3 +780,98 @@ class TestBackspaceBindingOnScreens:
                 binding_keys.append(b.key)
         assert any("backspace" in k for k in binding_keys), \
             f"{screen_cls_name} missing backspace in BINDINGS"
+
+
+class TestRichMarkupEscaping:
+    """Regression: user-generated text with [ must not crash Rich markup rendering.
+
+    rich.markup.escape() does NOT escape all brackets — only ones that look like
+    valid tags. Arbitrary text like "[Binding(key='backspace')]" passes through
+    unescaped, then crashes when embedded inside Rich color tags. All rendering
+    helpers must use _rich_escape() (which escapes ALL brackets) on any
+    user-generated text before embedding it in Rich markup.
+    """
+
+    BRACKET_TEXT = "[Binding(key='backspace', action='go_back')]"
+    MARKUP_CHARS = "[bold]not a tag[/bold]"
+
+    def _make_session(self, last_text="", title=""):
+        return ClaudeSession(
+            session_id="test-brackets",
+            project_dir="d",
+            project_path="/tmp/test",
+            message_count=5,
+            last_message_text=last_text,
+            last_message_role="user",
+            model="claude-sonnet-4-6",
+            title=title,
+        )
+
+    def test_render_session_option_with_brackets_in_last_message(self):
+        """Session with [ in last_message_text must not crash."""
+        from rendering import _render_session_option
+        from threads import ThreadActivity
+        s = self._make_session(last_text=self.BRACKET_TEXT)
+        # Must not raise MarkupError
+        result = _render_session_option(s, ThreadActivity.IDLE)
+        assert "backspace" in result
+
+    def test_render_session_option_with_brackets_in_title(self):
+        """Session with [ in title must not crash."""
+        from rendering import _render_session_option, _session_title, _rich_escape
+        from threads import ThreadActivity
+        # _session_title uses a cache; test _rich_escape on the title directly
+        title = _rich_escape(self.BRACKET_TEXT)
+        assert r"\[" in title
+        # Also verify the full render path doesn't crash
+        s = self._make_session(title=self.BRACKET_TEXT)
+        result = _render_session_option(s, ThreadActivity.IDLE)
+        assert result  # didn't crash
+
+    def test_render_session_option_with_markup_in_last_message(self):
+        """Session with Rich markup tags in text must not be interpreted."""
+        from rendering import _render_session_option
+        from threads import ThreadActivity
+        s = self._make_session(last_text=self.MARKUP_CHARS)
+        result = _render_session_option(s, ThreadActivity.IDLE)
+        # The [bold] should be escaped, not rendered as markup
+        assert r"\[bold]" in result
+
+    def test_render_notification_option_with_brackets(self):
+        """Notification with [ in message must not crash."""
+        from rendering import _render_notification_option
+        from notifications import Notification
+        notif = Notification(
+            id="test", timestamp="2026-03-21T12:00:00Z",
+            cwd="/tmp", title=self.BRACKET_TEXT,
+            message=self.BRACKET_TEXT, session_id="x",
+        )
+        result = _render_notification_option(notif)
+        assert "backspace" in result
+
+    def test_render_todo_option_with_brackets(self):
+        """Todo with [ in text must not crash."""
+        from rendering import _render_todo_option
+        from models import TodoItem
+        todo = TodoItem(text=self.BRACKET_TEXT)
+        result = _render_todo_option(todo, is_archived=False)
+        assert "backspace" in result
+
+    def test_rich_escape_escapes_all_brackets(self):
+        """_rich_escape must escape ALL [ characters, not just tag-like ones."""
+        from rendering import _rich_escape
+        escaped = _rich_escape(self.BRACKET_TEXT)
+        assert "[" not in escaped.replace(r"\[", "")
+
+    def test_session_option_render_does_not_raise(self):
+        """End-to-end: rendering a session option through Rich must not raise."""
+        from rich.console import Console
+        from rich.text import Text
+        from rendering import _render_session_option
+        from threads import ThreadActivity
+        s = self._make_session(last_text=self.BRACKET_TEXT, title="[oops]")
+        markup = _render_session_option(s, ThreadActivity.IDLE)
+        console = Console()
+        # This is the call that actually crashed — Rich parses the markup
+        text = Text.from_markup(markup)
+        assert text  # didn't raise

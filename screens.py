@@ -51,6 +51,7 @@ from rendering import (
     _render_todo_option, _render_notification_option,
     _render_content_search_result,
     TODO_UNDONE_ICON, TODO_DONE_ICON,
+    _rich_escape,
 )
 from actions import (
     launch_orch_claude, ws_directories, resume_session_now, open_link,
@@ -354,7 +355,7 @@ class TodoScreen(_VimOptionListMixin, ModalScreen[None]):
 
     def compose(self) -> ComposeResult:
         with Vertical(id="todo-container"):
-            yield Static(f"[bold {C_PURPLE}]Todos: {self.ws.name}[/bold {C_PURPLE}]", id="todo-title")
+            yield Static(f"[bold {C_PURPLE}]Todos: {_rich_escape(self.ws.name)}[/bold {C_PURPLE}]", id="todo-title")
 
             with Horizontal(id="todo-lists"):
                 with Vertical(id="todo-active-pane", classes="todo-list-pane"):
@@ -744,7 +745,7 @@ class LinksScreen(_VimOptionListMixin, ModalScreen[None]):
             options = []
             for i, lnk in enumerate(self.ws.links):
                 icon = _link_icon(lnk.kind)
-                options.append(Option(f"{icon}  [{lnk.kind}] {lnk.label}: {lnk.value}", id=str(i)))
+                options.append(Option(f"{icon}  [{_rich_escape(lnk.kind)}] {_rich_escape(lnk.label)}: {_rich_escape(lnk.value)}", id=str(i)))
             if not options:
                 options.append(Option("(no links)", id="none", disabled=True))
             yield OptionList(*options, id="links-list")
@@ -1455,7 +1456,7 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
                         [s.session_id for s in self._archived_sessions])
 
     def _render_title(self) -> str:
-        return f"[bold {C_PURPLE}]{self.ws.name}[/bold {C_PURPLE}]"
+        return f"[bold {C_PURPLE}]{_rich_escape(self.ws.name)}[/bold {C_PURPLE}]"
 
     def _render_meta(self) -> str:
         parts = [_status_markup(self.ws.status), _category_markup(self.ws.category)]
@@ -1483,7 +1484,7 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
                 lines.append(f"  [{C_DIM}]{short}[/{C_DIM}]")
             for lnk in other_links:
                 icon = _link_icon(lnk.kind)
-                lines.append(f"  {icon} [{C_DIM}]{lnk.label}:[/{C_DIM}] {lnk.value}")
+                lines.append(f"  {icon} [{C_DIM}]{_rich_escape(lnk.label)}:[/{C_DIM}] {_rich_escape(lnk.value)}")
             lines.append("")
         # Todo summary
         from state import AppState
@@ -2065,7 +2066,7 @@ class LinkSessionScreen(_VimOptionListMixin, ModalScreen[Workstream | None]):
             options = []
             for ws in self.store.active:
                 options.append(Option(
-                    f"{STATUS_ICONS[ws.status]} {ws.name}  ({ws.category.value})",
+                    f"{STATUS_ICONS[ws.status]} {_rich_escape(ws.name)}  ({ws.category.value})",
                     id=ws.id,
                 ))
             if not options:
@@ -2307,7 +2308,7 @@ class WorkstreamPickerScreen(_VimOptionListMixin, ModalScreen[Workstream | str |
             options = []
             for ws in self.workstreams:
                 options.append(Option(
-                    f"{STATUS_ICONS[ws.status]} {ws.name}  [{C_DIM}]{ws.category.value}[/{C_DIM}]",
+                    f"{STATUS_ICONS[ws.status]} {_rich_escape(ws.name)}  [{C_DIM}]{ws.category.value}[/{C_DIM}]",
                     id=ws.id,
                 ))
             options.append(Option(
