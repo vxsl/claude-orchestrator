@@ -2251,18 +2251,29 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
 
     def action_resume(self):
         """Resume the currently highlighted session (same as Enter)."""
+        if self._peek_mode:
+            return
         olist = self._focused_olist()
         idx = olist.highlighted
-        if self._active_pane in ("sessions", "archived"):
-            sessions = self._archived_sessions if self._active_pane == "archived" else self._detail_sessions
-            if idx is not None and idx < len(sessions):
-                session = sessions[idx]
-                mark_thread_seen(session.session_id)
-                self._last_seen_cache = load_last_seen()
-                self.app.launch_claude_session(
-                    self.ws, session_id=session.session_id,
-                    cwd=session.project_path,
-                )
+        if idx is None or self._active_pane not in ("sessions", "archived"):
+            return
+        # Use option ID to find the session — the OptionList may contain
+        # separators that shift indices relative to the sessions list.
+        try:
+            oid = olist.get_option_at_index(idx).id
+        except Exception:
+            return
+        if not oid or oid == "__separator__":
+            return
+        sid = oid.removeprefix("a:")
+        session = self._find_session_by_id(sid)
+        if session:
+            mark_thread_seen(session.session_id)
+            self._last_seen_cache = load_last_seen()
+            self.app.launch_claude_session(
+                self.ws, session_id=session.session_id,
+                cwd=session.project_path,
+            )
 
     def action_add_link(self):
         def on_link(link: Link | None):

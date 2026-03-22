@@ -1024,7 +1024,7 @@ link kinds: worktree, ticket, claude-session, file, url, slack
     p_link.add_argument("-l", "--label", help="Custom label for the link")
 
     # note
-    p_note = sub.add_parser("note", help="Add a timestamped note to a workstream",
+    p_note = sub.add_parser("note", help="Add a todo item to a workstream",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""\
 examples:
