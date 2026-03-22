@@ -2102,6 +2102,9 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         self.app.push_screen(QuickNoteScreen(self.ws), callback=on_note)
 
     def action_open_todos(self):
+        # Reload from disk so CLI-created todos (e.g. crystallized) appear
+        self.store.load()
+        self.ws = self.store.get(self.ws.id) or self.ws
         def on_close(_):
             self.store.load()
             self.ws = self.store.get(self.ws.id) or self.ws
