@@ -1542,6 +1542,7 @@ class OrchestratorApp(App):
 
     def _on_return_from_modal(self):
         self.state.store.load()
+        self.state._last_seen_valid = False  # pick up marks from detail screen
         self._refresh_ws_table()
         self._refresh_archived_table()
         self._update_preview()

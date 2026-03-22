@@ -49,6 +49,7 @@ from rendering import (
     _short_model, _short_project,
     _render_session_option, _session_title,
     _render_todo_option, _render_notification_option,
+    _render_notified_session_option, QUIET_SEPARATOR_LABEL,
     _render_content_search_result, tool_bar_legend,
     TODO_UNDONE_ICON, TODO_DONE_ICON,
     _rich_escape,
@@ -1004,6 +1005,7 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         self._detail_sessions: list[ClaudeSession] = []
         self._archived_sessions: list[ClaudeSession] = []
         self._feed_notifications: list[Notification] = []
+        self._session_notifications: dict[str, Notification] = {}  # session_id -> latest notif
         self._throbber_frame: int = 0
         self._last_seen_cache: dict[str, str] = {}
         self._active_pane: str = "sessions"
@@ -1040,6 +1042,7 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
             with Horizontal(id="detail-lower"):
                 with VerticalScroll(id="detail-scroll"):
                     yield Static(self._render_body(), id="detail-body")
+                # Feed pane kept in DOM but hidden — notifications now inline in session list
                 with Vertical(id="detail-feed-pane"):
                     yield Static(self._render_feed_label(), id="detail-feed-label", classes="detail-feed-label")
                     yield OptionList(id="detail-feed")
@@ -1049,12 +1052,19 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
 
     def on_mount(self):
         self._last_seen_cache = load_last_seen()
+        self._load_feed()  # must run before _load_detail_sessions so notification map is ready
         self._load_detail_sessions()
-        self._load_feed()
+        self._mark_all_seen()
         self.query_one("#detail-sessions", OptionList).focus()
         self._update_pane_labels()
         self.set_interval(10, self._schedule_liveness_refresh)
         self.set_interval(10, self._poll_feed)
+
+    def _mark_all_seen(self):
+        """Mark all sessions in this workstream as seen right now."""
+        for s in self._detail_sessions + self._archived_sessions:
+            mark_thread_seen(s.session_id)
+        self._last_seen_cache = load_last_seen()
 
     def _schedule_liveness_refresh(self):
         self._do_liveness_refresh()
@@ -1165,12 +1175,43 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         if self._content_search_active or self._peek_mode:
             return  # Don't overwrite search results or peek content
         olist = self.query_one("#detail-sessions", OptionList)
-        for i, s in enumerate(self._detail_sessions):
-            if i < olist.option_count:
+
+        # Rebuild respecting the notified/separator/quiet structure
+        # Rather than tracking indices through the separator, just do a full rebuild
+        # which is safe since replace_option_prompt_at_index preserves highlight
+        notified = []
+        quiet = []
+        for s in self._detail_sessions:
+            if s.session_id in self._session_notifications:
+                notified.append(s)
+            else:
+                quiet.append(s)
+        notified.sort(key=lambda s: self._session_notifications[s.session_id].dt, reverse=True)
+
+        idx = 0
+        for s in notified:
+            if idx < olist.option_count:
+                act = session_activity(s, self._last_seen_cache)
+                seen = _is_session_seen(s, self._last_seen_cache)
+                notif = self._session_notifications[s.session_id]
+                prompt = _render_notified_session_option(
+                    s, act, notif, self._throbber_frame,
+                    ws_repo_path=self.ws.repo_path, seen=seen,
+                )
+                olist.replace_option_prompt_at_index(idx, prompt)
+            idx += 1
+
+        if notified and quiet:
+            idx += 1  # skip separator
+
+        for s in quiet:
+            if idx < olist.option_count:
                 act = session_activity(s, self._last_seen_cache)
                 seen = _is_session_seen(s, self._last_seen_cache)
                 prompt = _render_session_option(s, act, self._throbber_frame, ws_repo_path=self.ws.repo_path, seen=seen)
-                olist.replace_option_prompt_at_index(i, prompt)
+                olist.replace_option_prompt_at_index(idx, prompt)
+            idx += 1
+
         arch_olist = self.query_one("#detail-archived", OptionList)
         for i, s in enumerate(self._archived_sessions):
             if i < arch_olist.option_count:
@@ -1336,16 +1377,51 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         olist = self.query_one("#detail-sessions", OptionList)
         olist.clear_options()
         animating = []
-        for i, s in enumerate(self._detail_sessions):
+
+        # Split into notified (have a notification) and quiet (no notification)
+        notified = []
+        quiet = []
+        for s in self._detail_sessions:
+            if s.session_id in self._session_notifications:
+                notified.append(s)
+            else:
+                quiet.append(s)
+
+        # Sort notified by notification recency (newest first)
+        notified.sort(key=lambda s: self._session_notifications[s.session_id].dt, reverse=True)
+
+        # Build the unified list: notified first, separator, then quiet
+        self._notified_count = len(notified)
+        idx = 0
+        for s in notified:
             act = session_activity(s, self._last_seen_cache)
             if act in (ThreadActivity.THINKING, ThreadActivity.AWAITING_INPUT):
-                animating.append((i, act))
+                animating.append((idx, act))
+            seen = _is_session_seen(s, self._last_seen_cache)
+            notif = self._session_notifications[s.session_id]
+            prompt = _render_notified_session_option(
+                s, act, notif, self._throbber_frame,
+                ws_repo_path=self.ws.repo_path, seen=seen,
+            )
+            olist.add_option(Option(prompt, id=s.session_id))
+            idx += 1
+
+        if notified and quiet:
+            olist.add_option(Option(QUIET_SEPARATOR_LABEL, id="__separator__", disabled=True))
+            idx += 1
+
+        for s in quiet:
+            act = session_activity(s, self._last_seen_cache)
+            if act in (ThreadActivity.THINKING, ThreadActivity.AWAITING_INPUT):
+                animating.append((idx, act))
             seen = _is_session_seen(s, self._last_seen_cache)
             prompt = _render_session_option(s, act, self._throbber_frame, ws_repo_path=self.ws.repo_path, seen=seen)
-            log.debug("build_session_list[%d] id=%s title=%s", i, s.session_id, s.display_name)
             olist.add_option(Option(prompt, id=s.session_id))
+            idx += 1
+
         self._animating_sessions = animating
-        log.debug("build_session_list: %d options added, option_count=%d", len(self._detail_sessions), olist.option_count)
+        log.debug("build_session_list: %d notified + %d quiet, option_count=%d",
+                  len(notified), len(quiet), olist.option_count)
 
     def _build_archived_list(self):
         olist = self.query_one("#detail-archived", OptionList)
@@ -1375,26 +1451,31 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         else:
             self._feed_notifications = []
 
-        olist = self.query_one("#detail-feed", OptionList)
-        no_feed = self.query_one("#detail-no-feed", Static)
+        # Build session_id -> latest (non-dismissed) notification map
+        notif_map: dict[str, Notification] = {}
+        for n in self._feed_notifications:
+            if n.dismissed or not n.session_id:
+                continue
+            existing = notif_map.get(n.session_id)
+            if not existing or n.dt > existing.dt:
+                notif_map[n.session_id] = n
+        self._session_notifications = notif_map
 
-        if self._feed_notifications:
-            olist.display = True
-            no_feed.display = False
-            old_idx = olist.highlighted
-            self._build_feed_list()
-            if old_idx is not None and old_idx < olist.option_count:
-                olist.highlighted = old_idx
-            elif olist.option_count > 0:
-                olist.highlighted = 0
-        else:
+        # Orphan notifications (no session_id or session not in active list)
+        active_sids = {s.session_id for s in self._detail_sessions}
+        self._orphan_notifications = [
+            n for n in self._feed_notifications
+            if not n.dismissed and (not n.session_id or n.session_id not in active_sids)
+            and n.session_id not in notif_map  # don't double-count mapped ones
+        ]
+
+        # Feed pane is now hidden — notifications are inline with sessions
+        try:
+            olist = self.query_one("#detail-feed", OptionList)
             olist.display = False
-            no_feed.display = True
-            if self._active_pane == "feed":
-                self._active_pane = "sessions"
-                self.query_one("#detail-sessions", OptionList).focus()
-
-        self.query_one("#detail-feed-label", Static).update(self._render_feed_label())
+            self.query_one("#detail-no-feed", Static).display = False
+        except Exception:
+            pass
 
     def _build_feed_list(self):
         olist = self.query_one("#detail-feed", OptionList)
@@ -1404,7 +1485,12 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
             olist.add_option(Option(prompt, id=f"notif:{notif.id}"))
 
     def _poll_feed(self):
+        old_notif_sids = set(self._session_notifications.keys())
         self._load_feed()
+        new_notif_sids = set(self._session_notifications.keys())
+        # If notification-to-session mapping changed, rebuild the session list
+        if old_notif_sids != new_notif_sids:
+            self._load_detail_sessions()
 
     def action_dismiss_notification(self):
         if self._active_pane != "feed":
@@ -1595,7 +1681,7 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
     def _render_help(self) -> str:
         pairs = [
             ("^L", "resume"), ("s/S", "status"), ("c", "spawn"),
-            ("n", "+todo"), ("e", "todos"),
+            ("n", "+todo"), ("e", "todos"), ("L", "+link"),
             ("o", "open"), ("x", "archive ws"),
             ("space", "archive/restore"),
             ("p", "peek"),
