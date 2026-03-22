@@ -361,8 +361,33 @@ def content_search(
         if result is not None:
             results.append(result)
 
-    # Sort by score, with recency as tiebreaker for similar scores
-    results.sort(key=lambda r: (r.total_score, r.session.last_user_message_at or ""), reverse=True)
+    # Add a recency bonus so newer sessions rank higher when scores are similar.
+    # Up to 15% of the best score is awarded based on relative recency.
+    if len(results) > 1:
+        best_total = max(r.total_score for r in results)
+        max_bonus = best_total * 0.15
+        # Parse timestamps into epoch seconds for interpolation
+        epochs: list[float | None] = []
+        for r in results:
+            ts = r.session.last_user_message_at
+            if ts:
+                try:
+                    epochs.append(datetime.fromisoformat(ts).timestamp())
+                except (ValueError, TypeError):
+                    epochs.append(None)
+            else:
+                epochs.append(None)
+        valid = [e for e in epochs if e is not None]
+        if len(valid) >= 2:
+            e_min, e_max = min(valid), max(valid)
+            span = e_max - e_min
+            if span > 0:
+                for r, ep in zip(results, epochs):
+                    if ep is not None:
+                        frac = (ep - e_min) / span
+                        r.total_score += max_bonus * frac
+
+    results.sort(key=lambda r: r.total_score, reverse=True)
     return results
 from threads import Thread, ThreadActivity, session_activity, load_last_seen, mark_thread_seen
 from rendering import ViewMode, _best_activity
