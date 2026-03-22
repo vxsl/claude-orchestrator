@@ -790,12 +790,32 @@ class OrchestratorApp(App):
             )
             options.append(Option(prompt, id=ws.id))
 
+        # In-place update when item set unchanged (liveness/timer refreshes)
+        # Avoids expensive clear+re-add cycle (~7ms savings on 65 items)
+        new_ids = [o.id for o in options]
+        existing_ids = []
+        try:
+            existing_ids = [table.get_option_at_index(i).id
+                           for i in range(table.option_count)]
+        except Exception:
+            pass
+
         with self.batch_update():
-            table.clear_options()
-            table.add_options(options)
-            self._olist_restore_cursor(table, old_key, old_idx)
+            if new_ids == existing_ids and len(options) == table.option_count:
+                # Structure unchanged — only replace options whose content changed
+                for i, opt in enumerate(options):
+                    try:
+                        existing = table.get_option_at_index(i)
+                        if existing.prompt != opt.prompt:
+                            table.replace_option_prompt_at_index(i, opt.prompt)
+                    except Exception:
+                        table.replace_option_prompt_at_index(i, opt.prompt)
+            else:
+                # Structure changed — full rebuild
+                table.clear_options()
+                table.add_options(options)
+                self._olist_restore_cursor(table, old_key, old_idx)
             self._update_all_bars()
-            # Only force-rebuild preview if the selected item changed
             new_key = self._olist_cursor_key(table)
             self._update_preview(force=(new_key != old_key))
 

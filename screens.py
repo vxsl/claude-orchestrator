@@ -1587,10 +1587,10 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
 
     def _build_feed_list(self):
         olist = self.query_one("#detail-feed", OptionList)
+        options = [Option(_render_notification_option(notif), id=f"notif:{notif.id}")
+                   for notif in self._feed_notifications]
         olist.clear_options()
-        for notif in self._feed_notifications:
-            prompt = _render_notification_option(notif)
-            olist.add_option(Option(prompt, id=f"notif:{notif.id}"))
+        olist.add_options(options)
 
     # _poll_feed merged into _apply_liveness_result (single timer)
 
@@ -1978,8 +1978,7 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
             f"{session.message_count} msgs · {session.tokens_display}[/{C_DIM}]\n"
             f"[{C_DIM}]p[/{C_DIM}] close  [{C_DIM}]j/k[/{C_DIM}] scroll"
         )
-        olist.clear_options()
-        olist.add_option(Option(header, id="peek-header"))
+        options = [Option(header, id="peek-header")]
         for i, msg in enumerate(messages):
             if msg.role == "user":
                 role_fmt = f"[bold {C_CYAN}]you[/bold {C_CYAN}]"
@@ -1989,7 +1988,9 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
             if len(text) > 2000:
                 text = text[:2000] + "\n…(truncated)"
             prompt = f"{role_fmt}\n[{C_LIGHT}]{_rich_escape(text)}[/{C_LIGHT}]"
-            olist.add_option(Option(prompt, id=f"peek-msg-{i}"))
+            options.append(Option(prompt, id=f"peek-msg-{i}"))
+        olist.clear_options()
+        olist.add_options(options)
         if olist.option_count > 0:
             olist.highlighted = olist.option_count - 1
         self._peek_mode = True
@@ -2037,14 +2038,15 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         """Update the sessions OptionList with content search results."""
         olist = self.query_one("#detail-sessions", OptionList)
         no_sess = self.query_one("#detail-no-sessions", Static)
-        olist.clear_options()
 
         if self._content_results:
             olist.display = True
             no_sess.display = False
-            for r in self._content_results:
-                prompt = _render_content_search_result(r, ws_repo_path=self.ws.repo_path)
-                olist.add_option(Option(prompt, id=r.session.session_id))
+            options = [Option(_render_content_search_result(r, ws_repo_path=self.ws.repo_path),
+                              id=r.session.session_id)
+                       for r in self._content_results]
+            olist.clear_options()
+            olist.add_options(options)
             if olist.option_count > 0:
                 olist.highlighted = 0
             # Update the session list to match results for selection handling
@@ -2524,9 +2526,9 @@ class SessionPickerScreen(_VimOptionListMixin, ModalScreen[ClaudeSession | None]
     def _rebuild_options(self):
         olist = self.query_one("#threadpick-list", OptionList)
         highlighted = olist.highlighted
+        options = self._build_options()
         olist.clear_options()
-        for opt in self._build_options():
-            olist.add_option(opt)
+        olist.add_options(options)
         if highlighted is not None:
             olist.highlighted = highlighted
 
