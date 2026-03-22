@@ -368,19 +368,23 @@ def _highlight_snippet(snippet: str, match_ranges: list[tuple[int, int]]) -> str
     Escapes Rich markup in the snippet text first, then wraps matched
     regions in bold yellow markup.
     """
+    escaped = _rich_escape(snippet)
     if not match_ranges:
-        return f"[{C_DIM}]{snippet}[/{C_DIM}]"
+        return f"[{C_DIM}]{escaped}[/{C_DIM}]"
 
     # Build highlighted string by splicing markup around matches
+    # NOTE: match_ranges index into the original snippet; since _rich_escape
+    # only adds backslashes before '[', we need to map indices through the
+    # escaped string. Build from escaped chars instead.
     parts: list[str] = []
     prev = 0
     for start, end in match_ranges:
         if start > prev:
-            parts.append(f"[{C_DIM}]{snippet[prev:start]}[/{C_DIM}]")
-        parts.append(f"[bold {C_YELLOW}]{snippet[start:end]}[/bold {C_YELLOW}]")
+            parts.append(f"[{C_DIM}]{_rich_escape(snippet[prev:start])}[/{C_DIM}]")
+        parts.append(f"[bold {C_YELLOW}]{_rich_escape(snippet[start:end])}[/bold {C_YELLOW}]")
         prev = end
     if prev < len(snippet):
-        parts.append(f"[{C_DIM}]{snippet[prev:]}[/{C_DIM}]")
+        parts.append(f"[{C_DIM}]{_rich_escape(snippet[prev:])}[/{C_DIM}]")
     return "".join(parts)
 
 
@@ -396,7 +400,7 @@ def _render_content_search_result(
     """
     s = result.session
     hit = result.best_hit
-    title = _session_title(s)[:title_width]
+    title = _rich_escape(_session_title(s)[:title_width])
     model = _short_model(s.model)
     tokens = _colored_tokens(s)
 
@@ -433,13 +437,14 @@ def _render_notification_option(notif, max_width: int = 40) -> str:
         color = C_DIM
         icon = "○"
 
-    msg = notif.message[:max_width]
+    msg = _rich_escape(notif.message[:max_width])
     if len(notif.message) > max_width:
         msg += "…"
 
     age = _relative_time(notif.timestamp)
+    title_esc = _rich_escape(notif.title)
     line1 = f" [{color}]{icon}[/{color}]  [{color}]{msg}[/{color}]"
-    line2 = f"      [{C_DIM}]{age} · {notif.title}[/{C_DIM}]"
+    line2 = f"      [{C_DIM}]{age} · {title_esc}[/{C_DIM}]"
     return f"{line1}\n{line2}"
 
 
@@ -452,15 +457,16 @@ TODO_ARCHIVED_ICON = "\u25cc"  # ◌
 
 def _render_todo_option(item: TodoItem, is_archived: bool = False) -> str:
     """Render a todo item as a formatted OptionList entry."""
+    text_esc = _rich_escape(item.text)
     if is_archived:
         icon = TODO_ARCHIVED_ICON
-        text_fmt = f"[{C_DIM}]{item.text}[/{C_DIM}]"
+        text_fmt = f"[{C_DIM}]{text_esc}[/{C_DIM}]"
     elif item.done:
         icon = TODO_DONE_ICON
-        text_fmt = f"[{C_GREEN}]{item.text}[/{C_GREEN}]"
+        text_fmt = f"[{C_GREEN}]{text_esc}[/{C_GREEN}]"
     else:
         icon = TODO_UNDONE_ICON
-        text_fmt = item.text
+        text_fmt = text_esc
     ctx_hint = f" [{C_DIM}]+ctx[/{C_DIM}]" if item.context else ""
     age = _relative_time(item.created_at)
     line1 = f" [{C_DIM if is_archived else C_LIGHT}]{icon}[/{C_DIM if is_archived else C_LIGHT}]  {text_fmt}{ctx_hint}"
