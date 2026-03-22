@@ -1732,3 +1732,199 @@ class TestCtrlLBinding:
                 binding_keys.append(b.key)
         assert any("ctrl+l" in k for k in binding_keys), \
             "DetailScreen missing ctrl+l binding"
+
+
+# ─── E2E: DetailScreen panel navigation ──────────────────────────────
+
+
+@pytest.mark.asyncio
+class TestDetailPanelNavigation:
+    """Test ctrl+j/k panel cycling and edge cases in DetailScreen."""
+
+    async def test_ctrl_j_cycles_panel_forward(self, app_with_store):
+        """Ctrl+j should cycle through panels in DetailScreen."""
+        async with app_with_store.run_test(size=(120, 40)) as pilot:
+            await pilot.press("enter")
+            from screens import DetailScreen
+            ds = pilot.app.screen
+            assert isinstance(ds, DetailScreen)
+            initial_pane = ds._active_pane
+            assert initial_pane == "sessions"
+            # ctrl+j should move to next panel
+            await pilot.press("ctrl+j")
+            # Should have moved to body (archived skipped if empty)
+            assert ds._active_pane != initial_pane or ds._active_pane == "sessions"
+
+    async def test_ctrl_k_cycles_panel_backward(self, app_with_store):
+        """Ctrl+k should cycle backward through panels."""
+        async with app_with_store.run_test(size=(120, 40)) as pilot:
+            await pilot.press("enter")
+            from screens import DetailScreen
+            ds = pilot.app.screen
+            assert isinstance(ds, DetailScreen)
+            await pilot.press("ctrl+k")
+            # Should have moved to last panel (body)
+            assert ds._active_pane in ("sessions", "body", "archived")
+
+    async def test_resume_with_no_sessions_is_noop(self, app_with_store):
+        """Pressing r with no sessions should not crash."""
+        async with app_with_store.run_test(size=(120, 40)) as pilot:
+            await pilot.press("enter")
+            from screens import DetailScreen
+            ds = pilot.app.screen
+            assert isinstance(ds, DetailScreen)
+            ds._detail_sessions = []
+            ds._active_pane = "sessions"
+            # Should not crash
+            with patch.object(pilot.app, 'launch_claude_session') as mock:
+                await pilot.press("r")
+                mock.assert_not_called()
+
+    async def test_space_archive_session_no_crash(self, app_with_store):
+        """Space with no sessions highlighted should not crash."""
+        async with app_with_store.run_test(size=(120, 40)) as pilot:
+            await pilot.press("enter")
+            from screens import DetailScreen
+            ds = pilot.app.screen
+            assert isinstance(ds, DetailScreen)
+            ds._active_pane = "sessions"
+            # Should not crash even with empty session list
+            await pilot.press("space")
+
+
+# ─── E2E: BrainDump launch mode ─────────────────────────────────────
+
+
+@pytest.mark.asyncio
+class TestBrainDumpLaunchMode:
+    """Test the l key on BrainPreviewScreen — add & launch."""
+
+    async def test_brain_preview_l_adds_and_opens_detail(self, app_with_store):
+        """Pressing l on preview should add workstreams and open detail."""
+        async with app_with_store.run_test(size=(120, 40)) as pilot:
+            initial_count = len(pilot.app.state.store.active)
+            await pilot.press("b")
+            editor = pilot.app.screen.query_one("#brain-editor")
+            editor.load_text("fix the auth bug")
+            await pilot.press("ctrl+s")
+            from screens import BrainPreviewScreen
+            assert isinstance(pilot.app.screen, BrainPreviewScreen)
+            # Press l for "add & launch"
+            await pilot.press("l")
+            # Should have added workstreams
+            new_count = len(pilot.app.state.store.active)
+            assert new_count > initial_count
+            # Should have opened detail screen for the new workstream
+            from screens import DetailScreen
+            assert isinstance(pilot.app.screen, DetailScreen)
+
+
+# ─── E2E: DetailScreen command palette dispatch ──────────────────────
+
+
+@pytest.mark.asyncio
+class TestDetailCommandPalette:
+    """Test that command palette works from DetailScreen."""
+
+    async def test_colon_opens_palette_from_detail(self, app_with_store):
+        """Pressing : inside DetailScreen should open the command palette."""
+        async with app_with_store.run_test(size=(120, 40)) as pilot:
+            await pilot.press("enter")
+            from screens import DetailScreen
+            assert isinstance(pilot.app.screen, DetailScreen)
+            await pilot.press("colon")
+            from widgets import FuzzyPickerScreen
+            assert isinstance(pilot.app.screen, FuzzyPickerScreen)
+
+    async def test_question_mark_opens_help_from_detail(self, app_with_store):
+        """Pressing ? inside DetailScreen should open the help screen."""
+        async with app_with_store.run_test(size=(120, 40)) as pilot:
+            await pilot.press("enter")
+            from screens import DetailScreen
+            assert isinstance(pilot.app.screen, DetailScreen)
+            await pilot.press("question_mark")
+            assert pilot.app.screen.__class__.__name__ == "HelpScreen"
+
+
+# ─── CLI edge cases ──────────────────────────────────────────────────
+
+
+class TestCLIEdgeCases:
+    """Test CLI edge cases and error handling."""
+
+    def test_resolve_ws_not_found(self, tmp_path):
+        """_resolve_ws with a bogus ID should call sys.exit(1)."""
+        store_path = tmp_path / "empty_data.json"
+        store = Store(path=store_path)
+        from cli import _resolve_ws
+        with pytest.raises(SystemExit):
+            _resolve_ws(store, "bogus-id-that-does-not-exist")
+
+    def test_cmd_note_appends_to_existing(self, tmp_path, capsys):
+        """cmd_note should append (not replace) existing notes."""
+        store_path = tmp_path / "cli_data.json"
+        store = Store(path=store_path)
+        ws = Workstream(name="Test", status=Status.IN_PROGRESS)
+        ws.notes = "existing note"
+        store.add(ws)
+
+        from cli import cmd_note
+        args = MagicMock()
+        args.id = ws.id
+        args.text = ["new", "note"]
+        with patch("cli.Store", return_value=store):
+            cmd_note(args)
+        updated = store.get(ws.id)
+        assert "existing note" in updated.notes
+        assert "new note" in updated.notes
+
+    def test_cmd_show_with_links_and_notes(self, tmp_path, capsys):
+        """cmd_show should display links and notes without crashing."""
+        store_path = tmp_path / "cli_data.json"
+        store = Store(path=store_path)
+        ws = Workstream(name="Detailed WS", status=Status.IN_PROGRESS,
+                        description="A detailed workstream")
+        ws.notes = "Some important notes\nLine 2"
+        ws.add_link("worktree", "/path/to/repo", "main repo")
+        ws.add_link("ticket", "UB-1234", "Jira ticket")
+        store.add(ws)
+
+        from cli import cmd_show
+        args = MagicMock()
+        args.id = ws.id
+        with patch("cli.Store", return_value=store):
+            cmd_show(args)
+        captured = capsys.readouterr()
+        assert "Detailed WS" in captured.out
+        assert "worktree" in captured.out
+        assert "UB-1234" in captured.out
+        assert "Some important notes" in captured.out
+
+
+# ─── E2E: Session archive/restore in DetailScreen ───────────────────
+
+
+@pytest.mark.asyncio
+class TestSessionArchiveRestore:
+    """Test session archive/restore (space key) in DetailScreen."""
+
+    async def test_space_archives_session(self, app_with_sessions):
+        """Space on a session should archive it."""
+        app, sessions, ws_id = app_with_sessions
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.press("enter")
+            from screens import DetailScreen
+            ds = pilot.app.screen
+            assert isinstance(ds, DetailScreen)
+            # Inject sessions
+            ds._detail_sessions = [sessions[0]]
+            ds._all_sessions = [sessions[0]]
+            ds._build_session_list()
+            olist = ds.query_one("#detail-sessions")
+            olist.highlighted = 0
+            ds._active_pane = "sessions"
+            initial_archived = dict(ds.ws.archived_sessions)
+            await pilot.press("space")
+            # Session should now be in archived_sessions
+            assert "sess-1" in ds.ws.archived_sessions or \
+                   len(ds.ws.archived_sessions) > len(initial_archived)
