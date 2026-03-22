@@ -1753,6 +1753,34 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
 
     def _render_meta(self) -> str:
         parts = [_category_markup(self.ws.category)]
+
+        # Enrichment badges (ticket, MR, solve)
+        ticket_key = getattr(self.ws, "ticket_key", "")
+        if ticket_key:
+            ticket_status = getattr(self.ws, "ticket_status", "")
+            if ticket_status:
+                ts_lower = ticket_status.lower()
+                if "progress" in ts_lower or "review" in ts_lower:
+                    ts_color = C_CYAN
+                elif "done" in ts_lower or "closed" in ts_lower or "resolved" in ts_lower:
+                    ts_color = C_GREEN
+                else:
+                    ts_color = C_DIM
+                parts.append(f"[bold]{_rich_escape(ticket_key)}[/bold] [{ts_color}]{_rich_escape(ticket_status)}[/{ts_color}]")
+            else:
+                parts.append(f"[bold]{_rich_escape(ticket_key)}[/bold]")
+        mr_url = getattr(self.ws, "mr_url", "")
+        if mr_url:
+            parts.append(f"[{C_PURPLE}]MR[/{C_PURPLE}]")
+        solve_status = getattr(self.ws, "ticket_solve_status", "")
+        if solve_status:
+            if solve_status.lower() in ("running", "active"):
+                parts.append(f"[{C_YELLOW}]solving[/{C_YELLOW}]")
+            elif solve_status.lower() in ("done", "complete"):
+                parts.append(f"[{C_GREEN}]solved[/{C_GREEN}]")
+            else:
+                parts.append(f"[{C_DIM}]solve:{_rich_escape(solve_status)}[/{C_DIM}]")
+
         if self._detail_sessions:
             n = len(self._detail_sessions)
             total_tok = sum(s.total_input_tokens + s.total_output_tokens for s in self._detail_sessions)
