@@ -120,6 +120,7 @@ _vterm_screen_flush_damage = _sig("vterm_screen_flush_damage", None,
 _vterm_screen_convert_color_to_rgb = _sig(
     "vterm_screen_convert_color_to_rgb", None,
     [c_void_p, POINTER(VTermColor)])
+_vterm_set_utf8 = _sig("vterm_set_utf8", None, [c_void_p, c_int])
 
 # Constants
 _DAMAGE_ROW = 1
@@ -157,6 +158,7 @@ class VTermBackend:
         _vterm_screen_set_callbacks(
             self._screen, ctypes.byref(self._callbacks), None)
 
+        _vterm_set_utf8(self._vt, 1)
         _vterm_screen_enable_altscreen(self._screen, 1)
         _vterm_screen_set_damage_merge(self._screen, _DAMAGE_ROW)
         _vterm_screen_reset(self._screen, 1)
