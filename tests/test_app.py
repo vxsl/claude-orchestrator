@@ -352,9 +352,9 @@ class TestNavigation:
     async def test_j_moves_down(self, app_with_store):
         async with app_with_store.run_test(size=(120, 40)) as pilot:
             table = pilot.app.query_one("#ws-table")
-            initial_row = table.cursor_coordinate.row
+            initial_row = table.cursor_row
             await pilot.press("j")
-            assert table.cursor_coordinate.row == initial_row + 1
+            assert table.cursor_row == initial_row + 1
 
     async def test_k_moves_up(self, app_with_store):
         async with app_with_store.run_test(size=(120, 40)) as pilot:
@@ -362,7 +362,7 @@ class TestNavigation:
             await pilot.press("j")  # move down first
             await pilot.press("j")
             await pilot.press("k")  # then up
-            assert table.cursor_coordinate.row == 1
+            assert table.cursor_row == 1
 
     async def test_g_goes_to_top(self, app_with_store):
         async with app_with_store.run_test(size=(120, 40)) as pilot:
@@ -370,27 +370,27 @@ class TestNavigation:
             await pilot.press("j")
             await pilot.press("j")
             await pilot.press("g")
-            assert table.cursor_coordinate.row == 0
+            assert table.cursor_row == 0
 
     async def test_G_goes_to_bottom(self, app_with_store):
         async with app_with_store.run_test(size=(120, 40)) as pilot:
             table = pilot.app.query_one("#ws-table")
             await pilot.press("G")
-            assert table.cursor_coordinate.row == table.row_count - 1
+            assert table.cursor_row == table.row_count - 1
 
     async def test_ctrl_n_moves_down(self, app_with_store):
         async with app_with_store.run_test(size=(120, 40)) as pilot:
             table = pilot.app.query_one("#ws-table")
-            initial = table.cursor_coordinate.row
+            initial = table.cursor_row
             await pilot.press("ctrl+n")
-            assert table.cursor_coordinate.row == initial + 1
+            assert table.cursor_row == initial + 1
 
     async def test_ctrl_p_moves_up(self, app_with_store):
         async with app_with_store.run_test(size=(120, 40)) as pilot:
             table = pilot.app.query_one("#ws-table")
             await pilot.press("j")
             await pilot.press("ctrl+p")
-            assert table.cursor_coordinate.row == 0
+            assert table.cursor_row == 0
 
 
 @pytest.mark.asyncio

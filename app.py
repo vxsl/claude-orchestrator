@@ -19,12 +19,13 @@ from textual.binding import Binding
 from textual.containers import Horizontal, VerticalScroll
 from textual.theme import Theme
 from textual.widgets import (
-    DataTable,
     Input,
     OptionList,
     Static,
 )
 from textual.widgets.option_list import Option
+
+from fast_table import FastTable
 
 from config import build_app_bindings
 from models import (
@@ -134,7 +135,7 @@ class OrchestratorApp(App):
         height: 1; padding: 0 1; background: {BG_BASE}; color: {C_DIM}; dock: bottom;
     }}
     #main-content {{ height: 1fr; }}
-    DataTable {{ width: 3fr; }}
+    FastTable {{ width: 3fr; }}
     #preview-pane {{
         width: 2fr; min-width: 36; border-left: blank;
         padding: 1 2; background: {BG_BASE};
@@ -290,9 +291,9 @@ class OrchestratorApp(App):
         yield Static("", id="view-bar")
         yield Static("", id="filter-bar")
         with Horizontal(id="main-content"):
-            yield DataTable(id="ws-table")
-            yield DataTable(id="sessions-table")
-            yield DataTable(id="archived-table")
+            yield FastTable(id="ws-table")
+            yield FastTable(id="sessions-table")
+            yield FastTable(id="archived-table")
             with VerticalScroll(id="preview-pane"):
                 yield Static("", id="preview-content")
                 yield OptionList(id="preview-sessions")
@@ -303,20 +304,14 @@ class OrchestratorApp(App):
         yield Static("", id="summary-bar")
 
     def on_mount(self):
-        ws_table = self.query_one("#ws-table", DataTable)
-        ws_table.cursor_type = "row"
-        ws_table.zebra_stripes = False
+        ws_table = self.query_one("#ws-table", FastTable)
         ws_table.add_columns("", "Name", "Worktree", "Sess", "Category", "Updated")
 
-        sessions_table = self.query_one("#sessions-table", DataTable)
-        sessions_table.cursor_type = "row"
-        sessions_table.zebra_stripes = False
+        sessions_table = self.query_one("#sessions-table", FastTable)
         sessions_table.add_columns("Title", "Workstream", "Model", "Tokens", "Age")
         sessions_table.display = False
 
-        archived_table = self.query_one("#archived-table", DataTable)
-        archived_table.cursor_type = "row"
-        archived_table.zebra_stripes = False
+        archived_table = self.query_one("#archived-table", FastTable)
         archived_table.add_columns("", "Name", "Worktree", "Sess", "Category", "Updated")
         archived_table.display = False
 
@@ -349,12 +344,12 @@ class OrchestratorApp(App):
 
     # ── Active table helper ──
 
-    def _active_table(self) -> DataTable:
+    def _active_table(self) -> FastTable:
         if self.state.view_mode == ViewMode.SESSIONS:
-            return self.query_one("#sessions-table", DataTable)
+            return self.query_one("#sessions-table", FastTable)
         elif self.state.view_mode == ViewMode.ARCHIVED:
-            return self.query_one("#archived-table", DataTable)
-        return self.query_one("#ws-table", DataTable)
+            return self.query_one("#archived-table", FastTable)
+        return self.query_one("#ws-table", FastTable)
 
     # ── View switching ──
 
@@ -367,9 +362,9 @@ class OrchestratorApp(App):
         self._apply_view()
 
     def _apply_view(self):
-        ws_table = self.query_one("#ws-table", DataTable)
-        sessions_table = self.query_one("#sessions-table", DataTable)
-        archived_table = self.query_one("#archived-table", DataTable)
+        ws_table = self.query_one("#ws-table", FastTable)
+        sessions_table = self.query_one("#sessions-table", FastTable)
+        archived_table = self.query_one("#archived-table", FastTable)
         filter_bar = self.query_one("#filter-bar", Static)
 
         ws_table.display = self.state.view_mode == ViewMode.WORKSTREAMS
@@ -649,16 +644,16 @@ class OrchestratorApp(App):
 
         content.update("\n".join(lines))
 
-    @on(DataTable.RowHighlighted, "#ws-table")
-    def on_ws_highlighted(self, event: DataTable.RowHighlighted):
+    @on(FastTable.RowHighlighted, "#ws-table")
+    def on_ws_highlighted(self, event: FastTable.RowHighlighted):
         self._update_preview()
 
-    @on(DataTable.RowHighlighted, "#sessions-table")
-    def on_session_highlighted(self, event: DataTable.RowHighlighted):
+    @on(FastTable.RowHighlighted, "#sessions-table")
+    def on_session_highlighted(self, event: FastTable.RowHighlighted):
         self._update_preview()
 
-    @on(DataTable.RowHighlighted, "#archived-table")
-    def on_archived_highlighted(self, event: DataTable.RowHighlighted):
+    @on(FastTable.RowHighlighted, "#archived-table")
+    def on_archived_highlighted(self, event: FastTable.RowHighlighted):
         self._update_preview()
 
     # ── Bar rendering ──
@@ -790,12 +785,11 @@ class OrchestratorApp(App):
         """Actually rebuild the workstreams table (called via debounce timer)."""
         self._refresh_pending = False
         try:
-            table = self.query_one("#ws-table", DataTable)
+            table = self.query_one("#ws-table", FastTable)
         except Exception:
             return
-        old_key = self._get_cursor_key(table)
-        old_row = table.cursor_coordinate.row
-        table.clear()
+        old_key = table.get_cursor_key()
+        old_row = table.cursor_row
 
         items = self.state.get_unified_items()
         last_seen = self.state.get_last_seen()
@@ -807,6 +801,7 @@ class OrchestratorApp(App):
             ThreadActivity.IDLE: ("·", C_DIM),
         }
 
+        rows: list[tuple[str, list[Text]]] = []
         for ws in items:
             is_discovered = ws.origin == Origin.DISCOVERED
             ws_sessions = self.state.sessions_for_ws(ws)
@@ -839,18 +834,19 @@ class OrchestratorApp(App):
             cat_cell = Text(ws.category.value, style=CATEGORY_THEME[ws.category])
             updated_cell = Text(_relative_time(ws.updated_at), style=C_DIM)
 
-            table.add_row(status_cell, name_cell, repo_cell, sess_cell, cat_cell, updated_cell, key=ws.id)
+            rows.append((ws.id, [status_cell, name_cell, repo_cell, sess_cell, cat_cell, updated_cell]))
 
-        self._restore_cursor(table, old_key, old_row)
-        self._update_all_bars()
-        self._update_preview()
+        with self.batch_update():
+            table.rebuild(rows, old_key=old_key, old_row=old_row)
+            self._update_all_bars()
+            self._update_preview()
 
     def _selected_ws(self) -> Workstream | None:
         try:
-            table = self.query_one("#ws-table", DataTable)
+            table = self.query_one("#ws-table", FastTable)
         except Exception:
             return None
-        key = self._get_cursor_key(table)
+        key = table.get_cursor_key()
         if not key:
             return None
         return self.state.get_ws(key)
@@ -956,9 +952,8 @@ class OrchestratorApp(App):
         self._refresh_ws_table_debounced()
 
     def _refresh_sessions_table(self):
-        table = self.query_one("#sessions-table", DataTable)
-        old_key = self._get_cursor_key(table)
-        table.clear()
+        table = self.query_one("#sessions-table", FastTable)
+        old_key = table.get_cursor_key()
 
         ws_lookup: dict[str, str] = {}
         for ws in self.state.store.active:
@@ -967,6 +962,7 @@ class OrchestratorApp(App):
                 if s.session_id not in ws_lookup:
                     ws_lookup[s.session_id] = ws.name
 
+        rows: list[tuple[str, list[Text]]] = []
         for session in self.state.sessions:
             live_prefix = "\u25cf " if session.is_live else "  "
             title_text = live_prefix + session.display_name
@@ -983,18 +979,18 @@ class OrchestratorApp(App):
             tokens_cell = Text(session.tokens_display, style=_token_color(session.total_input_tokens + session.total_output_tokens))
             age_cell = Text(session.age, style=C_DIM)
 
-            table.add_row(title_cell, ws_cell, model_cell, tokens_cell, age_cell,
-                          key=session.session_id)
+            rows.append((session.session_id, [title_cell, ws_cell, model_cell, tokens_cell, age_cell]))
 
-        self._restore_cursor(table, old_key)
-        self._update_all_bars()
+        with self.batch_update():
+            table.rebuild(rows, old_key=old_key)
+            self._update_all_bars()
 
     def _selected_session(self) -> ClaudeSession | None:
         try:
-            table = self.query_one("#sessions-table", DataTable)
+            table = self.query_one("#sessions-table", FastTable)
         except Exception:
             return None
-        key = self._get_cursor_key(table)
+        key = table.get_cursor_key()
         if key:
             return self.state.get_session(key)
         return None
@@ -1002,11 +998,11 @@ class OrchestratorApp(App):
     # ── Archived table ──
 
     def _refresh_archived_table(self):
-        table = self.query_one("#archived-table", DataTable)
-        old_key = self._get_cursor_key(table)
-        old_row = table.cursor_coordinate.row
-        table.clear()
+        table = self.query_one("#archived-table", FastTable)
+        old_key = table.get_cursor_key()
+        old_row = table.cursor_row
 
+        rows: list[tuple[str, list[Text]]] = []
         for ws in self.state.store.archived:
             status_cell = Text(STATUS_ICONS[ws.status], style=STATUS_THEME[ws.status])
             name_cell = Text(ws.name)
@@ -1015,38 +1011,19 @@ class OrchestratorApp(App):
             sess_cell = Text("", style=C_DIM)
             cat_cell = Text(ws.category.value, style=CATEGORY_THEME[ws.category])
             updated_cell = Text(_relative_time(ws.updated_at), style=C_DIM)
-            table.add_row(status_cell, name_cell, repo_cell, sess_cell, cat_cell, updated_cell, key=ws.id)
+            rows.append((ws.id, [status_cell, name_cell, repo_cell, sess_cell, cat_cell, updated_cell]))
 
-        self._restore_cursor(table, old_key, old_row)
+        table.rebuild(rows, old_key=old_key, old_row=old_row)
 
     def _selected_archived(self) -> Workstream | None:
         try:
-            table = self.query_one("#archived-table", DataTable)
+            table = self.query_one("#archived-table", FastTable)
         except Exception:
             return None
-        key = self._get_cursor_key(table)
+        key = table.get_cursor_key()
         if key:
             return self.state.get_archived(key)
         return None
-
-    # ── Cursor helpers ──
-
-    def _get_cursor_key(self, table: DataTable) -> str | None:
-        try:
-            row_key = table.coordinate_to_cell_key(table.cursor_coordinate).row_key
-            return str(row_key.value)
-        except Exception:
-            return None
-
-    def _restore_cursor(self, table: DataTable, old_key: str | None, old_row: int | None = None):
-        if old_key:
-            for i, row_key in enumerate(table.rows):
-                if str(row_key.value) == old_key:
-                    table.move_cursor(row=i)
-                    return
-        # Key was removed (e.g. archived) — keep cursor at same row index, clamped.
-        if old_row is not None and table.row_count > 0:
-            table.move_cursor(row=min(old_row, table.row_count - 1))
 
     # ── Primary action (Enter) ──
 
@@ -1058,16 +1035,16 @@ class OrchestratorApp(App):
         elif self.state.view_mode == ViewMode.ARCHIVED:
             self._open_archived_detail()
 
-    @on(DataTable.RowSelected, "#ws-table")
-    def on_ws_row_selected(self, event: DataTable.RowSelected):
+    @on(FastTable.RowSelected, "#ws-table")
+    def on_ws_row_selected(self, event: FastTable.RowSelected):
         self._open_detail()
 
-    @on(DataTable.RowSelected, "#sessions-table")
-    def on_session_row_selected(self, event: DataTable.RowSelected):
+    @on(FastTable.RowSelected, "#sessions-table")
+    def on_session_row_selected(self, event: FastTable.RowSelected):
         self._resume_session()
 
-    @on(DataTable.RowSelected, "#archived-table")
-    def on_archived_row_selected(self, event: DataTable.RowSelected):
+    @on(FastTable.RowSelected, "#archived-table")
+    def on_archived_row_selected(self, event: FastTable.RowSelected):
         self._open_archived_detail()
 
     @on(OptionList.OptionSelected, "#preview-sessions")
