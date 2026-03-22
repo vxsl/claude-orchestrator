@@ -45,7 +45,7 @@ class TestActivityIcons:
 
     def test_awaiting_input(self):
         icon = _activity_icon(ThreadActivity.AWAITING_INPUT)
-        assert "◉" in icon
+        assert "●" in icon
 
     def test_idle(self):
         icon = _activity_icon(ThreadActivity.IDLE)

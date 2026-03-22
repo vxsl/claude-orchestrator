@@ -247,24 +247,23 @@ def _activity_icon(activity: ThreadActivity, throbber_frame: int = 0) -> str:
     if activity == ThreadActivity.THINKING:
         return f"[bold {C_CYAN}]◉[/bold {C_CYAN}]"
     if activity == ThreadActivity.AWAITING_INPUT:
-        return f"[{C_YELLOW}]◉[/{C_YELLOW}]"
-    if activity == ThreadActivity.RESPONSE_FRESH:
-        return f"[bold {C_GREEN}]●[/bold {C_GREEN}]"
+        return f"[{C_YELLOW}]●[/{C_YELLOW}]"
     if activity == ThreadActivity.RESPONSE_READY:
-        return f"[{C_ORANGE}]●[/{C_ORANGE}]"
+        return f"[{C_YELLOW}]●[/{C_YELLOW}]"
     return f"[{C_DIM}]·[/{C_DIM}]"
 
 
 def _activity_badge(activity: ThreadActivity) -> str:
-    """Return a Rich-markup pill/badge for non-idle activity states."""
+    """Return a Rich-markup pill/badge for non-idle activity states.
+
+    AWAITING_INPUT (live session) renders bold to subtly indicate liveness.
+    """
     if activity == ThreadActivity.THINKING:
         return f"[italic {C_CYAN}]thinking…[/italic {C_CYAN}]"
     if activity == ThreadActivity.AWAITING_INPUT:
-        return f"[{C_YELLOW}]your turn[/{C_YELLOW}]"
-    if activity == ThreadActivity.RESPONSE_FRESH:
-        return f"[bold {C_GREEN}]your turn[/bold {C_GREEN}]"
+        return f"[bold {C_YELLOW}]your turn[/bold {C_YELLOW}]"
     if activity == ThreadActivity.RESPONSE_READY:
-        return f"[{C_ORANGE}]your turn[/{C_ORANGE}]"
+        return f"[{C_YELLOW}]your turn[/{C_YELLOW}]"
     return ""
 
 
@@ -307,7 +306,6 @@ def _session_title(session: ClaudeSession, titles: dict[str, str] | None = None)
 _BADGE_WIDTHS = {
     ThreadActivity.THINKING: 9,       # "thinking…"
     ThreadActivity.AWAITING_INPUT: 9, # "your turn"
-    ThreadActivity.RESPONSE_FRESH: 9, # "your turn"
     ThreadActivity.RESPONSE_READY: 9, # "your turn"
     ThreadActivity.IDLE: 0,
 }

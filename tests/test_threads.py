@@ -17,7 +17,6 @@ from threads import (
     discover_threads,
     session_activity,
     DEFAULT_BRANCH_GAP,
-    FRESH_THRESHOLD,
 )
 
 
@@ -379,41 +378,36 @@ class TestSessionActivity:
                                last_tool_name="Bash")
         assert session_activity(s) == ThreadActivity.THINKING
 
-    def test_idle_when_not_live_and_last_is_user(self):
+    def test_your_turn_when_not_live_and_last_is_user(self):
+        """Sessions with messages are always 'your turn', regardless of last role."""
         s = self._make_session(is_live=False, last_message_role="user")
-        assert session_activity(s) == ThreadActivity.IDLE
-
-    def test_idle_when_not_live_and_no_role(self):
-        s = self._make_session(is_live=False, last_message_role="")
-        assert session_activity(s) == ThreadActivity.IDLE
-
-    def test_response_fresh_when_recent_assistant(self):
-        recent = datetime.now().astimezone().isoformat()
-        s = self._make_session(is_live=False, last_message_role="assistant",
-                               last_activity=recent)
-        assert session_activity(s) == ThreadActivity.RESPONSE_FRESH
-
-    def test_response_ready_when_old_assistant(self):
-        old = (datetime.now().astimezone() - timedelta(hours=2)).isoformat()
-        s = self._make_session(is_live=False, last_message_role="assistant",
-                               last_activity=old)
         assert session_activity(s) == ThreadActivity.RESPONSE_READY
 
-    def test_idle_when_already_seen(self):
+    def test_your_turn_when_not_live_and_has_messages(self):
+        """Any session with message history is 'your turn'."""
+        s = self._make_session(is_live=False, last_message_role="")
+        assert session_activity(s) == ThreadActivity.RESPONSE_READY
+
+    def test_your_turn_when_not_live_and_assistant(self):
+        s = self._make_session(is_live=False, last_message_role="assistant")
+        assert session_activity(s) == ThreadActivity.RESPONSE_READY
+
+    def test_your_turn_when_not_live_and_user(self):
+        s = self._make_session(is_live=False, last_message_role="user")
+        assert session_activity(s) == ThreadActivity.RESPONSE_READY
+
+    def test_idle_only_when_no_messages(self):
+        s = self._make_session(is_live=False, last_message_role="", message_count=0)
+        assert session_activity(s) == ThreadActivity.IDLE
+
+    def test_last_seen_ignored(self):
+        """last_seen no longer affects activity state."""
         recent = datetime.now().astimezone().isoformat()
         future = (datetime.now().astimezone() + timedelta(minutes=1)).isoformat()
         s = self._make_session(is_live=False, last_message_role="assistant",
                                last_activity=recent)
         last_seen = {"s1": future}
-        assert session_activity(s, last_seen) == ThreadActivity.IDLE
-
-    def test_still_unread_if_seen_before_activity(self):
-        activity = datetime.now().astimezone().isoformat()
-        seen_before = (datetime.now().astimezone() - timedelta(minutes=5)).isoformat()
-        s = self._make_session(is_live=False, last_message_role="assistant",
-                               last_activity=activity)
-        last_seen = {"s1": seen_before}
-        assert session_activity(s, last_seen) == ThreadActivity.RESPONSE_FRESH
+        assert session_activity(s, last_seen) == ThreadActivity.RESPONSE_READY
 
 
 class TestThreadActivity:
@@ -443,33 +437,18 @@ class TestThreadActivity:
                                                 last_stop_reason="tool_use")])
         assert t.activity == ThreadActivity.THINKING
 
-    def test_idle_thread(self):
+    def test_your_turn_thread(self):
+        """Any thread with message history is 'your turn'."""
         t = Thread(thread_id="t1", name="test", project_path="/p",
                    sessions=[self._make_session(is_live=False, last_message_role="user")])
-        assert t.activity == ThreadActivity.IDLE
+        assert t.activity == ThreadActivity.RESPONSE_READY
 
-    def test_unread_thread(self):
+    def test_your_turn_thread_assistant(self):
         old = (datetime.now().astimezone() - timedelta(hours=2)).isoformat()
         t = Thread(thread_id="t1", name="test", project_path="/p",
                    sessions=[self._make_session(is_live=False, last_message_role="assistant",
                                                 last_activity=old)])
         assert t.activity == ThreadActivity.RESPONSE_READY
-
-    def test_fresh_unread_thread(self):
-        recent = datetime.now().astimezone().isoformat()
-        t = Thread(thread_id="t1", name="test", project_path="/p",
-                   sessions=[self._make_session(is_live=False, last_message_role="assistant",
-                                                last_activity=recent)])
-        assert t.activity == ThreadActivity.RESPONSE_FRESH
-
-    def test_seen_thread_is_idle(self):
-        recent = datetime.now().astimezone().isoformat()
-        future = (datetime.now().astimezone() + timedelta(minutes=1)).isoformat()
-        t = Thread(thread_id="t1", name="test", project_path="/p",
-                   sessions=[self._make_session(is_live=False, last_message_role="assistant",
-                                                last_activity=recent)],
-                   _last_seen={"s1": future})
-        assert t.activity == ThreadActivity.IDLE
 
     def test_empty_thread_is_idle(self):
         t = Thread(thread_id="t1", name="test", project_path="/p", sessions=[])

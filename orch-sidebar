@@ -103,25 +103,19 @@ for s in found:
     if act == ThreadActivity.THINKING:
         icon = THROBBER[frame % len(THROBBER)]
         color = 'cyan'
-    elif act == ThreadActivity.AWAITING_INPUT:
-        icon = '\u25c9'
+    elif act in (ThreadActivity.AWAITING_INPUT, ThreadActivity.RESPONSE_READY):
+        icon = '\u25cf'
         color = 'yellow'
-    elif act == ThreadActivity.RESPONSE_FRESH:
-        icon = '\u25cf'
-        color = 'green'
-    elif act == ThreadActivity.RESPONSE_READY:
-        icon = '\u25cf'
-        color = 'orange'
     else:
         icon = '\u00b7'
         color = 'dim'
 
-    if act in (ThreadActivity.THINKING, ThreadActivity.AWAITING_INPUT):
+    if act == ThreadActivity.THINKING:
         tcolor = 'bold'
-    elif act == ThreadActivity.RESPONSE_FRESH:
-        tcolor = 'green'
+    elif act == ThreadActivity.AWAITING_INPUT:
+        tcolor = 'bold'
     elif act == ThreadActivity.RESPONSE_READY:
-        tcolor = 'orange'
+        tcolor = ''
     else:
         tcolor = 'dim'
 

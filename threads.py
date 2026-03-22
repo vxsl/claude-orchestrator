@@ -25,19 +25,21 @@ from sessions import (
 class ThreadActivity(Enum):
     """Observable activity state of a thread."""
     THINKING = "thinking"              # Claude is actively processing
-    AWAITING_INPUT = "awaiting_input"  # Your turn (live session, turn finished)
-    RESPONSE_FRESH = "response_fresh"  # Your turn (response within 30 min)
-    RESPONSE_READY = "response_ready"  # Your turn (older response)
-    IDLE = "idle"                      # Nothing pending
+    AWAITING_INPUT = "awaiting_input"  # Your turn (live session at prompt)
+    RESPONSE_READY = "response_ready"  # Your turn (session has history)
+    IDLE = "idle"                      # No message history at all
+
+
+# Keep old name around so existing references don't break during transition
+ThreadActivity.RESPONSE_FRESH = ThreadActivity.RESPONSE_READY
 
 
 # Priority ordering (lower = more urgent)
 _ACTIVITY_PRIORITY = {
     ThreadActivity.THINKING: 0,
     ThreadActivity.AWAITING_INPUT: 1,
-    ThreadActivity.RESPONSE_FRESH: 2,
-    ThreadActivity.RESPONSE_READY: 3,
-    ThreadActivity.IDLE: 4,
+    ThreadActivity.RESPONSE_READY: 2,
+    ThreadActivity.IDLE: 3,
 }
 
 # Tools that block on user input (polls, questions, plan confirmations)
@@ -45,9 +47,6 @@ _INTERACTIVE_TOOLS = frozenset({
     "AskUserQuestion",
     "ExitPlanMode",
 })
-
-# How long a finished response is considered "fresh"
-FRESH_THRESHOLD = timedelta(minutes=30)
 
 # Cache file for last-seen timestamps per thread
 LAST_SEEN_FILE = Path.home() / ".cache" / "claude-orchestrator" / "last-seen.json"
@@ -77,13 +76,14 @@ def mark_thread_seen(thread_id: str) -> None:
 def session_activity(session: ClaudeSession, last_seen: dict[str, str] | None = None) -> ThreadActivity:
     """Compute activity state for a single session.
 
-    The live/not-live distinction is an implementation detail — users just
-    care about: is Claude thinking, is it my turn, or is nothing happening?
+    Three states: thinking (Claude mid-turn), your turn (everything with
+    history), idle (no messages at all).  The last_seen parameter is
+    accepted for API compat but ignored.
     """
-    # ── THINKING: live session, Claude is mid-turn ──────────────────
+    # Live session, Claude is mid-turn → THINKING
     if session.is_live:
         turn_done = (
-            not session.last_message_role          # no messages yet
+            not session.last_message_role
             or session.turn_complete
             or (session.last_stop_reason and session.last_stop_reason != "tool_use")
             or (session.last_stop_reason == "tool_use"
@@ -91,42 +91,13 @@ def session_activity(session: ClaudeSession, last_seen: dict[str, str] | None = 
         )
         if not turn_done:
             return ThreadActivity.THINKING
-
-    # ── YOUR TURN: live session, Claude's turn is done ────────────────
-    # Most urgent — the session is open right now.
-    if session.is_live:
         return ThreadActivity.AWAITING_INPUT
 
-    # ── YOUR TURN: non-live, Claude left a response ─────────────────
-    if session.last_message_role != "assistant":
-        return ThreadActivity.IDLE
+    # Any message history at all → your turn
+    if session.message_count > 0:
+        return ThreadActivity.RESPONSE_READY
 
-    # Check last-seen — if user already viewed this response, dim it
-    if last_seen:
-        seen_ts = last_seen.get(session.session_id, "")
-        if seen_ts:
-            try:
-                seen_dt = datetime.fromisoformat(seen_ts.replace("Z", "+00:00"))
-                activity_dt = datetime.fromisoformat(
-                    (session.last_activity or "").replace("Z", "+00:00")
-                )
-                if seen_dt >= activity_dt:
-                    return ThreadActivity.IDLE
-            except (ValueError, TypeError):
-                pass
-
-    # Fresh vs ready (both mean "your turn", just different visual urgency)
-    try:
-        activity_dt = datetime.fromisoformat(
-            (session.last_activity or "").replace("Z", "+00:00")
-        )
-        age = datetime.now().astimezone() - activity_dt
-        if age <= FRESH_THRESHOLD:
-            return ThreadActivity.RESPONSE_FRESH
-    except (ValueError, TypeError):
-        pass
-
-    return ThreadActivity.RESPONSE_READY
+    return ThreadActivity.IDLE
 
 # Clustering thresholds
 # Only used for default-branch sessions (master/main). Feature branches always merge.

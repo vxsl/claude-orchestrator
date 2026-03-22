@@ -788,9 +788,8 @@ class OrchestratorApp(App):
 
         _ACTIVITY_ICONS = {
             ThreadActivity.THINKING: ("◉", C_CYAN),
-            ThreadActivity.AWAITING_INPUT: ("◉", C_YELLOW),
-            ThreadActivity.RESPONSE_FRESH: ("●", C_GREEN),
-            ThreadActivity.RESPONSE_READY: ("●", C_ORANGE),
+            ThreadActivity.AWAITING_INPUT: ("●", C_YELLOW),
+            ThreadActivity.RESPONSE_READY: ("●", C_YELLOW),
             ThreadActivity.IDLE: ("·", C_DIM),
         }
 
