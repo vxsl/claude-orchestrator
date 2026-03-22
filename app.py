@@ -1152,15 +1152,21 @@ class OrchestratorApp(App):
     def _open_detail(self):
         ws = self._selected_ws()
         if ws:
-            # Add to tabs and push DetailScreen
-            icon = STATUS_ICONS.get(ws.status, "")
-            self.tabs.open_tab(ws.id, ws.name, icon)
-            self._sync_tab_bar()
-            self._detail_screen_active = True
-            self.push_screen(
-                DetailScreen(ws, self.state.store),
-                callback=lambda _: self._on_detail_dismissed(),
-            )
+            self._open_detail_for_ws(ws)
+
+    def _open_detail_for_ws(self, ws: Workstream):
+        """Open a workstream in a tab and push its DetailScreen.
+
+        Used by thought-to-thread flows (brain dump launch, ticket pick, etc.)
+        """
+        icon = STATUS_ICONS.get(ws.status, "")
+        self.tabs.open_tab(ws.id, ws.name, icon)
+        self._sync_tab_bar()
+        self._detail_screen_active = True
+        self.push_screen(
+            DetailScreen(ws, self.state.store),
+            callback=lambda _: self._on_detail_dismissed(),
+        )
 
     def _open_archived_detail(self):
         ws = self._selected_archived()
@@ -1369,20 +1375,30 @@ class OrchestratorApp(App):
             self.notify("No tasks found in input", severity="warning", timeout=2)
             return
 
-        def on_confirm(confirmed: bool):
-            if confirmed:
-                for task in tasks:
-                    ws = Workstream(
-                        name=task.name,
-                        description=task.raw_text,
-                        category=task.category,
-                        status=task.status,
-                    )
-                    self.state.store.add(ws)
-                self.notify(f"Added {len(tasks)} workstreams", timeout=2)
-                self._refresh_ws_table()
+        def on_result(mode: str):
+            if not mode:
+                return
+            created = []
+            for task in tasks:
+                ws = Workstream(
+                    name=task.name,
+                    description=task.raw_text,
+                    category=task.category,
+                    status=task.status,
+                )
+                self.state.store.add(ws)
+                created.append(ws)
+            self._refresh_ws_table()
 
-        self.push_screen(BrainPreviewScreen(tasks), callback=on_confirm)
+            if mode == "launch" and created:
+                # Launch Claude session on the first workstream
+                self.notify(f"Added {len(created)} workstreams — launching session...", timeout=2)
+                ws = created[0]
+                self._open_detail_for_ws(ws)
+            else:
+                self.notify(f"Added {len(created)} workstreams", timeout=2)
+
+        self.push_screen(BrainPreviewScreen(tasks), callback=on_result)
 
     # ── Spawn & resume ──
 
@@ -1747,10 +1763,22 @@ class OrchestratorApp(App):
                 return
             ws = self._selected_ws()
             if ws:
+                # Link ticket to existing workstream
                 ws.add_link(kind="ticket", value=ticket_key, label=ticket_key)
                 self.state.store.update(ws)
                 self._refresh_ws_table()
                 self.notify(f"Linked {ticket_key} to {ws.name}", timeout=2)
+            else:
+                # Create new workstream from ticket
+                ticket_info = cache.get(ticket_key)
+                name = ticket_info.summary if ticket_info else ticket_key
+                new_ws = Workstream(name=name, category=Category.WORK)
+                new_ws.add_link(kind="ticket", value=ticket_key, label=ticket_key)
+                self.state.store.add(new_ws)
+                self._refresh_ws_table()
+                self.notify(f"Created workstream: {name}", timeout=2)
+                # Open it immediately (thought to thread)
+                self._open_detail_for_ws(new_ws)
 
         from widgets import FuzzyPickerScreen
         screen = FuzzyPickerScreen(title="Select Ticket")

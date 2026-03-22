@@ -2289,15 +2289,24 @@ class BrainDumpScreen(ModalScreen[str | None]):
 
 # ─── Brain Preview Screen ───────────────────────────────────────────
 
-class BrainPreviewScreen(ModalScreen[bool]):
+class BrainPreviewScreen(ModalScreen[str]):
+    """Preview parsed brain dump tasks.
+
+    Dismisses with:
+      - "add" to add all as workstreams
+      - "launch" to add all and immediately launch Claude sessions
+      - "" / None to cancel
+    """
+
     BINDINGS = [
         Binding("enter,y", "confirm", "Add all"),
+        Binding("l", "launch", "Add & Launch"),
         Binding("escape,n", "cancel", "Cancel"),
         Binding("backspace,ctrl+h", "go_back", "^H back"),
     ]
 
     def action_go_back(self):
-        self.dismiss(False)
+        self.dismiss("")
 
     DEFAULT_CSS = f"""
     BrainPreviewScreen {{ align: center middle; }}
@@ -2328,13 +2337,22 @@ class BrainPreviewScreen(ModalScreen[bool]):
                 body_lines.append("")
             yield Static("\n".join(body_lines), id="brain-preview-body")
             yield Rule()
-            yield Static(f"[{C_DIM}]Enter/y[/{C_DIM}] add all  [{C_DIM}]Esc/n[/{C_DIM}] cancel  [{C_DIM}]^H[/{C_DIM}] back", id="brain-preview-hint")
+            yield Static(
+                f"[{C_DIM}]Enter/y[/{C_DIM}] add  "
+                f"[{C_DIM}]l[/{C_DIM}] add & launch  "
+                f"[{C_DIM}]Esc[/{C_DIM}] cancel  "
+                f"[{C_DIM}]^H[/{C_DIM}] back",
+                id="brain-preview-hint",
+            )
 
     def action_confirm(self):
-        self.dismiss(True)
+        self.dismiss("add")
+
+    def action_launch(self):
+        self.dismiss("launch")
 
     def action_cancel(self):
-        self.dismiss(False)
+        self.dismiss("")
 
 
 # ─── Add Link Screen ────────────────────────────────────────────────
