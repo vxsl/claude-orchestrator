@@ -429,8 +429,13 @@ def parse_session(jsonl_path: Path) -> Optional[ClaudeSession]:
                 # Track last message role (user or assistant)
                 if msg_type in ("user", "assistant"):
                     session.turn_complete = False  # new message resets turn completion
-                    if msg_type == "user" and ts:
-                        session.last_user_message_at = ts
+                    if msg_type == "user":
+                        # Reset stale assistant-turn state so session_activity
+                        # doesn't mistake a new user prompt for "your turn".
+                        session.last_stop_reason = ""
+                        session.last_tool_name = ""
+                        if ts:
+                            session.last_user_message_at = ts
                     # User replied → commit is no longer the last word
                     if msg_type == "user" and _is_human_turn(data):
                         session.last_commit_sha = ""
@@ -557,8 +562,11 @@ def refresh_session_tail(session: ClaudeSession, tail_bytes: int = 8192) -> bool
 
             if msg_type in ("user", "assistant"):
                 session.turn_complete = False
-                if msg_type == "user" and ts:
-                    session.last_user_message_at = ts
+                if msg_type == "user":
+                    session.last_stop_reason = ""
+                    session.last_tool_name = ""
+                    if ts:
+                        session.last_user_message_at = ts
                 # User replied → commit is no longer the last word
                 if msg_type == "user" and _is_human_turn(data):
                     session.last_commit_sha = ""

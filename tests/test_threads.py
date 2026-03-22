@@ -318,6 +318,12 @@ class TestSessionActivity:
         s = self._make_session(is_live=True, last_message_role="user")
         assert session_activity(s) == ThreadActivity.THINKING
 
+    def test_thinking_when_live_user_msg_with_stale_stop_reason(self):
+        """User just sent a message — stale stop_reason from previous turn must not cause 'your turn'."""
+        s = self._make_session(is_live=True, last_message_role="user",
+                               last_stop_reason="end_turn")
+        assert session_activity(s) == ThreadActivity.THINKING
+
     def test_awaiting_input_when_live_and_no_role(self):
         """No messages yet → user hasn't typed, Claude is idle at prompt."""
         s = self._make_session(is_live=True, last_message_role="")

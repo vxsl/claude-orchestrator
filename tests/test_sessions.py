@@ -177,6 +177,26 @@ class TestParseSession:
         session = parse_session(f)
         assert session.turn_complete is True
 
+    def test_user_message_resets_stale_stop_reason(self, tmp_path):
+        """User message must clear last_stop_reason so session_activity sees THINKING, not stale 'end_turn'."""
+        f = tmp_path / "projects" / "test" / "session.jsonl"
+        f.parent.mkdir(parents=True)
+        lines = [
+            json.dumps({"type": "user", "message": {"content": "first prompt"},
+                        "timestamp": "2026-03-20T10:00:00Z"}),
+            json.dumps({"type": "assistant", "message": {"model": "claude-opus-4-6",
+                        "content": [{"type": "text", "text": "done"}],
+                        "usage": {"input_tokens": 100, "output_tokens": 50},
+                        "stop_reason": "end_turn"},
+                        "timestamp": "2026-03-20T10:01:00Z"}),
+            json.dumps({"type": "user", "message": {"content": "second prompt"},
+                        "timestamp": "2026-03-20T10:02:00Z"}),
+        ]
+        f.write_text("\n".join(lines) + "\n")
+        session = parse_session(f)
+        assert session.last_stop_reason == ""
+        assert session.last_tool_name == ""
+
     def test_parse_malformed_json(self, tmp_path):
         bad = tmp_path / "projects" / "test" / "bad.jsonl"
         bad.parent.mkdir(parents=True)

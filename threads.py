@@ -85,8 +85,11 @@ def session_activity(session: ClaudeSession, last_seen: dict[str, str] | None = 
         turn_done = (
             not session.last_message_role
             or session.turn_complete
-            or (session.last_stop_reason and session.last_stop_reason != "tool_use")
-            or (session.last_stop_reason == "tool_use"
+            or (session.last_message_role == "assistant"
+                and session.last_stop_reason
+                and session.last_stop_reason != "tool_use")
+            or (session.last_message_role == "assistant"
+                and session.last_stop_reason == "tool_use"
                 and session.last_tool_name in _INTERACTIVE_TOOLS)
         )
         if not turn_done:
