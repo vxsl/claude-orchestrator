@@ -46,7 +46,7 @@ from rendering import (
     LINK_TYPE_ICONS, LINK_ORDER, LINK_KINDS,
     THROBBER_FRAMES,
     _status_markup, _category_markup, _link_icon,
-    _activity_icon, _activity_badge, _is_session_seen,
+    _activity_icon, _activity_badge, _is_session_seen, _parse_iso,
     _colored_tokens, _token_color_markup,
     _short_model, _short_project,
     _render_session_option, _session_title,
@@ -1463,23 +1463,46 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         else:
             self._feed_notifications = []
 
-        # Build session_id -> latest (non-dismissed) notification map
+        # Build session_id -> latest (non-dismissed) notification map.
+        # Match by session_id when available, otherwise by cwd proximity.
         notif_map: dict[str, Notification] = {}
+        unmatched: list[Notification] = []
         for n in self._feed_notifications:
-            if n.dismissed or not n.session_id:
+            if n.dismissed:
                 continue
-            existing = notif_map.get(n.session_id)
-            if not existing or n.dt > existing.dt:
-                notif_map[n.session_id] = n
-        self._session_notifications = notif_map
+            if n.session_id:
+                existing = notif_map.get(n.session_id)
+                if not existing or n.dt > existing.dt:
+                    notif_map[n.session_id] = n
+            else:
+                unmatched.append(n)
 
-        # Orphan notifications (no session_id or session not in active list)
-        active_sids = {s.session_id for s in self._detail_sessions}
-        self._orphan_notifications = [
-            n for n in self._feed_notifications
-            if not n.dismissed and (not n.session_id or n.session_id not in active_sids)
-            and n.session_id not in notif_map  # don't double-count mapped ones
-        ]
+        # Fallback: match unmatched notifications to sessions by cwd + timestamp
+        if unmatched and self._detail_sessions:
+            for n in unmatched:
+                if not n.cwd:
+                    continue
+                cwd_norm = n.cwd.rstrip("/")
+                best_sid = None
+                best_gap = None
+                for s in self._detail_sessions:
+                    if not s.project_path or s.project_path.rstrip("/") != cwd_norm:
+                        continue
+                    if s.last_activity:
+                        s_dt = _parse_iso(s.last_activity)
+                        if s_dt:
+                            gap = abs((n.dt - s_dt).total_seconds())
+                            if best_gap is None or gap < best_gap:
+                                best_gap = gap
+                                best_sid = s.session_id
+                    elif best_sid is None:
+                        best_sid = s.session_id
+                if best_sid:
+                    existing = notif_map.get(best_sid)
+                    if not existing or n.dt > existing.dt:
+                        notif_map[best_sid] = n
+
+        self._session_notifications = notif_map
 
         # Feed pane is now hidden — notifications are inline with sessions
         try:

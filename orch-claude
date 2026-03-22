@@ -159,6 +159,7 @@ tmux bind -n C-e if-shell \
 # ─── Export env vars for distill commands ──────────────────────────
 export ORCH_WS_ID="$WS_ID"
 export ORCH_SESSION_ID="$SESSION_ID"
+export CLAUDE_SESSION_ID="$SESSION_ID"  # used by notify hook to link notifications to sessions
 export ORCH_DIR
 
 # ─── Build and run Claude command ────────────────────────────────
