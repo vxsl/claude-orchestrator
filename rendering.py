@@ -5,6 +5,7 @@ Pure functions with no Textual dependency. Used by screens, app, and state modul
 
 from __future__ import annotations
 
+import functools
 from pathlib import Path
 
 def _rich_escape(text: str) -> str:
@@ -272,6 +273,7 @@ def _best_activity(sessions: list, last_seen: dict[str, str] | None = None) -> T
     return best
 
 
+@functools.lru_cache(maxsize=1024)
 def _parse_iso(ts: str):
     """Parse ISO timestamp to aware datetime, or None."""
     from datetime import datetime, timezone

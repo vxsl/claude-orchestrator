@@ -418,12 +418,12 @@ def discover_threads(min_messages: int = 1) -> list[Thread]:
                 path = parent
         by_project.setdefault(path, []).append(s)
 
-    # Extract git branches and first messages (cheap I/O)
+    # Use cached git_branch/first_message from parse_session (no file I/O)
     branches: dict[str, str] = {}
     messages: dict[str, str] = {}
     for s in sessions:
-        branches[s.session_id] = _extract_git_branch(s)
-        messages[s.session_id] = _extract_first_message(s)
+        branches[s.session_id] = s.git_branch or _extract_git_branch(s)
+        messages[s.session_id] = s.first_message or _extract_first_message(s)
 
     threads: list[Thread] = []
 

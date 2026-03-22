@@ -634,8 +634,14 @@ class OrchestratorApp(App):
                 self._render_status_bar(),
                 self._render_filter_bar(),
             ]
-            self.query_one("#top-bar", Static).update("\n".join(lines))
-            self.query_one("#summary-bar", Static).update(self._render_summary_bar())
+            top = "\n".join(lines)
+            if top != getattr(self, '_last_top_bar', ''):
+                self._last_top_bar = top
+                self.query_one("#top-bar", Static).update(top)
+            summary = self._render_summary_bar()
+            if summary != getattr(self, '_last_summary_bar', ''):
+                self._last_summary_bar = summary
+                self.query_one("#summary-bar", Static).update(summary)
         except Exception:
             pass
 
@@ -761,6 +767,18 @@ class OrchestratorApp(App):
         elif olist.option_count > 0 and olist.highlighted is None:
             olist.highlighted = 0
 
+    @staticmethod
+    def _ws_fingerprint(ws, ws_sessions, has_tmux, git_st, lw) -> tuple:
+        """Cheap fingerprint capturing all inputs to _render_ws_option."""
+        sess_fp = tuple(
+            (s.session_id, s.is_live, s.last_message_role, s.last_activity,
+             s.last_commit_sha, s.message_count)
+            for s in ws_sessions[:8]  # cap to avoid huge tuples
+        )
+        git_fp = (git_st.branch, git_st.is_dirty, git_st.ahead) if git_st else None
+        return (ws.id, ws.name, ws.status, ws.category, len(ws_sessions),
+                sess_fp, has_tmux, git_fp, lw)
+
     def _do_refresh_ws_table(self):
         """Actually rebuild the workstreams table (called via debounce timer)."""
         self._refresh_pending = False
@@ -775,21 +793,31 @@ class OrchestratorApp(App):
         last_seen = self.state.get_last_seen()
         lw = self._olist_line_width(table)
 
-        # Build all options before touching the widget tree
+        # Build all options, skipping expensive rendering for unchanged items
+        render_cache = getattr(self, '_ws_render_cache', {})
         options = []
+        new_cache = {}
         for ws in items:
             ws_sessions = self.state.sessions_for_ws(ws)
             git_st = None
             repo = ws.repo_path
             if repo:
                 git_st = self.state.git_status_cache.get(repo)
-            prompt = _render_ws_option(
-                ws, ws_sessions, last_seen,
-                tmux_check=self.state.ws_has_tmux,
-                line_width=lw,
-                git_status=git_st,
-            )
+            has_tmux = self.state.ws_has_tmux(ws)
+            fp = self._ws_fingerprint(ws, ws_sessions, has_tmux, git_st, lw)
+            cached = render_cache.get(ws.id)
+            if cached and cached[0] == fp:
+                prompt = cached[1]
+            else:
+                prompt = _render_ws_option(
+                    ws, ws_sessions, last_seen,
+                    tmux_check=self.state.ws_has_tmux,
+                    line_width=lw,
+                    git_status=git_st,
+                )
+            new_cache[ws.id] = (fp, prompt)
             options.append(Option(prompt, id=ws.id))
+        self._ws_render_cache = new_cache
 
         # In-place update when item set unchanged (liveness/timer refreshes)
         # Avoids expensive clear+re-add cycle (~7ms savings on 65 items)
@@ -871,9 +899,6 @@ class OrchestratorApp(App):
 
         discovered = get_discovered_workstreams(threads)
         self.call_from_thread(self._apply_sessions, sessions, threads, discovered)
-
-        if new_ids - old_ids:
-            self._do_load_sessions()
 
     @work(thread=True, exclusive=True, group="sessions")
     def _do_load_sessions(self):

@@ -240,6 +240,8 @@ class ClaudeSession:
     last_commit_summary: str = ""  # Commit message from last git commit
     tool_counts: dict[str, int] = field(default_factory=dict)  # category -> count
     files_mutated: list[str] = field(default_factory=list)      # basenames, ordered by first touch
+    git_branch: str = ""         # Git branch from first few lines (for thread clustering)
+    first_message: str = ""      # First user message snippet (for thread naming)
 
     @property
     def duration_display(self) -> str:
@@ -395,7 +397,9 @@ def parse_session(jsonl_path: Path) -> Optional[ClaudeSession]:
             first_ts = None
             last_ts = None
             _pending_commit = False  # True when last assistant msg had git commit
+            _line_num = 0
             for line in f:
+                _line_num += 1
                 line = line.strip()
                 if not line:
                     continue
@@ -418,6 +422,26 @@ def parse_session(jsonl_path: Path) -> Optional[ClaudeSession]:
                     session.session_id = sid
                 if sid and sid not in session.all_session_ids:
                     session.all_session_ids.append(sid)
+
+                # Extract git branch from early lines (cheap — replaces separate file read)
+                if _line_num <= 10 and not session.git_branch:
+                    branch = data.get("gitBranch", "")
+                    if branch and branch != "HEAD":
+                        session.git_branch = branch
+
+                # Extract first user message (cheap — replaces separate file read)
+                if _line_num <= 20 and not session.first_message:
+                    if msg_type == "user" and "message" in data:
+                        content = data["message"].get("content", "")
+                        if isinstance(content, str):
+                            session.first_message = content[:200]
+                        elif isinstance(content, list):
+                            for block in content:
+                                if isinstance(block, dict) and block.get("type") == "text":
+                                    text = block.get("text", "")
+                                    if text and "[Request interrupted" not in text:
+                                        session.first_message = text[:200]
+                                        break
 
                 # Track timestamps
                 ts = data.get("timestamp")
@@ -731,9 +755,7 @@ def discover_sessions(
         del _parsed_session_cache[k]
 
     # Sort: live sessions first, then by last activity (most recent first)
-    sessions.sort(key=lambda s: (not s.is_live, s.last_activity or ""), reverse=False)
-    sessions.sort(key=lambda s: s.last_activity or "", reverse=True)
-    sessions.sort(key=lambda s: s.is_live, reverse=True)
+    sessions.sort(key=lambda s: (s.is_live, s.last_activity or ""), reverse=True)
     if limit > 0:
         sessions = sessions[:limit]
     return sessions
