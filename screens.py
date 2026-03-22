@@ -1737,7 +1737,7 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
                 f"[bold {C_GREEN}]LIVE[/bold {C_GREEN}]"
             )
             content = self.query_one("#detail-peek-content", Static)
-            content.update(pane_text)
+            content.update(_rich_escape(pane_text))
         else:
             # Fallback: show JSONL conversation
             header.update(
@@ -1769,7 +1769,7 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         pane_text = capture_session_pane(sid)
         if pane_text is not None:
             content = self.query_one("#detail-peek-content", Static)
-            content.update(pane_text)
+            content.update(_rich_escape(pane_text))
 
     def _hide_peek(self):
         """Hide the peek overlay."""

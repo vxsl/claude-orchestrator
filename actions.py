@@ -91,9 +91,9 @@ def capture_session_pane(session_id: str) -> str | None:
         pane_id = result.stdout.strip()
         if not pane_id or result.returncode != 0:
             return None
-        # Capture the pane content
+        # Capture the pane content (plain text, no ANSI escapes)
         result = subprocess.run(
-            ["tmux", "capture-pane", "-t", pane_id, "-p", "-e"],
+            ["tmux", "capture-pane", "-t", pane_id, "-p"],
             capture_output=True, text=True, timeout=3,
         )
         if result.returncode != 0:
