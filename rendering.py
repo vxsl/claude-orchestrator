@@ -370,8 +370,8 @@ _BAR_LEGEND_LABELS = [
 
 def tool_bar_legend() -> str:
     """Return a Rich-markup legend for the tool usage bar."""
-    parts = [f"[not bold {c}]▄ {label}[/not bold {c}]" for label, c in _BAR_LEGEND_LABELS]
-    return "  ".join(parts)
+    parts = [f"[not bold {c}]▄{label}[/not bold {c}]" for label, c in _BAR_LEGEND_LABELS]
+    return " ".join(parts)
 
 
 def _tool_bar(tool_counts: dict[str, int], width: int = 6) -> str:
