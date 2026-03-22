@@ -2182,6 +2182,25 @@ class TestLinksScreen:
             assert isinstance(pilot.app.screen, DetailScreen)
 
 
+# ─── E2E: Rename from DetailScreen ───────────────────────────────────
+
+
+@pytest.mark.asyncio
+class TestRenameFromDetail:
+    """Test that E (rename) doesn't crash from DetailScreen."""
+
+    async def test_E_in_detail_no_crash(self, app_with_store):
+        """Pressing E in DetailScreen should not crash (even though it's unbound)."""
+        async with app_with_store.run_test(size=(120, 40)) as pilot:
+            await pilot.press("enter")
+            from screens import DetailScreen
+            assert isinstance(pilot.app.screen, DetailScreen)
+            # This should not crash even though E is not in DetailScreen bindings
+            await pilot.press("E")
+            # Should still be on DetailScreen (key swallowed by OptionList)
+            assert isinstance(pilot.app.screen, DetailScreen)
+
+
 @pytest.mark.asyncio
 class TestSessionArchiveRestore:
     """Test session archive/restore (space key) in DetailScreen."""
