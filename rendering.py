@@ -423,6 +423,7 @@ def _file_touchpoints(files: list[str]) -> str:
 def _render_session_option(
     s: ClaudeSession, act: ThreadActivity, throbber_frame: int = 0,
     title_width: int = 48, ws_repo_path: str = "", seen: bool = False,
+    line_width: int = 0,
 ) -> str:
     """Render a session as a formatted multi-line OptionList entry.
 
@@ -433,7 +434,11 @@ def _render_session_option(
          {role}: {snippet}
     """
     INDENT = "    "  # 4 spaces — nested under title
-    LINE_WIDTH = title_width + 20  # right-alignment anchor
+    if line_width > 0:
+        LINE_WIDTH = line_width
+        title_width = max(20, LINE_WIDTH - 20)
+    else:
+        LINE_WIDTH = title_width + 20  # right-alignment anchor
 
     icon = _activity_icon(act, throbber_frame, seen=seen)
     badge = _activity_badge(act, seen=seen)
@@ -509,7 +514,7 @@ def _render_session_option(
         if len(s.last_message_text) > max_snippet:
             snippet += "…"
         is_user = s.last_message_role == "user"
-        prefix = f"[{C_DIM}]you:[/{C_DIM}] " if is_user else ""
+        prefix = f"[{C_MID}]you:[/{C_MID}] " if is_user else ""
         lines.append(f"{INDENT}{prefix}[{C_DIM}]{snippet}[/{C_DIM}]")
 
     return "\n".join(lines)
@@ -614,7 +619,7 @@ def _render_content_search_result(
     # Snippet line — role colored
     is_user = hit.role == "user"
     highlighted = _highlight_snippet(hit.snippet, hit.match_ranges)
-    prefix = f"[{C_DIM}]you:[/{C_DIM}] " if is_user else ""
+    prefix = f"[{C_MID}]you:[/{C_MID}] " if is_user else ""
     lines.append(f"{INDENT}{prefix}{highlighted}")
     return "\n".join(lines)
 
@@ -656,6 +661,7 @@ def _render_notified_session_option(
     s: ClaudeSession, act: ThreadActivity, notif,
     throbber_frame: int = 0, title_width: int = 48,
     ws_repo_path: str = "", seen: bool = False,
+    line_width: int = 0,
 ) -> str:
     """Render a session with its notification front-and-center.
 
@@ -666,7 +672,11 @@ def _render_notified_session_option(
          ▏▏▏▏▏░░░  app.py sessions.py +4
     """
     INDENT = "    "
-    LINE_WIDTH = title_width + 20
+    if line_width > 0:
+        LINE_WIDTH = line_width
+        title_width = max(20, LINE_WIDTH - 20)
+    else:
+        LINE_WIDTH = title_width + 20
 
     # Notification freshness styling
     freshness = notif.freshness
