@@ -57,7 +57,7 @@ from rendering import (
     _rich_escape,
 )
 from actions import (
-    ws_directories, open_link,
+    ws_directories, ws_working_dir, open_file_picker, open_link,
 )
 from notifications import Notification, dismiss_notification, dismiss_all_for_dirs
 from state import fuzzy_match, content_search, SessionSearchResult
@@ -891,6 +891,7 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         Binding("L", "add_link", "Link+"),
         Binding("e", "open_todos", "Todos"),
         Binding("o", "open_links", "Open links"),
+        Binding("f", "file_picker", "Files"),
         Binding("x", "archive", "Archive"),
         Binding("p", "peek_session", "Peek", priority=True),
         Binding("h", "go_back", show=False),
@@ -2199,6 +2200,20 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
             self.app.push_screen(LinksScreen(self.ws, self.store))
         else:
             self.app.notify("No links to open", timeout=2)
+
+    def action_file_picker(self):
+        """Open fzedit file picker in the workstream's working directory."""
+        import shutil
+
+        cwd = ws_working_dir(self.ws)
+        if cwd == os.getcwd() and not self.ws.repo_path and not ws_directories(self.ws):
+            self.app.notify("No directory linked to this workstream", timeout=2)
+            return
+        if not shutil.which("fzedit"):
+            self.app.notify("fzedit not found on PATH", timeout=2)
+            return
+        with self.app.suspend():
+            open_file_picker(cwd)
 
     def action_peek_session(self):
         """p = peek into session conversation."""
