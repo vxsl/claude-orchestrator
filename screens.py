@@ -2337,8 +2337,15 @@ class RepoPickerScreen(ModalScreen[str | None]):
 
     BINDINGS = [
         Binding("escape", "cancel", "Cancel"),
+        Binding("backspace,ctrl+h", "go_back", "^H back"),
         Binding("enter", "confirm", "Select"),
     ]
+
+    def action_go_back(self):
+        inp = self.query_one("#repopick-input", Input)
+        if inp.value:
+            return  # let Input handle backspace normally
+        self.dismiss(None)
 
     DEFAULT_CSS = f"""
     RepoPickerScreen {{ align: center middle; }}

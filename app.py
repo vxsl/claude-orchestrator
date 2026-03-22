@@ -1289,10 +1289,13 @@ class OrchestratorApp(App):
             self.notify(f"Spawn failed: {err}", severity="error", timeout=4)
 
     def action_repo_spawn(self):
-        repos = self.state.known_repos()
-        if not repos:
-            self.notify("No repos found in session history", timeout=2)
-            return
+        repos = self.state.discover_all_repos()
+        # Build workstream count lookup for the picker
+        ws_counts: dict[str, int] = {}
+        for repo in repos:
+            n = len(self.state.workstreams_for_repo(repo))
+            if n > 0:
+                ws_counts[repo] = n
 
         def on_repo_picked(repo_path: str | None):
             if not repo_path:
@@ -1317,7 +1320,7 @@ class OrchestratorApp(App):
                     callback=on_ws_picked,
                 )
 
-        self.push_screen(RepoPickerScreen(repos), callback=on_repo_picked)
+        self.push_screen(RepoPickerScreen(repos, ws_counts), callback=on_repo_picked)
 
     def _spawn_in_ws(self, ws: Workstream):
         ok, err = launch_orch_claude(ws, store=self.state.store)

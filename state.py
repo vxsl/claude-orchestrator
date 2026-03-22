@@ -582,6 +582,66 @@ class AppState:
                 repos.add(os.path.expanduser(ws.repo_path).rstrip("/"))
         return sorted(p for p in repos if os.path.isdir(p))
 
+    # ── Full-system repo discovery ────────────────────────────────────
+
+    _all_repos: list[str] | None = None
+
+    _SKIP_DIRS = frozenset({
+        ".cache", ".local", ".npm", ".cargo", ".rustup", ".go", ".gradle",
+        ".m2", ".steam", ".platformio", ".nvm", ".pyenv", ".rbenv",
+        "node_modules", "__pycache__", "venv", ".venv", "snap",
+        ".Trash", ".wine", "Library",
+    })
+
+    def discover_all_repos(self, *, force: bool = False) -> list[str]:
+        """Scan ~ recursively for git repos, merging with known_repos().
+
+        Results are cached; pass *force=True* to rescan.
+        """
+        if self._all_repos is not None and not force:
+            return self._all_repos
+
+        home = Path.home()
+        repos: set[str] = set()
+        max_depth = 5
+
+        def _scan(directory: Path, depth: int) -> None:
+            if depth > max_depth:
+                return
+            try:
+                entries = list(os.scandir(directory))
+            except (PermissionError, OSError):
+                return
+            for entry in entries:
+                if not entry.is_dir(follow_symlinks=False):
+                    continue
+                name = entry.name
+                # Skip hidden dirs (except a few we want to peek into)
+                if name.startswith(".") and name not in (".config",):
+                    continue
+                if name in self._SKIP_DIRS:
+                    continue
+                path = Path(entry.path)
+                git_dir = path / ".git"
+                if git_dir.exists():
+                    repos.add(str(path))
+                    # Don't recurse into repos (submodules are their own thing)
+                    continue
+                _scan(path, depth + 1)
+
+        _scan(home, 0)
+
+        # Merge with known_repos (session history + workstream paths)
+        for p in self.known_repos():
+            repos.add(p)
+
+        self._all_repos = sorted(repos)
+        return self._all_repos
+
+    def invalidate_repo_cache(self) -> None:
+        """Clear cached repo list so next discover_all_repos() rescans."""
+        self._all_repos = None
+
     def workstreams_for_repo(self, repo_path: str) -> list[Workstream]:
         """Find non-archived workstreams linked to a repo path."""
         normalized = os.path.expanduser(repo_path).rstrip("/")
