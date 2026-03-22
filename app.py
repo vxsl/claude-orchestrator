@@ -319,7 +319,7 @@ class OrchestratorApp(App):
         archived_table.add_columns("", "Name", "Worktree", "Sess", "Category", "Updated")
         archived_table.display = False
 
-        self._refresh_ws_table(immediate=True)
+        self._refresh_ws_table()
         self._load_sessions()
         self._refresh_archived_table()
         self._update_all_bars()
@@ -472,7 +472,7 @@ class OrchestratorApp(App):
             self.call_from_thread(self._apply_liveness_change)
 
     def _apply_liveness_change(self):
-        self._refresh_ws_table()
+        self._refresh_ws_table_debounced()
         if self.state.view_mode == ViewMode.SESSIONS:
             self._refresh_sessions_table()
 
@@ -771,12 +771,13 @@ class OrchestratorApp(App):
 
     # ── Workstreams table ──
 
-    def _refresh_ws_table(self, immediate: bool = False):
-        """Schedule a debounced table refresh — coalesces rapid-fire calls."""
-        if immediate:
-            self._refresh_pending = False
-            self._do_refresh_ws_table()
-            return
+    def _refresh_ws_table(self):
+        """Immediate table refresh for user-initiated actions."""
+        self._refresh_pending = False
+        self._do_refresh_ws_table()
+
+    def _refresh_ws_table_debounced(self):
+        """Debounced refresh for background/timer-driven updates."""
         if self._refresh_pending:
             return
         self._refresh_pending = True
@@ -908,12 +909,12 @@ class OrchestratorApp(App):
         # Lightweight description re-evaluation (rate-limited internally to 6h per ws)
         desc_updated = refresh_descriptions(self.state.store, sessions)
         if desc_updated > 0:
-            self.call_from_thread(self._refresh_ws_table)
+            self.call_from_thread(self._refresh_ws_table_debounced)
 
     def _apply_sessions(self, sessions: list[ClaudeSession],
                         threads: list[Thread], discovered: list[Workstream]):
         self.state.update_sessions(sessions, threads, discovered)
-        self._refresh_ws_table()
+        self._refresh_ws_table_debounced()
         self._refresh_sessions_table()
         for screen in self.screen_stack:
             screen.post_message(SessionsChanged())
@@ -921,7 +922,7 @@ class OrchestratorApp(App):
     def _apply_synthesis(self, threads: list[Thread], discovered: list[Workstream]):
         self.state.threads = threads
         self.state.discovered_ws = discovered
-        self._refresh_ws_table()
+        self._refresh_ws_table_debounced()
 
     def _refresh_sessions_table(self):
         table = self.query_one("#sessions-table", DataTable)
@@ -1426,7 +1427,7 @@ class OrchestratorApp(App):
     @on(Input.Changed, "#search-input")
     def on_search_changed(self, event: Input.Changed):
         self.state.set_search(event.value.strip())
-        self._refresh_ws_table()
+        self._refresh_ws_table_debounced()
 
     # ── Command palette ──
 
@@ -1516,7 +1517,7 @@ class OrchestratorApp(App):
 
     def _apply_tmux_status(self, paths: set[str], names: set[str]):
         if self.state.update_tmux_status(paths, names):
-            self._refresh_ws_table()
+            self._refresh_ws_table_debounced()
 
     # ── Other ──
 
