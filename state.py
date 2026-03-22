@@ -248,9 +248,9 @@ def search_session_content(
             # Extra bonus when ALL terms match in the title
             if len(matched_terms) == len(all_terms):
                 title_score += 30.0
-            # Exact phrase in title is a very strong signal
+            # Exact phrase in title is a very strong signal (multi-word only)
             query_lower = query.strip().lower()
-            if len(query_lower) > 1 and query_lower in title_lower:
+            if ' ' in query_lower and query_lower in title_lower:
                 title_score += 100.0
             # Create a synthetic hit from the title so there's a snippet
             snippet, match_ranges = extract_snippet(title_text, all_terms)
@@ -276,7 +276,8 @@ def search_session_content(
         score = 0.0
         for t in all_terms:
             freq = msg_lower.count(t)
-            score += 10 + (freq - 1) * 2  # base + frequency bonus
+            # Diminishing returns: first occurrence = 10, extras add less and cap at +10
+            score += 10 + min((freq - 1) * 2, 10)
 
         # Exact phrase bonus: the full original query appears verbatim
         # Only meaningful for multi-word queries (single words already get full credit)
