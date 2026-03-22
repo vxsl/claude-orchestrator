@@ -1305,7 +1305,7 @@ class AppState:
 
         # Sort
         elif cmd == "sort":
-            valid = ("status", "updated", "created", "category", "name")
+            valid = ("status", "updated", "created", "category", "name", "activity")
             if arg in valid:
                 self.sort_mode = arg
                 return {"action": "refresh"}
@@ -1313,7 +1313,7 @@ class AppState:
 
         # Filter
         elif cmd in ("filter", "f"):
-            valid = ("all", "work", "personal", "active", "stale")
+            valid = ("all", "work", "personal", "active", "stale", "archived")
             if arg in valid:
                 self.filter_mode = arg
                 return {"action": "refresh"}

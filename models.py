@@ -420,6 +420,8 @@ class Store:
             return sorted(streams, key=lambda w: (w.category.value, STATUS_ORDER.get(w.status, 99)))
         elif sort_by == "name":
             return sorted(streams, key=lambda w: w.name.lower())
+        elif sort_by == "activity":
+            return sorted(streams, key=lambda w: w.last_user_activity or w.updated_at, reverse=True)
         return streams
 
     def archive(self, ws_id: str) -> bool:
