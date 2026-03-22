@@ -180,6 +180,49 @@ class TestDismissal:
 
 # ─── Panel cycling logic ──────────────────────────────────────────
 
+class TestDetailScreenPanelIds:
+    """Test _panel_ids logic without instantiating the full Textual screen."""
+
+    def _make_screen_state(self, sessions=None, archived=None, feed=None):
+        """Return a mock object with the fields _panel_ids reads."""
+        from screens import DetailScreen
+        obj = MagicMock(spec=DetailScreen)
+        obj._detail_sessions = sessions or []
+        obj._archived_sessions = archived or []
+        obj._feed_notifications = feed or []
+        # Call the real method
+        obj._panel_ids = DetailScreen._panel_ids.__get__(obj)
+        return obj
+
+    def test_sessions_only(self):
+        s = self._make_screen_state()
+        assert s._panel_ids() == ["detail-sessions", "detail-scroll"]
+
+    def test_sessions_and_archived(self):
+        s = self._make_screen_state(archived=[MagicMock()])
+        assert s._panel_ids() == ["detail-sessions", "detail-archived", "detail-scroll"]
+
+    def test_sessions_and_feed_no_longer_in_cycle(self):
+        """Feed pane is no longer in the panel cycle — notifications are inline."""
+        s = self._make_screen_state(feed=[MagicMock()])
+        assert s._panel_ids() == ["detail-sessions", "detail-scroll"]
+        assert "detail-feed" not in s._panel_ids()
+
+    def test_all_panels_without_feed(self):
+        s = self._make_screen_state(
+            archived=[MagicMock()],
+            feed=[MagicMock()],
+        )
+        assert s._panel_ids() == [
+            "detail-sessions", "detail-archived", "detail-scroll"
+        ]
+
+    def test_empty_archived_skipped(self):
+        s = self._make_screen_state(archived=[], feed=[MagicMock()])
+        panels = s._panel_ids()
+        assert "detail-archived" not in panels
+
+
 class TestOnKeyRouting:
     """Test that on_key routes ctrl+j/k to the correct screen."""
 
