@@ -330,13 +330,13 @@ class OrchestratorApp(App):
         self.set_interval(30, self._poll_tmux)
 
         self._session_watcher = SessionWatcher(
-            on_change=lambda: self.call_from_thread(self._poll_sessions),
+            on_change=lambda: self.call_from_thread(self._on_session_file_change),
             debounce=1.0,
         )
         self._session_watcher.start()
         self.set_interval(30, self._poll_sessions)
 
-        self.set_interval(10, self._refresh_session_liveness)
+        self.set_interval(3, self._refresh_session_liveness)
 
         ws_table.focus()
 
@@ -460,6 +460,11 @@ class OrchestratorApp(App):
         pane = self.query_one("#preview-pane")
         self.state.preview_visible = not self.state.preview_visible
         pane.display = self.state.preview_visible
+
+    def _on_session_file_change(self):
+        """Watcher callback: quick liveness update first, then full poll."""
+        self._refresh_session_liveness()
+        self._poll_sessions()
 
     def _refresh_session_liveness(self):
         self._do_refresh_liveness()
