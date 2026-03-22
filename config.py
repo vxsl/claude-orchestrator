@@ -19,7 +19,7 @@ DEFAULT_KEYS: dict[str, tuple[str, str, bool, bool]] = {
     "cursor_bottom": ("G", "Bottom", False, False),
     "half_page_down": ("ctrl+d", "½PgDn", False, False),
     "half_page_up": ("ctrl+u", "½PgUp", False, False),
-    "select_item": ("enter", "Open", True, False),
+    "select_item": ("enter,l", "Open", True, False),
     # View switching
     "next_view": ("tab", "Tab", True, True),
     "prev_view": ("shift+tab", "", False, True),
@@ -31,7 +31,7 @@ DEFAULT_KEYS: dict[str, tuple[str, str, bool, bool]] = {
     "spawn": ("c", "Spawn", True, False),
     "repo_spawn": ("C", "Repo", True, False),
     "resume": ("r", "Resume", True, False),
-    "link_action": ("l", "Link", True, False),
+    "link_action": ("L", "Link", True, False),
     "quick_note": ("n", "", False, False),
     "edit_notes": ("e", "", False, False),
     "rename": ("E", "", False, False),

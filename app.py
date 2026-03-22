@@ -634,7 +634,7 @@ class OrchestratorApp(App):
 
         lines.append(f"[{C_DIM}]Session: {session.session_id[:16]}...[/{C_DIM}]")
         lines.append("")
-        lines.append(self._hint_line([("r", "resume"), ("l", "link to workstream")]))
+        lines.append(self._hint_line([("r", "resume"), ("L", "link to workstream")]))
 
         content.update("\n".join(lines))
 
