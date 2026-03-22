@@ -52,7 +52,7 @@ from rendering import (
     _status_markup, _category_markup, _link_icon,
     _ws_indicators, _short_project, _short_model, _worktree_styled,
     THROBBER_FRAMES, _ACTIVITY_PRIORITY,
-    _activity_icon, _activity_badge, _best_activity,
+    _activity_icon, _activity_badge, _best_activity, _all_sessions_seen, _is_session_seen,
     _render_session_option, _session_title,
     _rich_escape,
 )
@@ -587,8 +587,9 @@ class OrchestratorApp(App):
         olist.clear_options()
         for i, s in enumerate(self.state.preview_sessions):
             act = session_activity(s, self.state.last_seen_cache)
+            seen = _is_session_seen(s, self.state.last_seen_cache)
             olist.add_option(Option(
-                _render_session_option(s, act, self.state.throbber_frame, title_width=35),
+                _render_session_option(s, act, self.state.throbber_frame, title_width=35, seen=seen),
                 id=str(i),
             ))
         if highlighted is not None and highlighted < len(self.state.preview_sessions):
@@ -781,6 +782,7 @@ class OrchestratorApp(App):
         except Exception:
             return
         old_key = self._get_cursor_key(table)
+        old_row = table.cursor_coordinate.row
         table.clear()
 
         items = self.state.get_unified_items()
@@ -800,6 +802,9 @@ class OrchestratorApp(App):
             if is_discovered:
                 best = _best_activity(ws_sessions, last_seen)
                 icon, color = _ACTIVITY_ICONS[best]
+                if best in (ThreadActivity.AWAITING_INPUT, ThreadActivity.RESPONSE_READY):
+                    if _all_sessions_seen(ws_sessions, last_seen):
+                        color = C_DIM
                 status_cell = Text(icon, style=color)
             else:
                 status_cell = Text(STATUS_ICONS[ws.status], style=STATUS_THEME[ws.status])
@@ -824,7 +829,7 @@ class OrchestratorApp(App):
 
             table.add_row(status_cell, name_cell, repo_cell, sess_cell, cat_cell, updated_cell, key=ws.id)
 
-        self._restore_cursor(table, old_key)
+        self._restore_cursor(table, old_key, old_row)
         self._update_all_bars()
         self._update_preview()
 
@@ -969,6 +974,7 @@ class OrchestratorApp(App):
     def _refresh_archived_table(self):
         table = self.query_one("#archived-table", DataTable)
         old_key = self._get_cursor_key(table)
+        old_row = table.cursor_coordinate.row
         table.clear()
 
         for ws in self.state.store.archived:
@@ -981,7 +987,7 @@ class OrchestratorApp(App):
             updated_cell = Text(_relative_time(ws.updated_at), style=C_DIM)
             table.add_row(status_cell, name_cell, repo_cell, sess_cell, cat_cell, updated_cell, key=ws.id)
 
-        self._restore_cursor(table, old_key)
+        self._restore_cursor(table, old_key, old_row)
 
     def _selected_archived(self) -> Workstream | None:
         try:
@@ -1002,12 +1008,15 @@ class OrchestratorApp(App):
         except Exception:
             return None
 
-    def _restore_cursor(self, table: DataTable, old_key: str | None):
+    def _restore_cursor(self, table: DataTable, old_key: str | None, old_row: int | None = None):
         if old_key:
             for i, row_key in enumerate(table.rows):
                 if str(row_key.value) == old_key:
                     table.move_cursor(row=i)
                     return
+        # Key was removed (e.g. archived) — keep cursor at same row index, clamped.
+        if old_row is not None and table.row_count > 0:
+            table.move_cursor(row=min(old_row, table.row_count - 1))
 
     # ── Primary action (Enter) ──
 
