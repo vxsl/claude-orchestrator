@@ -321,21 +321,35 @@ _BADGE_WIDTHS = {
 }
 
 
-def _tool_bar(tool_counts: dict[str, int], width: int = 14) -> str:
+_BAR_CATS = [
+    ("mutate", C_ORANGE),
+    ("bash",   C_LIGHT),
+    ("read",   C_DIM),
+    ("search", C_DIM),
+    ("agent",  C_PURPLE),
+]
+
+_BAR_LEGEND_LABELS = [
+    ("coding", C_ORANGE),
+    ("bash",   C_LIGHT),
+    ("research", C_DIM),
+    ("agents", C_PURPLE),
+]
+
+
+def tool_bar_legend() -> str:
+    """Return a Rich-markup legend for the tool usage bar."""
+    parts = [f"[{c}]█ {label}[/{c}]" for label, c in _BAR_LEGEND_LABELS]
+    return "  ".join(parts)
+
+
+def _tool_bar(tool_counts: dict[str, int], width: int = 10) -> str:
     """Render a mini stacked bar chart of tool usage by category.
 
+    Uses thin half-blocks (▎) for a lighter visual weight.
     Colors: coding=orange, bash=light, research=dim, agent=purple.
     Returns empty string if no tool usage.
     """
-    # Collapse to display categories
-    _BAR_CATS = [
-        ("mutate", C_ORANGE),
-        ("bash",   C_LIGHT),
-        ("read",   C_DIM),
-        ("search", C_DIM),
-        ("agent",  C_PURPLE),
-    ]
-    # Merge read+search into one visual bucket (both dim)
     total = sum(tool_counts.values())
     if total == 0:
         return ""
@@ -346,17 +360,13 @@ def _tool_bar(tool_counts: dict[str, int], width: int = 14) -> str:
         if n == 0:
             continue
         chars = max(1, round(n / total * width))
-        # Don't exceed remaining width
         chars = min(chars, width - used)
         if chars > 0:
-            parts.append(f"[{color}]{'█' * chars}[/{color}]")
+            parts.append(f"[{color}]{'▎' * chars}[/{color}]")
             used += chars
-    # Fill remainder with other
-    other = tool_counts.get("other", 0)
-    if used < width and other:
-        parts.append(f"[{C_DIM}]{'░' * (width - used)}[/{C_DIM}]")
-    elif used < width:
-        parts.append(f"[{C_DIM}]{'░' * (width - used)}[/{C_DIM}]")
+    # Fill remainder
+    if used < width:
+        parts.append(f"[{C_DIM}]{'▎' * (width - used)}[/{C_DIM}]")
     return "".join(parts)
 
 
@@ -377,10 +387,9 @@ def _render_session_option(
 ) -> str:
     """Render a session as a formatted multi-line OptionList entry.
 
-    Layout — 4 lines with tool/file metadata:
-      {icon} {title}                                     {badge}
-         {model}  {msgs}  {duration}  {age}              {sid}
-         ████████░░░░░░  app.py sessions.py +4           {project}
+    Layout — 3 lines:
+      {icon} {title}                                         {badge}
+         {model}  {msgs}  {duration}  {age}  {sid}  ▎▎▎▎░░  files  {project}
          {role}: {snippet}
     """
     INDENT = "    "  # 4 spaces — nested under title
@@ -411,10 +420,21 @@ def _render_session_option(
     else:
         line1 = f" {icon} {title_fmt}"
 
-    # Line 2: model, msgs, duration, age — no tokens/cost
+    # Line 2: model, msgs, duration, age, sid, then bar + files + project
     dur_str = f"{duration:<8}" if duration else ""
     dur_len = 8 if duration else 0
-    meta_left_len = 4 + 8 + 10 + dur_len + len(age_str)  # indent + cols
+
+    # Build the trailing enrichment (bar, files, project)
+    bar = _tool_bar(s.tool_counts)
+    files = _file_touchpoints(s.files_mutated)
+    proj_label = ""
+    if ws_repo_path and s.project_path and s.project_path.rstrip("/") != ws_repo_path.rstrip("/"):
+        proj_label = f"[{C_DIM}]{Path(s.project_path).name}[/{C_DIM}]"
+    trail_parts = [p for p in (bar, files, proj_label) if p]
+    trail = "  ".join(trail_parts)
+    trail_suffix = f"  {trail}" if trail else ""
+
+    meta_left_len = 4 + 8 + 10 + dur_len + len(age_str)
     sid_gap = max(2, LINE_WIDTH - meta_left_len - 8)
 
     line2 = (
@@ -422,32 +442,12 @@ def _render_session_option(
         f"{dur_str}"
         f"{age_str}"
         f"{' ' * sid_gap}{sid}[/{C_DIM}]"
+        f"{trail_suffix}"
     )
 
     lines = [line1, line2]
 
-    # Line 3: tool usage bar + file touchpoints + project path (when differs)
-    bar = _tool_bar(s.tool_counts)
-    files = _file_touchpoints(s.files_mutated)
-    # Project path: show only when it differs from workstream repo
-    proj_label = ""
-    if ws_repo_path and s.project_path and s.project_path.rstrip("/") != ws_repo_path.rstrip("/"):
-        proj_label = f"[{C_DIM}]{Path(s.project_path).name}[/{C_DIM}]"
-
-    tool_parts = [p for p in (bar, files) if p]
-    if tool_parts or proj_label:
-        left = "  ".join(tool_parts)
-        if proj_label:
-            import re
-            left_plain = re.sub(r"\[/?[^\]]*\]", "", left)
-            proj_plain = re.sub(r"\[/?[^\]]*\]", "", proj_label)
-            gap = max(2, LINE_WIDTH - 4 - len(left_plain) - len(proj_plain))
-            line3 = f"{INDENT}{left}{' ' * gap}{proj_label}" if left else f"{INDENT}{' ' * (LINE_WIDTH - 4 - len(proj_plain))}{proj_label}"
-        else:
-            line3 = f"{INDENT}{left}"
-        lines.append(line3)
-
-    # Line 4: last message snippet
+    # Line 3: last message snippet
     if s.last_message_text:
         max_snippet = title_width + 12
         snippet = _rich_escape(s.last_message_text[:max_snippet])
@@ -495,10 +495,9 @@ def _render_content_search_result(
 ) -> str:
     """Render a content search result as a formatted OptionList entry.
 
-    Same visual structure as _render_session_option:
+    Same visual structure as _render_session_option (3 lines):
       {✸} {title}                                    {hit count}
-         {model}  {msgs}  {duration}  {age}           {sid}
-         ████████░░░░░░  app.py sessions.py +4        {project}
+         {model}  {msgs}  {duration}  {age}  {sid}  ▎▎▎▎░░  files  {project}
          {role}: {highlighted snippet}
     """
     INDENT = "    "
@@ -519,9 +518,19 @@ def _render_content_search_result(
     fill = max(2, LINE_WIDTH - prefix_w - len(title_raw) - len(hits_str))
     line1 = f" \u2738 {title}{' ' * fill}[{C_YELLOW}]{hits_str}[/{C_YELLOW}]"
 
-    # Line 2: no tokens/cost
+    # Line 2: meta + bar + files + project (all on one line)
     dur_str = f"{duration:<8}" if duration else ""
     dur_len = 8 if duration else 0
+
+    bar = _tool_bar(s.tool_counts)
+    files = _file_touchpoints(s.files_mutated)
+    proj_label = ""
+    if ws_repo_path and s.project_path and s.project_path.rstrip("/") != ws_repo_path.rstrip("/"):
+        proj_label = f"[{C_DIM}]{Path(s.project_path).name}[/{C_DIM}]"
+    trail_parts = [p for p in (bar, files, proj_label) if p]
+    trail = "  ".join(trail_parts)
+    trail_suffix = f"  {trail}" if trail else ""
+
     meta_left_len = 4 + 8 + 10 + dur_len + len(age_str)
     sid_gap = max(2, LINE_WIDTH - meta_left_len - 8)
 
@@ -530,29 +539,10 @@ def _render_content_search_result(
         f"{dur_str}"
         f"{age_str}"
         f"{' ' * sid_gap}{sid}[/{C_DIM}]"
+        f"{trail_suffix}"
     )
 
     lines = [line1, line2]
-
-    # Line 3: tool usage bar + file touchpoints + project path
-    bar = _tool_bar(s.tool_counts)
-    files = _file_touchpoints(s.files_mutated)
-    proj_label = ""
-    if ws_repo_path and s.project_path and s.project_path.rstrip("/") != ws_repo_path.rstrip("/"):
-        proj_label = f"[{C_DIM}]{Path(s.project_path).name}[/{C_DIM}]"
-
-    tool_parts = [p for p in (bar, files) if p]
-    if tool_parts or proj_label:
-        import re
-        left = "  ".join(tool_parts)
-        if proj_label:
-            left_plain = re.sub(r"\[/?[^\]]*\]", "", left)
-            proj_plain = re.sub(r"\[/?[^\]]*\]", "", proj_label)
-            gap = max(2, LINE_WIDTH - 4 - len(left_plain) - len(proj_plain))
-            line3 = f"{INDENT}{left}{' ' * gap}{proj_label}" if left else f"{INDENT}{' ' * (LINE_WIDTH - 4 - len(proj_plain))}{proj_label}"
-        else:
-            line3 = f"{INDENT}{left}"
-        lines.append(line3)
 
     # Snippet line
     role_tag = "you" if hit.role == "user" else "claude"
