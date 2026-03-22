@@ -26,7 +26,7 @@ from textual.widgets import Static
 
 from models import Link, Store, Workstream
 from rendering import (
-    BG_RAISED, BG_BASE,
+    BG_RAISED, BG_BASE, BG_SURFACE,
     C_BLUE, C_CYAN, C_DIM, C_FAINT, C_MID, C_ORANGE,
     C_PURPLE, C_YELLOW,
     STATUS_THEME, CATEGORY_THEME,
@@ -38,7 +38,7 @@ from thread_namer import get_session_title
 log = logging.getLogger("orch.claude_session")
 
 # Keys that pass through the TerminalWidget to the screen for panel navigation
-_PASSTHROUGH_KEYS = {"ctrl+j", "ctrl+k", "ctrl+e"}
+_PASSTHROUGH_KEYS = {"ctrl+j", "ctrl+k", "ctrl+e", "ctrl+h"}
 
 ORCH_DIR = str(Path(__file__).parent)
 
@@ -50,9 +50,9 @@ class SessionHeaderWidget(Static):
 
     DEFAULT_CSS = f"""
     SessionHeaderWidget {{
-        height: 3;
+        height: auto;
+        padding: 1 3;
         background: {BG_RAISED};
-        padding: 0 1;
     }}
     """
 
@@ -193,8 +193,10 @@ class SessionFooterWidget(Static):
     DEFAULT_CSS = f"""
     SessionFooterWidget {{
         height: 1;
+        padding: 0 2;
         background: {BG_RAISED};
-        padding: 0 1;
+        color: {C_DIM};
+        dock: bottom;
     }}
     """
 
@@ -229,15 +231,19 @@ class ClaudeSessionScreen(Screen):
 
     BINDINGS = [
         Binding("ctrl+e", "extract_todo", "Extract todo", priority=True),
+        Binding("backspace,ctrl+h", "go_back", "^H back", priority=True),
     ]
 
     DEFAULT_CSS = f"""
     ClaudeSessionScreen {{
+        align: center middle;
         background: {BG_BASE};
     }}
     #cs-outer {{
         width: 100%;
         height: 100%;
+        padding: 0;
+        background: {BG_BASE};
     }}
     #cs-main-col {{
         width: 1fr;
@@ -245,14 +251,13 @@ class ClaudeSessionScreen(Screen):
     #cs-sidebar {{
         width: 36;
     }}
-    #cs-terminal {{
+    #cs-terminal, #cs-tig-status, #cs-tig-log {{
         height: 1fr;
+        border: blank;
     }}
-    #cs-tig-status {{
-        height: 1fr;
-    }}
-    #cs-tig-log {{
-        height: 1fr;
+    #cs-terminal.pane-focused, #cs-tig-status.pane-focused, #cs-tig-log.pane-focused {{
+        border: round {C_BLUE};
+        background: {BG_SURFACE};
     }}
     """
 
@@ -480,6 +485,7 @@ set status-view-show-untracked-dirs = no
             except Exception as e:
                 log.error("  FAILED to start %s: %s", tw.id, e)
         self.query_one("#cs-terminal", TerminalWidget).focus()
+        self._update_pane_focus()
         log.debug("ClaudeSessionScreen.on_mount: done")
 
     def on_unmount(self) -> None:
@@ -547,9 +553,27 @@ set status-view-show-untracked-dirs = no
         except Exception:
             pass
 
+    # ── Navigation ─────────────────────────────────────────────────
+
+    def action_go_back(self) -> None:
+        """Dismiss the session screen (ctrl+h / backspace)."""
+        self.dismiss(None)
+
     # ── Panel navigation ──────────────────────────────────────────
 
     _PANEL_IDS = ["cs-terminal", "cs-tig-status", "cs-tig-log"]
+
+    def _update_pane_focus(self) -> None:
+        """Toggle pane-focused class to match _active_panel."""
+        for pid in self._PANEL_IDS:
+            try:
+                w = self.query_one(f"#{pid}")
+                if pid == self._active_panel:
+                    w.add_class("pane-focused")
+                else:
+                    w.remove_class("pane-focused")
+            except Exception:
+                pass
 
     def action_next_panel(self) -> None:
         try:
@@ -558,6 +582,7 @@ set status-view-show-untracked-dirs = no
             idx = 0
         next_id = self._PANEL_IDS[(idx + 1) % len(self._PANEL_IDS)]
         self._active_panel = next_id
+        self._update_pane_focus()
         try:
             self.query_one(f"#{next_id}").focus()
         except Exception:
@@ -570,6 +595,7 @@ set status-view-show-untracked-dirs = no
             idx = 0
         prev_id = self._PANEL_IDS[(idx - 1) % len(self._PANEL_IDS)]
         self._active_panel = prev_id
+        self._update_pane_focus()
         try:
             self.query_one(f"#{prev_id}").focus()
         except Exception:
