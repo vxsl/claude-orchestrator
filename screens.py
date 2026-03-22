@@ -317,7 +317,7 @@ class TodoScreen(_VimOptionListMixin, ModalScreen[None]):
     }}
     #todo-active > .option-list--option-highlighted,
     #todo-archived > .option-list--option-highlighted {{
-        background: #0a0a0a;
+        background: #111111;
     }}
     #todo-no-active, #todo-no-archived {{
         padding: 1 3;
@@ -887,7 +887,7 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
     }}
     #detail-sessions > .option-list--option-highlighted,
     #detail-archived > .option-list--option-highlighted {{
-        background: #0a0a0a;
+        background: #111111;
     }}
     #detail-search-input {{
         display: none;
@@ -944,7 +944,7 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         background: {BG_BASE};
     }}
     #detail-feed > .option-list--option-highlighted {{
-        background: #0a0a0a;
+        background: #111111;
     }}
     #detail-no-feed {{
         padding: 1 3;

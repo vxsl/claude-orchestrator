@@ -31,7 +31,7 @@ DataTable > .datatable--header {
     background: #000000;
 }
 DataTable > .datatable--cursor {
-    background: #0a0a0a;
+    background: #111111;
     color: #e6edf3;
     text-style: bold;
 }
@@ -55,7 +55,7 @@ OptionList > .option-list--option {
     background: transparent;
 }
 OptionList > .option-list--option-highlighted {
-    background: #0a0a0a;
+    background: #111111;
     text-style: bold;
 }
 OptionList > .option-list--option-hover {
