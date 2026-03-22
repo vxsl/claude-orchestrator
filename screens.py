@@ -1625,6 +1625,11 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
 
     def on_key(self, event) -> None:
         """Handle backspace navigation and special keys in search input."""
+        # DEBUG: log every key event that reaches this screen
+        with open("/tmp/orch_keys.log", "a") as f:
+            f.write(f"on_key: key={event.key!r} char={event.character!r} is_forwarded={event.is_forwarded}\n")
+        self.notify(f"key={event.key!r}", timeout=3)
+
         if event.key in ("backspace", "ctrl+h"):
             event.stop()
             event.prevent_default()
