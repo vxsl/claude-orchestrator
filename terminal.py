@@ -511,11 +511,60 @@ class TerminalWidget(Widget, can_focus=True):
     def get_content_height(self, container, viewport, width):
         return self._nrow
 
+    def _scrollbar_char(self, y: int) -> str | None:
+        """Return scrollbar character for row y, or None if not scrolled."""
+        if self._scroll_offset <= 0 or not self._backend:
+            return None
+        sb_len = len(self._backend.scrollback)
+        if sb_len == 0:
+            return None
+        total = sb_len + self._nrow
+        # Thumb position and size mapped to screen height
+        thumb_size = max(1, self._nrow * self._nrow // total)
+        # viewport_top as fraction of total scrollable range
+        viewport_top = sb_len - self._scroll_offset
+        thumb_top = viewport_top * self._nrow // total
+        thumb_top = min(thumb_top, self._nrow - thumb_size)
+        if thumb_top <= y < thumb_top + thumb_size:
+            return "┃"
+        return "│"
+
     def render_line(self, y: int) -> Strip:
         """Render a single terminal line as a Textual Strip."""
         if self._backend:
-            return self._render_line_vterm(y)
-        return self._render_line_pyte(y)
+            strip = self._render_line_vterm(y)
+        else:
+            strip = self._render_line_pyte(y)
+        # Overlay scrollbar on rightmost column when scrolled
+        sb_char = self._scrollbar_char(y)
+        if sb_char is not None:
+            return self._overlay_scrollbar(strip, sb_char)
+        return strip
+
+    def _overlay_scrollbar(self, strip: Strip, char: str) -> Strip:
+        """Replace the last character of a strip with a scrollbar indicator."""
+        _thumb = Style(color="#888888")
+        _track = Style(color="#333333")
+        style = _thumb if char == "┃" else _track
+        # Rebuild segments: trim last char, append scrollbar
+        segments = list(strip)
+        if not segments:
+            return strip
+        # Walk segments to find total width, trim last char
+        total_w = sum(len(s.text) for s in segments)
+        if total_w < 1:
+            return strip
+        # Trim last character from last non-empty segment
+        new_segs: list[Segment] = []
+        trimmed = False
+        for seg in reversed(segments):
+            if not trimmed and seg.text:
+                new_segs.insert(0, Segment(seg.text[:-1], seg.style))
+                trimmed = True
+            else:
+                new_segs.insert(0, seg)
+        new_segs.append(Segment(char, style))
+        return Strip(new_segs, self._ncol)
 
     def _render_scrollback_line(self, sb_index: int) -> Strip:
         """Render a line from the scrollback buffer using raw cell data."""
