@@ -10,11 +10,9 @@ if [ -n "$TMUX" ]; then
     tmux unbind -n C-j 2>/dev/null
     tmux unbind -n C-k 2>/dev/null
     tmux unbind -n C-l 2>/dev/null
-    # C-h/C-j/C-k from Claude session windows jump back to the orch TUI (window 0).
+    # C-h from Claude session windows jumps back to the orch TUI (window 0).
     # When already on window 0, pass the key through so the TUI can use it.
     tmux bind -n C-h if-shell '[ "#{window_index}" = "0" ]' 'send-keys C-h' 'select-window -t orch:0' 2>/dev/null
-    tmux bind -n C-j if-shell '[ "#{window_index}" = "0" ]' 'send-keys C-j' 'select-window -t orch:0' 2>/dev/null
-    tmux bind -n C-k if-shell '[ "#{window_index}" = "0" ]' 'send-keys C-k' 'select-window -t orch:0' 2>/dev/null
 fi
 
 exec -a orch python3 "$SCRIPT_DIR/orch.py" "$@"
