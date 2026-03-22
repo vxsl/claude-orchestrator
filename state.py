@@ -390,7 +390,7 @@ def content_search(
     results.sort(key=lambda r: r.total_score, reverse=True)
     return results
 from threads import Thread, ThreadActivity, session_activity, load_last_seen, mark_thread_seen
-from rendering import ViewMode, _best_activity
+from rendering import ViewMode, _best_activity, _all_sessions_seen
 
 
 class AppState:
@@ -512,12 +512,11 @@ class AppState:
         def _has_unread(ws: Workstream) -> bool:
             sessions = self.sessions_for_ws(ws)
             best = _best_activity(sessions, last_seen)
-            return best in (
-                ThreadActivity.THINKING,
-                ThreadActivity.RESPONSE_FRESH,
-                ThreadActivity.RESPONSE_READY,
-                ThreadActivity.AWAITING_INPUT,
-            )
+            if best == ThreadActivity.THINKING:
+                return True
+            if best in (ThreadActivity.RESPONSE_FRESH, ThreadActivity.RESPONSE_READY, ThreadActivity.AWAITING_INPUT):
+                return not _all_sessions_seen(sessions, last_seen)
+            return False
 
         discovered.sort(key=lambda w: w.last_user_activity or w.updated_at or "", reverse=True)
         discovered.sort(key=lambda w: 0 if _has_unread(w) else 1)

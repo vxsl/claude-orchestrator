@@ -556,13 +556,23 @@ class TodoScreen(_VimOptionListMixin, ModalScreen[None]):
         if not item:
             return
         self._app_state.toggle_todo(self.ws.id, item.id)
-        # Update the option prompt in place to avoid clear_options() focus loss
+        # Re-sort and replace all prompts in place — avoids clear_options() focus loss.
+        # Option count doesn't change (toggling done doesn't remove from active).
+        from state import AppState
+        self.ws = self.store.get(self.ws.id) or self.ws
+        new_items = AppState.active_todos(self.ws)
         olist = self._focused_olist()
-        idx = olist.highlighted
-        if idx is not None:
-            is_archived = self._active_pane == "archived"
-            prompt = _render_todo_option(item, is_archived=is_archived)
-            olist.replace_option_prompt_at_index(idx, prompt)
+        is_archived = self._active_pane == "archived"
+        for i, t in enumerate(new_items):
+            prompt = _render_todo_option(t, is_archived=is_archived)
+            olist.replace_option_prompt_at_index(i, prompt)
+        # Move highlight to the item's new position
+        new_idx = next((i for i, t in enumerate(new_items) if t.id == item.id), 0)
+        olist.highlighted = new_idx
+        if is_archived:
+            self._archived_items = new_items
+        else:
+            self._active_items = new_items
         self._update_context_preview()
 
     def action_edit_todo(self):
@@ -1318,7 +1328,8 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
             act = session_activity(s, self._last_seen_cache)
             if act in (ThreadActivity.THINKING, ThreadActivity.AWAITING_INPUT):
                 animating.append((i, act))
-            prompt = _render_session_option(s, act, self._throbber_frame, ws_repo_path=self.ws.repo_path)
+            seen = _is_session_seen(s, self._last_seen_cache)
+            prompt = _render_session_option(s, act, self._throbber_frame, ws_repo_path=self.ws.repo_path, seen=seen)
             log.debug("build_session_list[%d] id=%s title=%s", i, s.session_id, s.display_name)
             olist.add_option(Option(prompt, id=s.session_id))
         self._animating_sessions = animating
@@ -1332,7 +1343,8 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
             act = session_activity(s, self._last_seen_cache)
             if act in (ThreadActivity.THINKING, ThreadActivity.AWAITING_INPUT):
                 animating.append((i, act))
-            prompt = _render_session_option(s, act, self._throbber_frame, ws_repo_path=self.ws.repo_path)
+            seen = _is_session_seen(s, self._last_seen_cache)
+            prompt = _render_session_option(s, act, self._throbber_frame, ws_repo_path=self.ws.repo_path, seen=seen)
             olist.add_option(Option(prompt, id=f"a:{s.session_id}"))
         self._animating_archived = animating
 
@@ -2321,7 +2333,8 @@ class SessionPickerScreen(_VimOptionListMixin, ModalScreen[ClaudeSession | None]
         options = []
         for i, s in enumerate(self.picker_sessions):
             act = session_activity(s, self._last_seen_cache)
-            prompt = _render_session_option(s, act, self._throbber_frame, ws_repo_path=self.ws.repo_path)
+            seen = _is_session_seen(s, self._last_seen_cache)
+            prompt = _render_session_option(s, act, self._throbber_frame, ws_repo_path=self.ws.repo_path, seen=seen)
             options.append(Option(prompt, id=str(i)))
         return options
 

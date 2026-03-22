@@ -244,28 +244,27 @@ THROBBER_FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 
 
 
-def _activity_icon(activity: ThreadActivity, throbber_frame: int = 0) -> str:
+def _activity_icon(activity: ThreadActivity, throbber_frame: int = 0, seen: bool = False) -> str:
     """Return a Rich-markup activity indicator."""
     if activity == ThreadActivity.THINKING:
         return f"[bold {C_CYAN}]◉[/bold {C_CYAN}]"
-    if activity == ThreadActivity.AWAITING_INPUT:
-        return f"[{C_YELLOW}]●[/{C_YELLOW}]"
-    if activity == ThreadActivity.RESPONSE_READY:
-        return f"[{C_YELLOW}]●[/{C_YELLOW}]"
+    if activity in (ThreadActivity.AWAITING_INPUT, ThreadActivity.RESPONSE_READY):
+        color = C_DIM if seen else C_YELLOW
+        return f"[{color}]●[/{color}]"
     return f"[{C_DIM}]·[/{C_DIM}]"
 
 
-def _activity_badge(activity: ThreadActivity) -> str:
+def _activity_badge(activity: ThreadActivity, seen: bool = False) -> str:
     """Return a Rich-markup pill/badge for non-idle activity states.
 
-    AWAITING_INPUT (live session) renders bold to subtly indicate liveness.
+    When seen=True, "your turn" renders dim to indicate the user has
+    already visited this session since its last activity.
     """
     if activity == ThreadActivity.THINKING:
         return f"[italic {C_CYAN}]thinking…[/italic {C_CYAN}]"
-    if activity == ThreadActivity.AWAITING_INPUT:
-        return f"[{C_YELLOW}]your turn[/{C_YELLOW}]"
-    if activity == ThreadActivity.RESPONSE_READY:
-        return f"[{C_YELLOW}]your turn[/{C_YELLOW}]"
+    if activity in (ThreadActivity.AWAITING_INPUT, ThreadActivity.RESPONSE_READY):
+        color = C_DIM if seen else C_YELLOW
+        return f"[{color}]your turn[/{color}]"
     return ""
 
 
@@ -279,6 +278,28 @@ def _best_activity(sessions: list, last_seen: dict[str, str] | None = None) -> T
         if _ACTIVITY_PRIORITY[act] < _ACTIVITY_PRIORITY[best]:
             best = act
     return best
+
+
+def _is_session_seen(session, last_seen: dict[str, str] | None = None) -> bool:
+    """True if user has viewed this session since its last activity."""
+    if not last_seen:
+        return False
+    seen_ts = last_seen.get(session.session_id)
+    if not seen_ts or not session.last_activity:
+        return False
+    return seen_ts >= session.last_activity
+
+
+def _all_sessions_seen(sessions: list, last_seen: dict[str, str] | None = None) -> bool:
+    """True if every 'your turn' session in the list has been seen."""
+    if not sessions or not last_seen:
+        return False
+    for s in sessions:
+        act = session_activity(s, last_seen)
+        if act in (ThreadActivity.AWAITING_INPUT, ThreadActivity.RESPONSE_READY):
+            if not _is_session_seen(s, last_seen):
+                return False
+    return True
 
 
 # ─── Session Option Rendering ────────────────────────────────────────
@@ -373,7 +394,7 @@ def _file_touchpoints(files: list[str]) -> str:
 
 def _render_session_option(
     s: ClaudeSession, act: ThreadActivity, throbber_frame: int = 0,
-    title_width: int = 48, ws_repo_path: str = "",
+    title_width: int = 48, ws_repo_path: str = "", seen: bool = False,
 ) -> str:
     """Render a session as a formatted multi-line OptionList entry.
 
@@ -386,8 +407,8 @@ def _render_session_option(
     INDENT = "    "  # 4 spaces — nested under title
     LINE_WIDTH = title_width + 20  # right-alignment anchor
 
-    icon = _activity_icon(act, throbber_frame)
-    badge = _activity_badge(act)
+    icon = _activity_icon(act, throbber_frame, seen=seen)
+    badge = _activity_badge(act, seen=seen)
     badge_w = _BADGE_WIDTHS.get(act, 0)
     model = _short_model(s.model)
     title_raw = _session_title(s)[:title_width]
