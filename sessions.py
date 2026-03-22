@@ -14,6 +14,23 @@ CLAUDE_PROJECTS_DIR = Path.home() / ".claude" / "projects"
 CLAUDE_SESSIONS_DIR = Path.home() / ".claude" / "sessions"
 
 
+# ─── Tool category mapping ────────────────────────────────────────
+_TOOL_CATEGORIES: dict[str, str] = {
+    "Edit": "mutate",
+    "Write": "mutate",
+    "MultiEdit": "mutate",
+    "NotebookEdit": "mutate",
+    "Read": "read",
+    "Grep": "search",
+    "Glob": "search",
+    "ToolSearch": "search",
+    "Bash": "bash",
+    "Agent": "agent",
+    "TaskCreate": "agent",
+    "TaskUpdate": "agent",
+}
+
+
 @dataclass
 class SessionMessage:
     """A single message extracted from a session JSONL for content search."""
@@ -154,6 +171,30 @@ class ClaudeSession:
     all_session_ids: list[str] = field(default_factory=list)  # All sessionIds found in JSONL (for resume matching)
     last_message_text: str = ""  # Snippet of last user or assistant message
     last_tool_name: str = ""     # Name of last tool_use in assistant message
+    tool_counts: dict[str, int] = field(default_factory=dict)  # category -> count
+    files_mutated: list[str] = field(default_factory=list)      # basenames, ordered by first touch
+
+    @property
+    def duration_display(self) -> str:
+        """Human-readable session duration from started_at to last_activity."""
+        if not self.started_at or not self.last_activity:
+            return ""
+        try:
+            start = datetime.fromisoformat(self.started_at.replace("Z", "+00:00"))
+            end = datetime.fromisoformat(self.last_activity.replace("Z", "+00:00"))
+            seconds = int((end - start).total_seconds())
+            if seconds < 60:
+                return ""
+            minutes = seconds // 60
+            if minutes < 60:
+                return f"{minutes}m"
+            hours = minutes // 60
+            mins = minutes % 60
+            if mins:
+                return f"{hours}h{mins:02d}m"
+            return f"{hours}h"
+        except (ValueError, TypeError):
+            return ""
 
     @property
     def model_short(self) -> str:
@@ -344,6 +385,17 @@ def parse_session(jsonl_path: Path) -> Optional[ClaudeSession]:
                     session.last_tool_name = _last_tool_name(msg) or ""
                     if not session.model and msg.get("model"):
                         session.model = msg["model"]
+                    # Scan content blocks for tool usage
+                    for block in msg.get("content", []):
+                        if isinstance(block, dict) and block.get("type") == "tool_use":
+                            cat = _TOOL_CATEGORIES.get(block.get("name", ""), "other")
+                            session.tool_counts[cat] = session.tool_counts.get(cat, 0) + 1
+                            if cat == "mutate":
+                                fp = block.get("input", {}).get("file_path", "")
+                                if fp:
+                                    bn = Path(fp).name
+                                    if bn not in session.files_mutated:
+                                        session.files_mutated.append(bn)
 
             session.started_at = first_ts or ""
             session.last_activity = last_ts or first_ts or ""

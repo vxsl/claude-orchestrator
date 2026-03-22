@@ -321,15 +321,45 @@ _BADGE_WIDTHS = {
 }
 
 
+def _tool_glyphs(tool_counts: dict[str, int]) -> str:
+    """Render non-zero tool categories as colored glyph+count pairs."""
+    # Ordered by impact
+    _GLYPH_MAP = [
+        ("mutate", "\u270e", C_ORANGE),   # ✎
+        ("bash",   "$",      C_LIGHT),
+        ("read",   "\u25c9", C_DIM),       # ◉
+        ("search", "\u2315", C_DIM),       # ⌕
+        ("agent",  "\u25c7", C_PURPLE),    # ◇
+    ]
+    parts: list[str] = []
+    for cat, glyph, color in _GLYPH_MAP:
+        n = tool_counts.get(cat, 0)
+        if n:
+            parts.append(f"[{color}]{glyph}{n}[/{color}]")
+    return " ".join(parts)
+
+
+def _file_touchpoints(files: list[str]) -> str:
+    """Render mutated file basenames, with overflow indicator."""
+    if not files:
+        return ""
+    if len(files) <= 3:
+        return f"[{C_DIM}]{' '.join(files)}[/{C_DIM}]"
+    shown = " ".join(files[:2])
+    extra = len(files) - 2
+    return f"[{C_DIM}]{shown} +{extra}[/{C_DIM}]"
+
+
 def _render_session_option(
     s: ClaudeSession, act: ThreadActivity, throbber_frame: int = 0,
-    title_width: int = 48,
+    title_width: int = 48, ws_repo_path: str = "",
 ) -> str:
     """Render a session as a formatted multi-line OptionList entry.
 
-    Layout — tighter spacing, consistent right anchor for badge + sid:
+    Layout — 4 lines with tool/file metadata:
       {icon} {title}                                     {badge}
-         {model}  {msgs}  {tokens}  {age}                {sid}
+         {model}  {msgs}  {tokens}  {duration}  {age}    {sid}
+         ✎7 $12 ◉3  app.py sessions.py +4               {project}
          {role}: {snippet}
     """
     INDENT = "    "  # 4 spaces — nested under title
@@ -344,17 +374,16 @@ def _render_session_option(
     sid = s.session_id[:8]
     tokens_plain = s.tokens_display
     msgs_str = f"{s.message_count} msgs"
+    duration = s.duration_display
     age_str = s.age
 
     # Title styling: idle sessions are dimmed, everything else is normal weight.
-    # Activity state is communicated by the icon + badge, not the title color.
     if act == ThreadActivity.IDLE:
         title_fmt = f"[{C_DIM}]{title_esc}[/{C_DIM}]"
     else:
         title_fmt = f"[{C_LIGHT}]{title_esc}[/{C_LIGHT}]"
 
     # Line 1: " {icon} {title}          {badge}"
-    # Badge right-aligned to LINE_WIDTH; no badge for idle
     prefix_w = 3  # visible: space + icon + space
     if badge:
         fill = max(2, LINE_WIDTH - prefix_w - len(title_raw) - badge_w)
@@ -363,8 +392,10 @@ def _render_session_option(
         line1 = f" {icon} {title_fmt}"
 
     # Line 2: fixed-width columns, sid right-aligned to LINE_WIDTH
-    # Columns: model(8) + msgs(10) + tokens(8) + age
-    meta_left_len = 4 + 8 + 10 + 8 + len(age_str)  # indent + cols
+    # Columns: model(8) + msgs(10) + tokens(8) + duration(8) + age
+    dur_str = f"{duration:<8}" if duration else ""
+    dur_len = 8 if duration else 0
+    meta_left_len = 4 + 8 + 10 + 8 + dur_len + len(age_str)  # indent + cols
     sid_gap = max(2, LINE_WIDTH - meta_left_len - 8)
 
     tokens_fmt = _colored_tokens(s)
@@ -372,11 +403,38 @@ def _render_session_option(
     line2 = (
         f"{INDENT}[{C_DIM}]{model:<8}{msgs_str:<10}[/{C_DIM}]"
         f"{tokens_fmt}"
-        f"[{C_DIM}]{tok_pad}{age_str}"
+        f"[{C_DIM}]{tok_pad}"
+        f"{dur_str}"
+        f"{age_str}"
         f"{' ' * sid_gap}{sid}[/{C_DIM}]"
     )
 
-    # Line 3: last message snippet — always subdued context, not status
+    lines = [line1, line2]
+
+    # Line 3: tool glyphs + file touchpoints + project path (when differs)
+    glyphs = _tool_glyphs(s.tool_counts)
+    files = _file_touchpoints(s.files_mutated)
+    # Project path: show only when it differs from workstream repo
+    proj_label = ""
+    if ws_repo_path and s.project_path and s.project_path.rstrip("/") != ws_repo_path.rstrip("/"):
+        proj_label = f"[{C_DIM}]{Path(s.project_path).name}[/{C_DIM}]"
+
+    tool_parts = [p for p in (glyphs, files) if p]
+    if tool_parts or proj_label:
+        left = "  ".join(tool_parts)
+        if proj_label:
+            # Right-align project label
+            # Estimate left width for padding (strip markup for length)
+            import re
+            left_plain = re.sub(r"\[/?[^\]]*\]", "", left)
+            proj_plain = re.sub(r"\[/?[^\]]*\]", "", proj_label)
+            gap = max(2, LINE_WIDTH - 4 - len(left_plain) - len(proj_plain))
+            line3 = f"{INDENT}{left}{' ' * gap}{proj_label}" if left else f"{INDENT}{' ' * (LINE_WIDTH - 4 - len(proj_plain))}{proj_label}"
+        else:
+            line3 = f"{INDENT}{left}"
+        lines.append(line3)
+
+    # Line 4: last message snippet
     if s.last_message_text:
         max_snippet = title_width + 12
         snippet = _rich_escape(s.last_message_text[:max_snippet])
@@ -384,9 +442,9 @@ def _render_session_option(
             snippet += "…"
         is_user = s.last_message_role == "user"
         role_tag = "you" if is_user else "claude"
-        line3 = f"{INDENT}[{C_DIM}]{role_tag}: {snippet}[/{C_DIM}]"
-        return f"{line1}\n{line2}\n{line3}"
-    return f"{line1}\n{line2}"
+        lines.append(f"{INDENT}[{C_DIM}]{role_tag}: {snippet}[/{C_DIM}]")
+
+    return "\n".join(lines)
 
 
 # ─── Content search result rendering ─────────────────────────────
@@ -420,12 +478,14 @@ def _highlight_snippet(snippet: str, match_ranges: list[tuple[int, int]]) -> str
 def _render_content_search_result(
     result,  # SessionSearchResult — avoid circular import
     title_width: int = 48,
+    ws_repo_path: str = "",
 ) -> str:
     """Render a content search result as a formatted OptionList entry.
 
     Same visual structure as _render_session_option:
       {✸} {title}                                    {hit count}
-         {model}  {msgs}  {tokens}  {age}             {sid}
+         {model}  {msgs}  {tokens}  {duration}  {age} {sid}
+         ✎7 $12 ◉3  app.py sessions.py +4             {project}
          {role}: {highlighted snippet}
     """
     INDENT = "    "
@@ -438,6 +498,7 @@ def _render_content_search_result(
     tokens_plain = s.tokens_display
     hits_str = f"{result.hit_count} hit{'s' if result.hit_count != 1 else ''}"
     msgs_str = f"{s.message_count} msgs"
+    duration = s.duration_display
     age_str = s.age
     sid = s.session_id[:8]
 
@@ -447,7 +508,9 @@ def _render_content_search_result(
     line1 = f" \u2738 {title}{' ' * fill}[{C_YELLOW}]{hits_str}[/{C_YELLOW}]"
 
     # Line 2: same columnar layout as session options
-    meta_left_len = 4 + 8 + 10 + 8 + len(age_str)
+    dur_str = f"{duration:<8}" if duration else ""
+    dur_len = 8 if duration else 0
+    meta_left_len = 4 + 8 + 10 + 8 + dur_len + len(age_str)
     sid_gap = max(2, LINE_WIDTH - meta_left_len - 8)
 
     tokens_fmt = _colored_tokens(s)
@@ -455,14 +518,39 @@ def _render_content_search_result(
     line2 = (
         f"{INDENT}[{C_DIM}]{model:<8}{msgs_str:<10}[/{C_DIM}]"
         f"{tokens_fmt}"
-        f"[{C_DIM}]{tok_pad}{age_str}"
+        f"[{C_DIM}]{tok_pad}"
+        f"{dur_str}"
+        f"{age_str}"
         f"{' ' * sid_gap}{sid}[/{C_DIM}]"
     )
 
+    lines = [line1, line2]
+
+    # Line 3: tool glyphs + file touchpoints + project path
+    glyphs = _tool_glyphs(s.tool_counts)
+    files = _file_touchpoints(s.files_mutated)
+    proj_label = ""
+    if ws_repo_path and s.project_path and s.project_path.rstrip("/") != ws_repo_path.rstrip("/"):
+        proj_label = f"[{C_DIM}]{Path(s.project_path).name}[/{C_DIM}]"
+
+    tool_parts = [p for p in (glyphs, files) if p]
+    if tool_parts or proj_label:
+        import re
+        left = "  ".join(tool_parts)
+        if proj_label:
+            left_plain = re.sub(r"\[/?[^\]]*\]", "", left)
+            proj_plain = re.sub(r"\[/?[^\]]*\]", "", proj_label)
+            gap = max(2, LINE_WIDTH - 4 - len(left_plain) - len(proj_plain))
+            line3 = f"{INDENT}{left}{' ' * gap}{proj_label}" if left else f"{INDENT}{' ' * (LINE_WIDTH - 4 - len(proj_plain))}{proj_label}"
+        else:
+            line3 = f"{INDENT}{left}"
+        lines.append(line3)
+
+    # Snippet line
     role_tag = "you" if hit.role == "user" else "claude"
     highlighted = _highlight_snippet(hit.snippet, hit.match_ranges)
-    line3 = f"{INDENT}[{C_DIM}]{role_tag}:[/{C_DIM}] {highlighted}"
-    return f"{line1}\n{line2}\n{line3}"
+    lines.append(f"{INDENT}[{C_DIM}]{role_tag}:[/{C_DIM}] {highlighted}")
+    return "\n".join(lines)
 
 
 # ─── Notification Feed rendering ─────────────────────────────────

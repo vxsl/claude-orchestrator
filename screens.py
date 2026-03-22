@@ -1130,13 +1130,13 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         for i, s in enumerate(self._detail_sessions):
             if i < olist.option_count:
                 act = session_activity(s, self._last_seen_cache)
-                prompt = _render_session_option(s, act, self._throbber_frame)
+                prompt = _render_session_option(s, act, self._throbber_frame, ws_repo_path=self.ws.repo_path)
                 olist.replace_option_prompt_at_index(i, prompt)
         arch_olist = self.query_one("#detail-archived", OptionList)
         for i, s in enumerate(self._archived_sessions):
             if i < arch_olist.option_count:
                 act = session_activity(s, self._last_seen_cache)
-                prompt = _render_session_option(s, act, self._throbber_frame)
+                prompt = _render_session_option(s, act, self._throbber_frame, ws_repo_path=self.ws.repo_path)
                 arch_olist.replace_option_prompt_at_index(i, prompt)
 
     def _tick_throbber(self):
@@ -1149,13 +1149,13 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         for i, _cached_act in self._animating_sessions:
             if i < olist.option_count and i < len(self._detail_sessions):
                 act = session_activity(self._detail_sessions[i], self._last_seen_cache)
-                prompt = _render_session_option(self._detail_sessions[i], act, self._throbber_frame)
+                prompt = _render_session_option(self._detail_sessions[i], act, self._throbber_frame, ws_repo_path=self.ws.repo_path)
                 olist.replace_option_prompt_at_index(i, prompt)
         arch_olist = self.query_one("#detail-archived", OptionList)
         for i, _cached_act in self._animating_archived:
             if i < arch_olist.option_count and i < len(self._archived_sessions):
                 act = session_activity(self._archived_sessions[i], self._last_seen_cache)
-                prompt = _render_session_option(self._archived_sessions[i], act, self._throbber_frame)
+                prompt = _render_session_option(self._archived_sessions[i], act, self._throbber_frame, ws_repo_path=self.ws.repo_path)
                 arch_olist.replace_option_prompt_at_index(i, prompt)
 
     @staticmethod
@@ -1274,7 +1274,7 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
             act = session_activity(s, self._last_seen_cache)
             if act in (ThreadActivity.THINKING, ThreadActivity.AWAITING_INPUT):
                 animating.append((i, act))
-            prompt = _render_session_option(s, act, self._throbber_frame)
+            prompt = _render_session_option(s, act, self._throbber_frame, ws_repo_path=self.ws.repo_path)
             log.debug("build_session_list[%d] id=%s title=%s", i, s.session_id, s.display_name)
             olist.add_option(Option(prompt, id=s.session_id))
         self._animating_sessions = animating
@@ -1288,7 +1288,7 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
             act = session_activity(s, self._last_seen_cache)
             if act in (ThreadActivity.THINKING, ThreadActivity.AWAITING_INPUT):
                 animating.append((i, act))
-            prompt = _render_session_option(s, act, self._throbber_frame)
+            prompt = _render_session_option(s, act, self._throbber_frame, ws_repo_path=self.ws.repo_path)
             olist.add_option(Option(prompt, id=f"a:{s.session_id}"))
         self._animating_archived = animating
 
@@ -1694,7 +1694,7 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
             olist.display = True
             no_sess.display = False
             for r in self._content_results:
-                prompt = _render_content_search_result(r)
+                prompt = _render_content_search_result(r, ws_repo_path=self.ws.repo_path)
                 olist.add_option(Option(prompt, id=r.session.session_id))
             if olist.option_count > 0:
                 olist.highlighted = 0
@@ -2182,7 +2182,7 @@ class SessionPickerScreen(_VimOptionListMixin, ModalScreen[ClaudeSession | None]
         for i, s in enumerate(self.picker_sessions):
             act = session_activity(s, self._last_seen_cache)
             if act in (ThreadActivity.THINKING, ThreadActivity.AWAITING_INPUT):
-                prompt = _render_session_option(s, act, self._throbber_frame)
+                prompt = _render_session_option(s, act, self._throbber_frame, ws_repo_path=self.ws.repo_path)
                 olist.replace_option_prompt_at_index(i, prompt)
 
     @work(thread=True)
@@ -2197,7 +2197,7 @@ class SessionPickerScreen(_VimOptionListMixin, ModalScreen[ClaudeSession | None]
         options = []
         for i, s in enumerate(self.picker_sessions):
             act = session_activity(s, self._last_seen_cache)
-            prompt = _render_session_option(s, act, self._throbber_frame)
+            prompt = _render_session_option(s, act, self._throbber_frame, ws_repo_path=self.ws.repo_path)
             options.append(Option(prompt, id=str(i)))
         return options
 
