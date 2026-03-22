@@ -678,6 +678,19 @@ def _get_resumed_session_id(pid: int) -> str:
 
 _live_ids_cache: tuple[float, str, set[str]] = (0.0, "", set())
 
+# Mtime cache for session .json files: path_str -> (mtime, pid, sessionId)
+_session_json_cache: dict[str, tuple[float, int, str]] = {}
+
+
+def invalidate_live_session_cache() -> None:
+    """Force next get_live_session_ids() call to re-read from disk.
+
+    Call this when a session .json file changes (start/stop) so the
+    cached result doesn't mask the change.
+    """
+    global _live_ids_cache
+    _live_ids_cache = (0.0, "", set())
+
 
 def get_live_session_ids() -> set[str]:
     """Read ~/.claude/sessions/*.json to find currently-running session IDs.
@@ -686,13 +699,13 @@ def get_live_session_ids() -> set[str]:
     We verify the PID is still alive before considering it live.
     Also resolves --resume arguments so the original session ID is included.
 
-    Results are cached for 2 seconds to avoid redundant /proc scans when
-    called multiple times within the same poll cycle.
+    Results are cached for 10 seconds. The file watcher handles real-time
+    session start/stop by calling invalidate_live_session_cache().
     """
     global _live_ids_cache
     now = time.monotonic()
     dir_str = str(CLAUDE_SESSIONS_DIR)
-    if now - _live_ids_cache[0] < 2.0 and _live_ids_cache[1] == dir_str:
+    if now - _live_ids_cache[0] < 10.0 and _live_ids_cache[1] == dir_str:
         return _live_ids_cache[2]
 
     live: set[str] = set()
@@ -700,27 +713,48 @@ def get_live_session_ids() -> set[str]:
         _live_ids_cache = (now, dir_str, live)
         return live
 
+    seen_paths: set[str] = set()
     for f in CLAUDE_SESSIONS_DIR.iterdir():
         if not f.suffix == ".json":
             continue
+        path_str = str(f)
+        seen_paths.add(path_str)
         try:
-            data = json.loads(f.read_text())
-            pid = data.get("pid")
-            session_id = data.get("sessionId")
-            if not session_id or not pid:
-                continue
-            # Check if the process is still running
-            try:
-                os.kill(pid, 0)
-                live.add(session_id)
-                # Also add the original session ID if this is a resumed session
-                original = _get_resumed_session_id(pid)
-                if original:
-                    live.add(original)
-            except (OSError, ProcessLookupError):
-                pass
-        except (OSError, json.JSONDecodeError):
+            mtime = f.stat().st_mtime
+        except OSError:
             continue
+
+        # Use mtime-cached file contents to avoid redundant JSON parsing
+        cached = _session_json_cache.get(path_str)
+        if cached and cached[0] == mtime:
+            pid, session_id = cached[1], cached[2]
+        else:
+            try:
+                data = json.loads(f.read_text())
+                pid = data.get("pid")
+                session_id = data.get("sessionId")
+                if pid and session_id:
+                    _session_json_cache[path_str] = (mtime, pid, session_id)
+            except (OSError, json.JSONDecodeError):
+                continue
+
+        if not session_id or not pid:
+            continue
+        # Check if the process is still running
+        try:
+            os.kill(pid, 0)
+            live.add(session_id)
+            # Also add the original session ID if this is a resumed session
+            original = _get_resumed_session_id(pid)
+            if original:
+                live.add(original)
+        except (OSError, ProcessLookupError):
+            pass
+
+    # Prune cache entries for deleted files
+    stale = set(_session_json_cache) - seen_paths
+    for k in stale:
+        del _session_json_cache[k]
 
     _live_ids_cache = (time.monotonic(), dir_str, live)
     return live

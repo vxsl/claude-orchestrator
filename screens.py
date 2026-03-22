@@ -1049,7 +1049,8 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         self.query_one("#detail-body", Static).update(self._render_body())
         self.query_one("#detail-sessions", OptionList).focus()
         self._update_pane_labels()
-        self.set_interval(10, self._periodic_refresh)
+        # Backstop only — app's watcher handles real-time liveness via SessionsChanged
+        self.set_interval(30, self._periodic_refresh)
         if self._sessions_loading():
             self._loading_timer = self.set_interval(0.12, self._tick_loading)
 

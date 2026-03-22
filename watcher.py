@@ -144,6 +144,7 @@ class SessionWatcher:
         on_liveness: Callable[[], None] | None = None,
         on_content: Callable[[], None] | None = None,
         debounce: float = 1.0,
+        content_debounce: float | None = None,
     ):
         liveness_cb = on_liveness or on_change or (lambda: None)
         content_cb = on_content or on_change or (lambda: None)
@@ -151,7 +152,7 @@ class SessionWatcher:
             on_liveness=liveness_cb,
             on_content=content_cb,
             liveness_debounce=debounce,
-            content_debounce=debounce,
+            content_debounce=content_debounce if content_debounce is not None else debounce,
         )
         self._observer = Observer()
         self._started = False

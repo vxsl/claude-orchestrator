@@ -1157,39 +1157,52 @@ class AppState:
         """Update is_live flags and tail-read active sessions. Returns True if anything changed."""
         old_live = {s.session_id for s in self.sessions if s.is_live}
         live_ids = get_live_session_ids()
+
+        # Fast-path: update is_live flags on all sessions
+        new_live: set[str] = set()
         for s in self.sessions:
             s.is_live = s.session_id in live_ids
+            if s.is_live:
+                new_live.add(s.session_id)
         for s in self.preview_sessions:
             s.is_live = s.session_id in live_ids
-        new_live = {s.session_id for s in self.sessions if s.is_live}
 
         changed = old_live != new_live
-        active_ids = new_live | (old_live - new_live)
-        seen = set()
+
+        # Only tail-read sessions that are live or just died (need final state).
+        # This avoids iterating 100+ dead sessions on every check.
+        tail_ids = new_live | (old_live - new_live)
+        if not tail_ids:
+            if changed:
+                self.invalidate_caches()
+            return changed
+
+        seen: set[str] = set()
         for s in self.sessions:
-            if s.session_id in active_ids and s.session_id not in seen:
-                seen.add(s.session_id)
-                # Skip tail read if file hasn't changed
-                try:
-                    mtime = os.path.getmtime(s.jsonl_path)
-                except OSError:
-                    continue
-                if mtime == self._session_mtimes.get(s.session_id):
-                    continue
-                self._session_mtimes[s.session_id] = mtime
-                if refresh_session_tail(s):
-                    changed = True
+            if s.session_id not in tail_ids or s.session_id in seen:
+                continue
+            seen.add(s.session_id)
+            try:
+                mtime = os.path.getmtime(s.jsonl_path)
+            except OSError:
+                continue
+            if mtime == self._session_mtimes.get(s.session_id):
+                continue
+            self._session_mtimes[s.session_id] = mtime
+            if refresh_session_tail(s):
+                changed = True
         for s in self.preview_sessions:
-            if s.session_id in active_ids and s.session_id not in seen:
-                seen.add(s.session_id)
-                try:
-                    mtime = os.path.getmtime(s.jsonl_path)
-                except OSError:
-                    continue
-                if mtime == self._session_mtimes.get(s.session_id):
-                    continue
-                self._session_mtimes[s.session_id] = mtime
-                refresh_session_tail(s)
+            if s.session_id not in tail_ids or s.session_id in seen:
+                continue
+            seen.add(s.session_id)
+            try:
+                mtime = os.path.getmtime(s.jsonl_path)
+            except OSError:
+                continue
+            if mtime == self._session_mtimes.get(s.session_id):
+                continue
+            self._session_mtimes[s.session_id] = mtime
+            refresh_session_tail(s)
 
         if changed:
             self.invalidate_caches()

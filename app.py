@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+import time as _time
 from pathlib import Path
 
 from textual import on, work
@@ -47,7 +48,7 @@ from models import (
     Category, Link, Store, Workstream,
     _relative_time,
 )
-from sessions import ClaudeSession
+from sessions import ClaudeSession, invalidate_live_session_cache
 from threads import Thread, session_activity, mark_thread_seen, discover_threads
 from thread_namer import apply_cached_names, name_uncached_threads, title_sessions, get_session_title, refresh_thread_titles
 from watcher import SessionWatcher
@@ -202,6 +203,8 @@ class OrchestratorApp(App):
         self._preview_ws_id: str | None = None  # track current preview to skip redundant updates
         self._detached_terminals: dict[str, dict] = {}  # session_id -> detached state
         self._detail_screen_active: bool = False  # True when a DetailScreen is pushed
+        self._last_liveness_check: float = 0.0  # rate limiter for liveness checks
+        self._liveness_deferred: bool = False  # trailing-edge pending flag
 
     def on_key(self, event) -> None:
         if event.key in ("ctrl+j", "ctrl+k"):
@@ -302,29 +305,50 @@ class OrchestratorApp(App):
 
         self.query_one("#preview-sessions", OptionList).display = False
 
+        # ── Staggered timers ──
+        # Spread 30s polling timers across time to prevent burst every 30s.
+        # Each timer fires once immediately at its offset, then every 30s.
         self._poll_tmux()
         self.set_interval(30, self._poll_tmux)
-        self._poll_git_status()
-        self.set_interval(30, self._poll_git_status)
-        self._poll_worktrees()
-        self.set_interval(30, self._poll_worktrees)
 
+        self.set_timer(5, self._start_git_polling)
+        self.set_timer(10, self._start_worktree_polling)
+
+        # ── File watcher ──
+        # Liveness (session start/stop .json): 1s leading-edge — fast detection.
+        # Content (JSONL writes): 2s trailing-edge — batches rapid writes.
         self._session_watcher = SessionWatcher(
-            on_liveness=lambda: self.call_from_thread(self._refresh_session_liveness),
+            on_liveness=lambda: self.call_from_thread(self._on_liveness_file_change),
             on_content=lambda: self.call_from_thread(self._on_session_file_change),
             debounce=1.0,
+            content_debounce=2.0,
         )
         self._session_watcher.start()
-        self.set_interval(30, self._poll_sessions)
 
-        # Backstop: catch liveness changes missed by inotify (e.g. SIGKILL)
-        self.set_interval(30, self._refresh_session_liveness)
+        self.set_timer(15, self._start_session_polling)
+        self.set_timer(20, self._start_liveness_backstop)
 
         ws_table.focus()
 
     def on_unmount(self):
         if self._session_watcher:
             self._session_watcher.stop()
+
+    def _start_git_polling(self):
+        self._poll_git_status()
+        self.set_interval(30, self._poll_git_status)
+
+    def _start_worktree_polling(self):
+        self._poll_worktrees()
+        self.set_interval(30, self._poll_worktrees)
+
+    def _start_session_polling(self):
+        self._poll_sessions()
+        self.set_interval(30, self._poll_sessions)
+
+    def _start_liveness_backstop(self):
+        self._refresh_session_liveness()
+        self.set_interval(30, self._refresh_session_liveness)
 
     # ── Active table helper ──
 
@@ -471,16 +495,46 @@ class OrchestratorApp(App):
         self.state.preview_visible = not self.state.preview_visible
         pane.display = self.state.preview_visible
 
-    def _on_session_file_change(self):
-        """Watcher callback for JSONL content changes: liveness only.
+    def _on_liveness_file_change(self):
+        """Watcher callback for session .json changes (start/stop).
 
-        Full session discovery runs on the 30s timer.  Triggering it on every
-        JSONL write was causing excessive I/O (each active session writes
-        frequently, and discover_sessions re-parses all files).
+        Invalidates the live-session cache so the next check sees the
+        new session immediately, then triggers a rate-limited liveness refresh.
+        """
+        invalidate_live_session_cache()
+        self._refresh_session_liveness()
+
+    def _on_session_file_change(self):
+        """Watcher callback for JSONL content changes.
+
+        Triggers a rate-limited liveness refresh which tail-reads active
+        sessions to pick up new messages/status. Does NOT invalidate the
+        live-session cache (content changes don't affect session start/stop).
         """
         self._refresh_session_liveness()
 
     def _refresh_session_liveness(self):
+        """Rate-limited liveness refresh — at most once per 2 seconds.
+
+        Prevents the watcher from flooding the main thread with liveness
+        checks when multiple active sessions are writing concurrently.
+        """
+        now = _time.monotonic()
+        elapsed = now - self._last_liveness_check
+        if elapsed < 2.0:
+            # Already checked recently; schedule trailing-edge fire
+            if not self._liveness_deferred:
+                self._liveness_deferred = True
+                self.set_timer(2.0 - elapsed, self._fire_deferred_liveness)
+            return
+        self._last_liveness_check = now
+        self._liveness_deferred = False
+        self._do_refresh_liveness()
+
+    def _fire_deferred_liveness(self):
+        """Trailing-edge fire for rate-limited liveness."""
+        self._liveness_deferred = False
+        self._last_liveness_check = _time.monotonic()
         self._do_refresh_liveness()
 
     @work(thread=True, exclusive=True, group="liveness")
@@ -490,9 +544,14 @@ class OrchestratorApp(App):
             self.call_from_thread(self._apply_liveness_change)
 
     def _apply_liveness_change(self):
-        self._preview_ws_id = None  # force preview refresh on liveness change
-        with self.batch_update():
-            self._refresh_ws_table_debounced()
+        # Skip main table rebuild when DetailScreen covers it — defer to return
+        if not self._detail_screen_active:
+            self._preview_ws_id = None  # force preview refresh on liveness change
+            with self.batch_update():
+                self._refresh_ws_table_debounced()
+        # Always notify screens so DetailScreen picks up liveness changes
+        for screen in self.screen_stack:
+            screen.post_message(SessionsChanged())
 
     def _update_preview(self, force: bool = False):
         if not self.state.preview_visible:
@@ -887,14 +946,13 @@ class OrchestratorApp(App):
         untitled = [s for s in sessions if not get_session_title(s)]
         if untitled:
             title_sessions(untitled)
-            for screen in self.screen_stack:
-                screen.post_message(SessionsChanged())
 
         def _fingerprint(sl):
             return {(s.session_id, s.is_live, s.last_message_role, s.last_activity) for s in sl}
-        old_ids = {s.session_id for s in self.state.sessions}
-        new_ids = {s.session_id for s in sessions}
         if _fingerprint(self.state.sessions) == _fingerprint(sessions):
+            # Sessions unchanged but titles may have updated
+            if untitled:
+                self.call_from_thread(self._notify_sessions_changed)
             return
 
         discovered = get_discovered_workstreams(threads)
@@ -911,51 +969,73 @@ class OrchestratorApp(App):
         sessions.sort(key=lambda s: s.last_activity or "", reverse=True)
 
         discovered = get_discovered_workstreams(threads)
+        # Phase 1: get data visible fast
         self.call_from_thread(self._apply_sessions, sessions, threads, discovered)
+
+        # Phase 2: AI-powered naming/titling/synthesis (slow, runs in background)
+        any_ai_changes = False
 
         named = name_uncached_threads(threads)
         if named > 0:
             apply_cached_names(threads)
+            any_ai_changes = True
 
-        # Generate AI titles for sessions that don't have them yet
-        # title_sessions processes one BATCH_SIZE chunk per call; repeated polls
-        # will chip away at the backlog over time
         untitled = [s for s in sessions if not get_session_title(s)]
         if untitled:
             title_sessions(untitled)
-            for screen in self.screen_stack:
-                screen.post_message(SessionsChanged())
+            any_ai_changes = True
 
         new_count = synthesize_workstreams(threads, self.state.store.active)
-        if new_count > 0 or named > 0:
-            discovered = get_discovered_workstreams(threads)
-            self.call_from_thread(self._apply_synthesis, threads, discovered)
+        if new_count > 0:
+            any_ai_changes = True
 
-        # Lightweight title re-evaluation for threads (rate-limited internally to 6h per thread)
         titles_updated = refresh_thread_titles(threads)
         if titles_updated > 0:
             apply_cached_names(threads)
-            discovered = get_discovered_workstreams(threads)
-            self.call_from_thread(self._apply_synthesis, threads, discovered)
+            any_ai_changes = True
 
-        # Lightweight description re-evaluation (rate-limited internally to 6h per ws)
         desc_updated = refresh_descriptions(self.state.store, sessions)
         if desc_updated > 0:
-            self.call_from_thread(self._refresh_ws_table_debounced)
+            any_ai_changes = True
+
+        # Single callback for all AI-powered updates (was 3-5 separate callbacks)
+        if any_ai_changes:
+            discovered = get_discovered_workstreams(threads)
+            self.call_from_thread(self._apply_ai_updates, threads, discovered)
 
     def _apply_sessions(self, sessions: list[ClaudeSession],
                         threads: list[Thread], discovered: list[Workstream]):
         self.state.update_sessions(sessions, threads, discovered)
-        self._preview_ws_id = None
-        with self.batch_update():
-            self._refresh_ws_table()
+        if not self._detail_screen_active:
+            self._preview_ws_id = None
+            with self.batch_update():
+                self._refresh_ws_table()
         for screen in self.screen_stack:
             screen.post_message(SessionsChanged())
 
     def _apply_synthesis(self, threads: list[Thread], discovered: list[Workstream]):
         self.state.threads = threads
         self.state.discovered_ws = discovered
-        self._refresh_ws_table_debounced()
+        if not self._detail_screen_active:
+            self._refresh_ws_table_debounced()
+
+    def _apply_ai_updates(self, threads: list[Thread], discovered: list[Workstream]):
+        """Single callback for all AI-powered session/thread updates.
+
+        Replaces 3-5 separate call_from_thread callbacks that were flooding
+        the main thread's message queue during initial load.
+        """
+        self.state.threads = threads
+        self.state.discovered_ws = discovered
+        if not self._detail_screen_active:
+            self._refresh_ws_table_debounced()
+        for screen in self.screen_stack:
+            screen.post_message(SessionsChanged())
+
+    def _notify_sessions_changed(self):
+        """Thread-safe helper to notify all screens of session changes."""
+        for screen in self.screen_stack:
+            screen.post_message(SessionsChanged())
 
     def _inject_session(self, session: ClaudeSession) -> None:
         """Inject a session into state immediately so DetailScreen updates without polling."""
