@@ -839,7 +839,7 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         Binding("o", "open_links", "Open links"),
         Binding("x", "archive", "Archive"),
         Binding("a", "archive_session", "Archive/restore", priority=True),
-        Binding("h", "focus_sessions", show=False, priority=True),
+        Binding("h", "go_back", show=False),
         Binding("l", "select_session", show=False),
         Binding("d", "dismiss_notification", "Dismiss", show=False),
         Binding("D", "dismiss_all_notifications", "Dismiss all", show=False),
