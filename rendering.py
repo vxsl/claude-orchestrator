@@ -311,22 +311,33 @@ def _session_title(session: ClaudeSession, titles: dict[str, str] | None = None)
     return _short_project(session.project_path)
 
 
+# Badge plain-text widths (for right-alignment padding calculations)
+_BADGE_WIDTHS = {
+    ThreadActivity.THINKING: 9,       # "thinking…"
+    ThreadActivity.AWAITING_INPUT: 9, # "your turn"
+    ThreadActivity.RESPONSE_FRESH: 4, # "done"
+    ThreadActivity.RESPONSE_READY: 4, # "done"
+    ThreadActivity.IDLE: 0,
+}
+
+
 def _render_session_option(
     s: ClaudeSession, act: ThreadActivity, throbber_frame: int = 0,
     title_width: int = 48,
 ) -> str:
     """Render a session as a formatted multi-line OptionList entry.
 
-    Layout (columnar alignment):
-      {icon}  {title}                                  {badge}
-             {model:<7} {msgs:<9} {tokens:<7} {age}    {sid}
-             {role}: {snippet}
+    Layout — tighter spacing, consistent right anchor for badge + sid:
+      {icon} {title}                                     {badge}
+         {model}  {msgs}  {tokens}  {age}                {sid}
+         {role}: {snippet}
     """
-    INDENT = "      "  # 6 spaces — aligns under title text
-    META_WIDTH = title_width + 2  # total plain-text width for metadata line
+    INDENT = "    "  # 4 spaces — nested under title
+    LINE_WIDTH = title_width + 20  # right-alignment anchor
 
     icon = _activity_icon(act, throbber_frame)
     badge = _activity_badge(act)
+    badge_w = _BADGE_WIDTHS.get(act, 0)
     model = _short_model(s.model)
     title_raw = _session_title(s)[:title_width]
     title_esc = _rich_escape(title_raw)
@@ -335,59 +346,45 @@ def _render_session_option(
     msgs_str = f"{s.message_count} msgs"
     age_str = s.age
 
-    # Title styling by activity state
+    # Title styling: idle sessions are dimmed, everything else is normal weight.
+    # Activity state is communicated by the icon + badge, not the title color.
     if act == ThreadActivity.IDLE:
         title_fmt = f"[{C_DIM}]{title_esc}[/{C_DIM}]"
-    elif act in (ThreadActivity.THINKING, ThreadActivity.AWAITING_INPUT):
-        title_fmt = f"[bold]{title_esc}[/bold]"
-    elif act == ThreadActivity.RESPONSE_FRESH:
-        title_fmt = f"[bold {C_GREEN}]{title_esc}[/bold {C_GREEN}]"
-    elif act == ThreadActivity.RESPONSE_READY:
-        title_fmt = f"[{C_ORANGE}]{title_esc}[/{C_ORANGE}]"
     else:
-        title_fmt = title_esc
+        title_fmt = f"[{C_LIGHT}]{title_esc}[/{C_LIGHT}]"
 
-    # Line 1: icon + title + right-aligned badge
-    pad = " " * max(1, title_width + 2 - len(title_raw))
-    badge_part = f"{pad}{badge}" if badge else ""
-    line1 = f" {icon}  {title_fmt}{badge_part}"
+    # Line 1: " {icon} {title}          {badge}"
+    # Badge right-aligned to LINE_WIDTH; no badge for idle
+    prefix_w = 3  # visible: space + icon + space
+    if badge:
+        fill = max(2, LINE_WIDTH - prefix_w - len(title_raw) - badge_w)
+        line1 = f" {icon} {title_fmt}{' ' * fill}{badge}"
+    else:
+        line1 = f" {icon} {title_fmt}"
 
-    # Line 2: fixed-width columnar metadata + right-aligned session ID
-    # Columns: model(7) + msgs(9) + tokens(7) + age(variable) + gap + sid(8)
-    col_model = f"{model:<7}"
-    col_msgs = f"{msgs_str:<9}"
-    col_tokens_plain = f"{tokens_plain:<7}"
-    left_len = 7 + 9 + 7 + len(age_str)
-    sid_gap = " " * max(2, META_WIDTH - left_len - 8)
+    # Line 2: fixed-width columns, sid right-aligned to LINE_WIDTH
+    # Columns: model(8) + msgs(10) + tokens(8) + age
+    meta_left_len = 4 + 8 + 10 + 8 + len(age_str)  # indent + cols
+    sid_gap = max(2, LINE_WIDTH - meta_left_len - 8)
 
     tokens_fmt = _colored_tokens(s)
-    tok_pad = " " * max(1, 7 - len(tokens_plain))
+    tok_pad = " " * max(1, 8 - len(tokens_plain))
     line2 = (
-        f"{INDENT}[{C_DIM}]{col_model}{col_msgs}[/{C_DIM}]"
+        f"{INDENT}[{C_DIM}]{model:<8}{msgs_str:<10}[/{C_DIM}]"
         f"{tokens_fmt}"
         f"[{C_DIM}]{tok_pad}{age_str}"
-        f"{sid_gap}{sid}[/{C_DIM}]"
+        f"{' ' * sid_gap}{sid}[/{C_DIM}]"
     )
 
-    # Line 3: last message snippet — styled by activity state
+    # Line 3: last message snippet — always subdued context, not status
     if s.last_message_text:
-        max_snippet = title_width + 10
+        max_snippet = title_width + 12
         snippet = _rich_escape(s.last_message_text[:max_snippet])
         if len(s.last_message_text) > max_snippet:
             snippet += "…"
         is_user = s.last_message_role == "user"
         role_tag = "you" if is_user else "claude"
-        if act == ThreadActivity.THINKING:
-            snip_color = C_CYAN
-        elif act in (ThreadActivity.AWAITING_INPUT, ThreadActivity.RESPONSE_FRESH):
-            snip_color = C_GREEN
-        elif act == ThreadActivity.RESPONSE_READY:
-            snip_color = C_ORANGE
-        else:
-            snip_color = C_DIM
-        role_style = f"[{C_DIM}]" if is_user else f"[italic {snip_color}]"
-        role_end = f"[/{C_DIM}]" if is_user else f"[/italic {snip_color}]"
-        line3 = f"{INDENT}[{C_DIM}]{role_tag}:[/{C_DIM}] {role_style}{snippet}{role_end}"
+        line3 = f"{INDENT}[{C_DIM}]{role_tag}: {snippet}[/{C_DIM}]"
         return f"{line1}\n{line2}\n{line3}"
     return f"{line1}\n{line2}"
 
@@ -426,15 +423,17 @@ def _render_content_search_result(
 ) -> str:
     """Render a content search result as a formatted OptionList entry.
 
-    Line 1: session title
-    Line 2: columnar metadata (matches _render_session_option layout)
-    Line 3: best snippet with matched words highlighted
+    Same visual structure as _render_session_option:
+      {✸} {title}                                    {hit count}
+         {model}  {msgs}  {tokens}  {age}             {sid}
+         {role}: {highlighted snippet}
     """
-    INDENT = "      "
-    META_WIDTH = title_width + 2
+    INDENT = "    "
+    LINE_WIDTH = title_width + 20
     s = result.session
     hit = result.best_hit
-    title = _rich_escape(_session_title(s)[:title_width])
+    title_raw = _session_title(s)[:title_width]
+    title = _rich_escape(title_raw)
     model = _short_model(s.model)
     tokens_plain = s.tokens_display
     hits_str = f"{result.hit_count} hit{'s' if result.hit_count != 1 else ''}"
@@ -442,23 +441,24 @@ def _render_content_search_result(
     age_str = s.age
     sid = s.session_id[:8]
 
-    # Columns: hits(8) + model(7) + msgs(9) + tokens(7) + age + gap + sid(8)
-    col_hits = f"{hits_str:<8}"
-    col_model = f"{model:<7}"
-    col_msgs = f"{msgs_str:<9}"
-    left_len = 8 + 7 + 9 + 7 + len(age_str)
-    sid_gap = " " * max(2, META_WIDTH - left_len - 8)
+    # Line 1: search icon + title, hit count right-aligned (badge position)
+    prefix_w = 3  # " ✸ "
+    fill = max(2, LINE_WIDTH - prefix_w - len(title_raw) - len(hits_str))
+    line1 = f" \u2738 {title}{' ' * fill}[{C_YELLOW}]{hits_str}[/{C_YELLOW}]"
+
+    # Line 2: same columnar layout as session options
+    meta_left_len = 4 + 8 + 10 + 8 + len(age_str)
+    sid_gap = max(2, LINE_WIDTH - meta_left_len - 8)
 
     tokens_fmt = _colored_tokens(s)
-    tok_pad = " " * max(1, 7 - len(tokens_plain))
-
-    line1 = f" \u2738  {title}"  # ✸ search icon
+    tok_pad = " " * max(1, 8 - len(tokens_plain))
     line2 = (
-        f"{INDENT}[{C_DIM}]{col_hits}{col_model}{col_msgs}[/{C_DIM}]"
+        f"{INDENT}[{C_DIM}]{model:<8}{msgs_str:<10}[/{C_DIM}]"
         f"{tokens_fmt}"
         f"[{C_DIM}]{tok_pad}{age_str}"
-        f"{sid_gap}{sid}[/{C_DIM}]"
+        f"{' ' * sid_gap}{sid}[/{C_DIM}]"
     )
+
     role_tag = "you" if hit.role == "user" else "claude"
     highlighted = _highlight_snippet(hit.snippet, hit.match_ranges)
     line3 = f"{INDENT}[{C_DIM}]{role_tag}:[/{C_DIM}] {highlighted}"
