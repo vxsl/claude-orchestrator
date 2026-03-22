@@ -87,7 +87,7 @@ if [[ -n "$WS_ID" && -f "$CONT_FILE" ]]; then
 fi
 
 # ─── Append distill command hints to context ──────────────────────
-DISTILL_HINT='Extract todo: The user can press C-e or type /user:extract-todo to distill this conversation into a rich todo item on the workstream. The slash command has full instructions. You can also run `orch distill crystallize --text "..." --context "..."` directly. $ORCH_WS_ID is set automatically.'
+DISTILL_HINT='Extract todo: The user can press C-e or type /user:extract-orch-todo to distill this conversation into a rich todo item on the workstream. The slash command has full instructions. You can also run `orch distill crystallize --text "..." --context "..."` directly. $ORCH_WS_ID is set automatically.'
 
 # Only add distill hints if we have a workstream ID
 if [[ -n "$WS_ID" ]]; then
@@ -143,7 +143,7 @@ tmux set-option -w @orch_main_pane "$MAIN_PANE" 2>/dev/null || true
 # Falls through to normal C-e when not in an orch window
 tmux bind -n C-e if-shell \
     'tmux display-message -p "#{@orch_session_id}" | grep -q .' \
-    "send-keys '/user:extract-todo' Enter" \
+    "send-keys '/user:extract-orch-todo' Enter" \
     'send-keys C-e'
 
 # ─── Export env vars for distill commands ──────────────────────────
