@@ -8,7 +8,6 @@ from models import Category, Link, Status, Store, Workstream
 from app import OrchestratorApp
 from screens import SessionPickerScreen
 from rendering import (
-    ViewMode,
     _ws_indicators,
     _short_project,
     _short_model,
@@ -328,18 +327,10 @@ class TestAppStartup:
             # App should be running
             assert pilot.app.is_running
 
-    async def test_initial_view_is_workstreams(self, app_with_store):
-        async with app_with_store.run_test(size=(120, 40)) as pilot:
-            assert pilot.app.view_mode == ViewMode.WORKSTREAMS
-
-    async def test_tables_exist(self, app_with_store):
+    async def test_ws_table_exists(self, app_with_store):
         async with app_with_store.run_test(size=(120, 40)) as pilot:
             ws_table = pilot.app.query_one("#ws-table")
-            sessions_table = pilot.app.query_one("#sessions-table")
-            archived_table = pilot.app.query_one("#archived-table")
             assert ws_table is not None
-            assert sessions_table is not None
-            assert archived_table is not None
 
     async def test_ws_table_has_rows(self, app_with_store):
         async with app_with_store.run_test(size=(120, 40)) as pilot:
@@ -394,14 +385,12 @@ class TestNavigation:
 
 
 @pytest.mark.asyncio
-class TestViewSwitching:
-    """Tab now cycles through workstream tabs (not view modes).
-    With only the Home tab open, Tab does nothing (single tab)."""
+class TestTabSwitching:
+    """Tab cycles through workstream tabs."""
 
     async def test_tab_stays_on_home_when_no_other_tabs(self, app_with_store):
         async with app_with_store.run_test(size=(120, 40)) as pilot:
             await pilot.press("tab")
-            # With only Home tab, should stay on workstreams view
             assert pilot.app.tabs.is_home
             assert pilot.app.tabs.active_idx == 0
 
@@ -458,16 +447,6 @@ class TestPreviewPane:
 
 
 @pytest.mark.asyncio
-class TestStatusCycling:
-    async def test_s_cycles_status(self, app_with_store):
-        async with app_with_store.run_test(size=(120, 40)) as pilot:
-            ws = pilot.app._selected_ws()
-            old_status = ws.status
-            await pilot.press("s")
-            ws = pilot.app._selected_ws()
-            assert ws.status != old_status
-
-
 @pytest.mark.asyncio
 class TestQuickNote:
     async def test_n_opens_note_modal(self, app_with_store):
@@ -578,12 +557,6 @@ class TestHelpScreen:
 
 @pytest.mark.asyncio
 class TestUILanguage:
-    async def test_view_bar_shows_session_count(self, app_with_store):
-        async with app_with_store.run_test(size=(120, 40)) as pilot:
-            rendered = pilot.app._render_view_bar()
-            # View bar now shows sessions/archived counts instead of view tabs
-            assert "sessions" in rendered or "archived" in rendered or rendered == ""
-
     async def test_summary_bar_says_workstreams(self, app_with_store):
         async with app_with_store.run_test(size=(120, 40)) as pilot:
             rendered = pilot.app._render_summary_bar()

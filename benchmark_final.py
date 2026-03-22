@@ -65,21 +65,16 @@ async def bench_real_app():
         p50 = statistics.median(times) * 1000
         print(f"  full table rebuild + render        mean={mean:7.2f}ms  p50={p50:7.2f}ms")
 
-        # Bench: view switching
+        # Bench: tab switching (placeholder — tabs not yet wired)
         times = []
         for _ in range(5):
             t0 = time.perf_counter()
-            app.action_next_view()
+            app.action_next_tab()
             await pilot.pause()
             times.append(time.perf_counter() - t0)
 
         mean = statistics.mean(times) * 1000
-        print(f"  view switch                        mean={mean:7.2f}ms")
-
-        # Switch back to workstreams
-        while app.state.view_mode.value != "workstreams":
-            app.action_next_view()
-            await pilot.pause()
+        print(f"  tab switch                         mean={mean:7.2f}ms")
 
         # Bench: preview update (cursor to new workstream)
         table.highlighted = 0

@@ -7,7 +7,6 @@ from sessions import ClaudeSession
 from threads import ThreadActivity
 from notifications import Notification
 from rendering import (
-    ViewMode,
     _token_color, _colored_tokens, _token_color_markup,
     _status_markup, _category_markup,
     _ws_indicators, _short_project, _short_model,
@@ -126,8 +125,3 @@ class TestRenderNotificationOption:
         assert "project" in result  # title in second line
 
 
-class TestViewMode:
-    def test_values(self):
-        assert ViewMode.WORKSTREAMS.value == "workstreams"
-        assert ViewMode.SESSIONS.value == "sessions"
-        assert ViewMode.ARCHIVED.value == "archived"

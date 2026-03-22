@@ -20,9 +20,9 @@ DEFAULT_KEYS: dict[str, tuple[str, str, bool, bool]] = {
     "half_page_down": ("ctrl+d", "½PgDn", False, False),
     "half_page_up": ("ctrl+u", "½PgUp", False, False),
     "select_item": ("enter,l", "Open", True, False),
-    # View switching
-    "next_view": ("tab", "Tab", True, True),
-    "prev_view": ("shift+tab", "", False, True),
+    # Tab switching
+    "next_tab": ("tab", "Tab", True, True),
+    "prev_tab": ("shift+tab", "", False, True),
     # Actions
     "add": ("a", "Add", True, False),
     "brain_dump": ("b", "Brain", False, False),

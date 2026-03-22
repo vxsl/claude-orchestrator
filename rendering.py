@@ -5,7 +5,6 @@ Pure functions with no Textual dependency. Used by screens, app, and state modul
 
 from __future__ import annotations
 
-from enum import Enum
 from pathlib import Path
 
 def _rich_escape(text: str) -> str:
@@ -75,14 +74,6 @@ LINK_TYPE_ICONS = {
 }
 LINK_ORDER = ["worktree", "ticket", "claude-session", "file", "url", "slack"]
 LINK_KINDS = list(LINK_ORDER)
-
-
-# ─── View Mode ──────────────────────────────────────────────────────
-
-class ViewMode(str, Enum):
-    WORKSTREAMS = "workstreams"
-    SESSIONS = "sessions"
-    ARCHIVED = "archived"
 
 
 # ─── Token coloring ─────────────────────────────────────────────────

@@ -59,7 +59,6 @@ from description_refresher import refresh_descriptions
 from rendering import (
     C_BLUE, C_CYAN, C_DIM, C_GREEN, C_PURPLE, C_RED, C_YELLOW,
     BG_BASE,
-    ViewMode,
     _token_color, _token_color_markup,
     _status_markup, _category_markup,
     _is_session_seen,
@@ -142,7 +141,7 @@ class OrchestratorApp(App):
         height: 1; padding: 0 1; background: {BG_BASE}; color: {C_DIM}; dock: bottom;
     }}
     #main-content {{ height: 1fr; }}
-    #ws-table, #sessions-table, #archived-table {{
+    #ws-table {{
         width: 3fr; height: 1fr; margin: 0; padding: 0;
         border: none; background: {BG_BASE};
     }}
@@ -250,14 +249,6 @@ class OrchestratorApp(App):
         self.state.store = value
 
     @property
-    def view_mode(self):
-        return self.state.view_mode
-
-    @view_mode.setter
-    def view_mode(self, value):
-        self.state.view_mode = value
-
-    @property
     def filter_mode(self):
         return self.state.filter_mode
 
@@ -304,8 +295,6 @@ class OrchestratorApp(App):
         yield Static("", id="top-bar")
         with Horizontal(id="main-content"):
             yield OptionList(id="ws-table")
-            yield OptionList(id="sessions-table")
-            yield OptionList(id="archived-table")
             with VerticalScroll(id="preview-pane"):
                 yield Static("", id="preview-content")
                 yield OptionList(id="preview-sessions")
@@ -316,13 +305,10 @@ class OrchestratorApp(App):
         yield Static("", id="summary-bar")
 
     def on_mount(self):
-        self.query_one("#sessions-table", OptionList).display = False
-        self.query_one("#archived-table", OptionList).display = False
         ws_table = self.query_one("#ws-table", OptionList)
 
         self._refresh_ws_table()
         self._load_sessions()
-        self._refresh_archived_table()
 
         self.query_one("#preview-sessions", OptionList).display = False
 
@@ -351,23 +337,18 @@ class OrchestratorApp(App):
     # ── Active table helper ──
 
     def _active_table(self) -> OptionList:
-        if self.state.view_mode == ViewMode.SESSIONS:
-            return self.query_one("#sessions-table", OptionList)
-        elif self.state.view_mode == ViewMode.ARCHIVED:
-            return self.query_one("#archived-table", OptionList)
         return self.query_one("#ws-table", OptionList)
 
-    # ── View switching ──
+    # ── Tab switching (placeholder — tabs will be wired in a later step) ──
 
-    def action_next_view(self):
+    def action_next_tab(self):
         """Tab key: cycle to next tab."""
         if self._detail_screen_active:
-            # If we're in a detail screen, let it handle the tab switch
             return
         if self.tabs.next_tab():
             self._apply_tab_switch()
 
-    def action_prev_view(self):
+    def action_prev_tab(self):
         """Shift+Tab: cycle to previous tab."""
         if self._detail_screen_active:
             return
@@ -390,7 +371,6 @@ class OrchestratorApp(App):
     def _push_detail_for_tab(self, ws: Workstream):
         """Push a DetailScreen for a workstream tab."""
         if self._detail_screen_active:
-            # Dismiss current detail screen first, then push new one
             self.screen.dismiss()
         self._detail_screen_active = True
         self.push_screen(
@@ -401,26 +381,14 @@ class OrchestratorApp(App):
     def _on_detail_dismissed(self):
         """Called when a DetailScreen is dismissed (back to Home)."""
         self._detail_screen_active = False
-        self.tabs.switch_to(0)  # Return to Home
+        self.tabs.switch_to(0)
         self._sync_tab_bar()
         self._on_return_from_modal()
-
-    def action_close_tab(self):
-        """Ctrl+W: close the current workstream tab."""
-        if self.tabs.is_home:
-            return
-        closed_id = self.tabs.close_active_tab()
-        if closed_id:
-            self._sync_tab_bar()
-            if self._detail_screen_active:
-                self.screen.dismiss()
-                # _on_detail_dismissed will handle the rest
 
     def _sync_tab_bar(self):
         """Update the TabBar widget to match TabManager state."""
         try:
             tab_bar = self.query_one("#tab-bar", TabBar)
-            # Rebuild tabs from TabManager
             tab_bar._tabs = [
                 (t.id, t.label, t.icon) for t in self.tabs.tabs
             ]
@@ -428,25 +396,6 @@ class OrchestratorApp(App):
             tab_bar._render_tabs()
         except Exception:
             pass
-
-    def _apply_view(self):
-        """Legacy: still needed for command palette view switching."""
-        with self.batch_update():
-            ws_table = self.query_one("#ws-table", OptionList)
-            sessions_table = self.query_one("#sessions-table", OptionList)
-            archived_table = self.query_one("#archived-table", OptionList)
-
-            ws_table.display = self.state.view_mode == ViewMode.WORKSTREAMS
-            sessions_table.display = self.state.view_mode == ViewMode.SESSIONS
-            archived_table.display = self.state.view_mode == ViewMode.ARCHIVED
-
-            if self.state.view_mode == ViewMode.SESSIONS:
-                self._load_sessions()
-
-            self._active_table().focus()
-            self._update_all_bars()
-            self._preview_ws_id = None
-            self._update_preview(force=True)
 
     # ── Navigation ──
 
@@ -483,13 +432,8 @@ class OrchestratorApp(App):
     # ── Panel navigation (Ctrl+j/k) ──
 
     def _panel_cycle(self) -> list[str]:
-        """Widget IDs for the current view's focusable panels."""
-        table_id = {
-            ViewMode.WORKSTREAMS: "ws-table",
-            ViewMode.SESSIONS: "sessions-table",
-            ViewMode.ARCHIVED: "archived-table",
-        }.get(self.state.view_mode, "ws-table")
-        panels = [table_id]
+        """Widget IDs for focusable panels."""
+        panels = ["ws-table"]
         if self.state.preview_visible:
             panels.append("preview-sessions")
         return panels
@@ -550,33 +494,16 @@ class OrchestratorApp(App):
         self._preview_ws_id = None  # force preview refresh on liveness change
         with self.batch_update():
             self._refresh_ws_table_debounced()
-            if self.state.view_mode == ViewMode.SESSIONS:
-                self._refresh_sessions_table()
 
     def _update_preview(self, force: bool = False):
         if not self.state.preview_visible:
             return
-        if self.state.view_mode == ViewMode.WORKSTREAMS:
-            ws = self._selected_ws()
-            ws_id = ws.id if ws else None
-            if not force and ws_id == self._preview_ws_id:
-                return
-            self._preview_ws_id = ws_id
-            self._render_ws_preview(ws)
-        elif self.state.view_mode == ViewMode.SESSIONS:
-            session = self._selected_session()
-            sid = session.session_id if session else None
-            if not force and sid == self._preview_ws_id:
-                return
-            self._preview_ws_id = sid
-            self._render_session_preview(session)
-        elif self.state.view_mode == ViewMode.ARCHIVED:
-            ws = self._selected_archived()
-            ws_id = ws.id if ws else None
-            if not force and ws_id == self._preview_ws_id:
-                return
-            self._preview_ws_id = ws_id
-            self._render_ws_preview(ws, archived=True)
+        ws = self._selected_ws()
+        ws_id = ws.id if ws else None
+        if not force and ws_id == self._preview_ws_id:
+            return
+        self._preview_ws_id = ws_id
+        self._render_ws_preview(ws)
 
     @staticmethod
     def _hint_line(pairs: list[tuple[str, str]]) -> str:
@@ -587,8 +514,11 @@ class OrchestratorApp(App):
         return self._hint_line([("j/k", "navigate"), ("Tab", "views"), ("?", "help")])
 
     def _render_ws_preview(self, ws: Workstream | None, archived: bool = False):
-        content = self.query_one("#preview-content", Static)
-        olist = self.query_one("#preview-sessions", OptionList)
+        try:
+            content = self.query_one("#preview-content", Static)
+            olist = self.query_one("#preview-sessions", OptionList)
+        except Exception:
+            return
         if not ws:
             content.update(f"[{C_DIM}]Select a workstream[/{C_DIM}]\n\n{self._nav_hints()}")
             olist.display = False
@@ -687,58 +617,8 @@ class OrchestratorApp(App):
         if highlighted is not None and highlighted < len(self.state.preview_sessions):
             olist.highlighted = highlighted
 
-    def _render_session_preview(self, session: ClaudeSession | None):
-        self.query_one("#preview-sessions", OptionList).display = False
-        self.state.preview_sessions = []
-        content = self.query_one("#preview-content", Static)
-        if not session:
-            content.update(f"[{C_DIM}]No session selected[/{C_DIM}]\n\n{self._nav_hints()}")
-            return
-
-        lines = []
-        lines.append(f"[bold {C_PURPLE}]{session.display_name}[/bold {C_PURPLE}]")
-        if session.is_live:
-            lines.append(f"[bold {C_GREEN}]\u25cf LIVE[/bold {C_GREEN}]")
-        lines.append("")
-
-        lines.append(f"[bold {C_BLUE}]Model[/bold {C_BLUE}]")
-        lines.append(f"  {session.model or 'unknown'}")
-        lines.append("")
-
-        lines.append(f"[bold {C_BLUE}]Usage[/bold {C_BLUE}]")
-        lines.append(f"  [{C_DIM}]Input[/{C_DIM}]    {session.total_input_tokens:,}")
-        lines.append(f"  [{C_DIM}]Output[/{C_DIM}]   {session.total_output_tokens:,}")
-        lines.append(f"  [{C_DIM}]Total[/{C_DIM}]    {session.tokens_display}")
-        lines.append("")
-
-        lines.append(f"[bold {C_BLUE}]Activity[/bold {C_BLUE}]")
-        lines.append(f"  [{C_DIM}]Messages[/{C_DIM}]  {session.message_count}")
-        lines.append(f"  [{C_DIM}]Last[/{C_DIM}]      {session.age}")
-        lines.append("")
-
-        lines.append(f"[bold {C_BLUE}]Project[/bold {C_BLUE}]")
-        project = session.project_path
-        if project.startswith(str(Path.home())):
-            project = project.replace(str(Path.home()), "~")
-        lines.append(f"  {project}")
-        lines.append("")
-
-        lines.append(f"[{C_DIM}]Session: {session.session_id[:16]}...[/{C_DIM}]")
-        lines.append("")
-        lines.append(self._hint_line([("r", "resume"), ("L", "link to workstream")]))
-
-        content.update("\n".join(lines))
-
     @on(OptionList.OptionHighlighted, "#ws-table")
     def on_ws_highlighted(self, event: OptionList.OptionHighlighted):
-        self._debounce_preview()
-
-    @on(OptionList.OptionHighlighted, "#sessions-table")
-    def on_session_highlighted(self, event: OptionList.OptionHighlighted):
-        self._debounce_preview()
-
-    @on(OptionList.OptionHighlighted, "#archived-table")
-    def on_archived_highlighted(self, event: OptionList.OptionHighlighted):
         self._debounce_preview()
 
     def _debounce_preview(self):
@@ -753,10 +633,8 @@ class OrchestratorApp(App):
         try:
             lines = [
                 self._render_status_bar(),
-                self._render_view_bar(),
+                self._render_filter_bar(),
             ]
-            if self.state.view_mode == ViewMode.WORKSTREAMS:
-                lines.append(self._render_filter_bar())
             self.query_one("#top-bar", Static).update("\n".join(lines))
             self.query_one("#summary-bar", Static).update(self._render_summary_bar())
         except Exception:
@@ -783,19 +661,6 @@ class OrchestratorApp(App):
                 parts.append(f"[{C_DIM}]\u2502[/{C_DIM}]")
                 parts.append(f"{_token_color_markup(_tk, total_tokens)}")
 
-        return "  ".join(parts)
-
-    def _render_view_bar(self) -> str:
-        # Show sessions and live count alongside the status bar
-        live_count = sum(1 for s in self.state.sessions if s.is_live)
-        parts = []
-        if self.state.sessions:
-            parts.append(f"[{C_DIM}]{len(self.state.sessions)} sessions[/{C_DIM}]")
-            if live_count:
-                parts.append(f"[{C_GREEN}]{live_count} live[/{C_GREEN}]")
-        archived_count = len(self.state.store.archived)
-        if archived_count:
-            parts.append(f"[{C_DIM}]{archived_count} archived[/{C_DIM}]")
         return "  ".join(parts)
 
     def _render_filter_bar(self) -> str:
@@ -833,27 +698,16 @@ class OrchestratorApp(App):
                 f"[{C_DIM}]1[/{C_DIM}] back to all  "
                 f"[{C_DIM}]?[/{C_DIM}] help"
             )
-        elif self.state.view_mode == ViewMode.SESSIONS:
-            count = len(self.state.sessions)
-            return (
-                f"  {count} sessions  "
-                f"[{C_DIM}]\u2502[/{C_DIM}]  "
-                f"[{C_DIM}]r[/{C_DIM}] resume  "
-                f"[{C_DIM}]l[/{C_DIM}] link to workstream  "
-                f"[{C_DIM}]Tab[/{C_DIM}] views  "
-                f"[{C_DIM}]R[/{C_DIM}] refresh"
-            )
-        else:
-            return (
-                f"  {count} workstreams  "
-                f"[{C_DIM}]\u2502[/{C_DIM}]  "
-                f"[{C_DIM}]r[/{C_DIM}] resume  "
-                f"[{C_DIM}]c[/{C_DIM}] new session  "
-                f"[{C_DIM}]n[/{C_DIM}] note  "
-                f"[{C_DIM}]/[/{C_DIM}] search  "
-                f"[{C_DIM}]?[/{C_DIM}] help  "
-                f"[{C_DIM}]Tab[/{C_DIM}] tabs"
-            )
+        return (
+            f"  {count} workstreams  "
+            f"[{C_DIM}]\u2502[/{C_DIM}]  "
+            f"[{C_DIM}]r[/{C_DIM}] resume  "
+            f"[{C_DIM}]c[/{C_DIM}] new session  "
+            f"[{C_DIM}]n[/{C_DIM}] note  "
+            f"[{C_DIM}]/[/{C_DIM}] search  "
+            f"[{C_DIM}]?[/{C_DIM}] help  "
+            f"[{C_DIM}]Tab[/{C_DIM}] tabs"
+        )
 
     # ── Workstreams table ──
 
@@ -958,7 +812,7 @@ class OrchestratorApp(App):
         """Delegate to state — kept for backward compat with DetailScreen."""
         return self.state.sessions_for_ws(ws, include_archived_sessions)
 
-    # ── Sessions table ──
+    # ── Sessions loading ──
 
     def _load_sessions(self):
         self._do_load_sessions()
@@ -980,7 +834,6 @@ class OrchestratorApp(App):
         untitled = [s for s in sessions if not get_session_title(s)]
         if untitled:
             title_sessions(untitled)
-            self.call_from_thread(self._refresh_sessions_table)
             for screen in self.screen_stack:
                 screen.post_message(SessionsChanged())
 
@@ -1020,7 +873,6 @@ class OrchestratorApp(App):
         untitled = [s for s in sessions if not get_session_title(s)]
         if untitled:
             title_sessions(untitled)
-            self.call_from_thread(self._refresh_sessions_table)
             for screen in self.screen_stack:
                 screen.post_message(SessionsChanged())
 
@@ -1047,7 +899,6 @@ class OrchestratorApp(App):
         self._preview_ws_id = None
         with self.batch_update():
             self._refresh_ws_table()
-            self._refresh_sessions_table()
         for screen in self.screen_stack:
             screen.post_message(SessionsChanged())
 
@@ -1056,89 +907,14 @@ class OrchestratorApp(App):
         self.state.discovered_ws = discovered
         self._refresh_ws_table_debounced()
 
-    def _refresh_sessions_table(self):
-        table = self.query_one("#sessions-table", OptionList)
-        old_key = self._olist_cursor_key(table)
-        old_idx = table.highlighted
-        last_seen = self.state.get_last_seen()
-        lw = self._olist_line_width(table)
-
-        options = []
-        for session in self.state.sessions:
-            act = session_activity(session, last_seen)
-            seen = _is_session_seen(session, last_seen)
-            prompt = _render_session_option(session, act, 0, seen=seen, line_width=lw)
-            options.append(Option(prompt, id=session.session_id))
-
-        with self.batch_update():
-            table.clear_options()
-            table.add_options(options)
-            self._olist_restore_cursor(table, old_key, old_idx)
-            self._update_all_bars()
-
-    def _selected_session(self) -> ClaudeSession | None:
-        try:
-            table = self.query_one("#sessions-table", OptionList)
-        except Exception:
-            return None
-        key = self._olist_cursor_key(table)
-        if key:
-            return self.state.get_session(key)
-        return None
-
-    # ── Archived table ──
-
-    def _refresh_archived_table(self):
-        table = self.query_one("#archived-table", OptionList)
-        old_key = self._olist_cursor_key(table)
-        old_idx = table.highlighted
-        last_seen = self.state.get_last_seen()
-        lw = self._olist_line_width(table)
-
-        options = []
-        for ws in self.state.store.archived:
-            ws_sessions = self.state.sessions_for_ws(ws)
-            prompt = _render_ws_option(ws, ws_sessions, last_seen, line_width=lw)
-            options.append(Option(prompt, id=ws.id))
-
-        with self.batch_update():
-            table.clear_options()
-            table.add_options(options)
-            self._olist_restore_cursor(table, old_key, old_idx)
-
-    def _selected_archived(self) -> Workstream | None:
-        try:
-            table = self.query_one("#archived-table", OptionList)
-        except Exception:
-            return None
-        key = self._olist_cursor_key(table)
-        if key:
-            return self.state.get_archived(key)
-        return None
-
     # ── Primary action (Enter) ──
 
     def action_select_item(self):
-        if self.state.filter_mode == "archived":
-            self._open_archived_detail()
-        elif self.state.view_mode == ViewMode.WORKSTREAMS:
-            self._open_detail()
-        elif self.state.view_mode == ViewMode.SESSIONS:
-            self._resume_session()
-        elif self.state.view_mode == ViewMode.ARCHIVED:
-            self._open_archived_detail()
+        self._open_detail()
 
     @on(OptionList.OptionSelected, "#ws-table")
     def on_ws_row_selected(self, event: OptionList.OptionSelected):
         self._open_detail()
-
-    @on(OptionList.OptionSelected, "#sessions-table")
-    def on_session_row_selected(self, event: OptionList.OptionSelected):
-        self._resume_session()
-
-    @on(OptionList.OptionSelected, "#archived-table")
-    def on_archived_row_selected(self, event: OptionList.OptionSelected):
-        self._open_archived_detail()
 
     @on(OptionList.OptionSelected, "#preview-sessions")
     def on_preview_session_selected(self, event: OptionList.OptionSelected):
@@ -1176,24 +952,9 @@ class OrchestratorApp(App):
             callback=lambda _: self._on_detail_dismissed(),
         )
 
-    def _open_archived_detail(self):
-        ws = self._selected_archived()
-        if ws:
-            icon = STATUS_ICONS.get(ws.status, "")
-            self.tabs.open_tab(ws.id, ws.name, icon)
-            self._sync_tab_bar()
-            self._detail_screen_active = True
-            self.push_screen(
-                DetailScreen(ws, self.state.store),
-                callback=lambda _: self._on_detail_dismissed(),
-            )
-
     # ── Workstream actions ──
 
     def action_add(self):
-        if self.state.view_mode != ViewMode.WORKSTREAMS:
-            return
-
         def on_result(ws: Workstream | None):
             if ws:
                 self.state.store.add(ws)
@@ -1203,8 +964,6 @@ class OrchestratorApp(App):
         self.push_screen(AddScreen(), callback=on_result)
 
     def action_quick_note(self):
-        if self.state.view_mode != ViewMode.WORKSTREAMS:
-            return
         ws = self._selected_ws()
         if not ws:
             return
@@ -1232,8 +991,6 @@ class OrchestratorApp(App):
                 self.notify("Todo added", timeout=1)
 
     def action_rename(self):
-        if self.state.view_mode != ViewMode.WORKSTREAMS:
-            return
         ws = self._selected_ws()
         if not ws:
             return
@@ -1259,8 +1016,6 @@ class OrchestratorApp(App):
                 self.notify(f"Renamed to: {new_name}", timeout=1)
 
     def action_edit_notes(self):
-        if self.state.view_mode != ViewMode.WORKSTREAMS:
-            return
         ws = self._selected_ws()
         if ws:
             self.push_screen(
@@ -1269,8 +1024,6 @@ class OrchestratorApp(App):
             )
 
     def action_open_links(self):
-        if self.state.view_mode != ViewMode.WORKSTREAMS:
-            return
         ws = self._selected_ws()
         if not ws:
             return
@@ -1284,34 +1037,19 @@ class OrchestratorApp(App):
             self.notify("No links", timeout=1)
 
     def action_toggle_archive(self):
+        ws = self._selected_ws()
+        if not ws:
+            return
         if self.state.filter_mode == "archived":
-            # Unarchive when in archived filter view
-            ws = self._selected_ws()
-            if ws:
-                name = self.state.unarchive(ws.id)
-                if name:
-                    self.notify(f"Restored: {name}", timeout=2)
-                    with self.batch_update():
-                        self._refresh_ws_table()
-                        self._refresh_archived_table()
-        elif self.state.view_mode == ViewMode.WORKSTREAMS:
-            ws = self._selected_ws()
-            if ws:
-                name = self.state.archive(ws.id)
-                if name:
-                    self.notify(f"Archived: {name}", timeout=2)
-                    with self.batch_update():
-                        self._refresh_ws_table()
-                        self._refresh_archived_table()
-        elif self.state.view_mode == ViewMode.ARCHIVED:
-            ws = self._selected_archived()
-            if ws:
-                name = self.state.unarchive(ws.id)
-                if name:
-                    self.notify(f"Restored: {name}", timeout=2)
-                    with self.batch_update():
-                        self._refresh_ws_table()
-                        self._refresh_archived_table()
+            name = self.state.unarchive(ws.id)
+            if name:
+                self.notify(f"Restored: {name}", timeout=2)
+                self._refresh_ws_table()
+        else:
+            name = self.state.archive(ws.id)
+            if name:
+                self.notify(f"Archived: {name}", timeout=2)
+                self._refresh_ws_table()
 
     # Keep legacy action names so DetailScreen and other callers still work
     def action_archive(self):
@@ -1321,24 +1059,13 @@ class OrchestratorApp(App):
         self.action_toggle_archive()
 
     def action_delete_item(self):
-        if self.state.view_mode == ViewMode.SESSIONS:
-            return
-
-        ws = None
-        if self.state.filter_mode == "archived":
-            ws = self._selected_ws()  # In archived filter, ws-table shows archived items
-        elif self.state.view_mode == ViewMode.WORKSTREAMS:
-            ws = self._selected_ws()
-        elif self.state.view_mode == ViewMode.ARCHIVED:
-            ws = self._selected_archived()
-
+        ws = self._selected_ws()
         if ws:
             def on_confirm(confirmed: bool):
                 if confirmed:
                     self.state.delete(ws.id)
                     self.notify(f"Deleted: {ws.name}", timeout=2)
                     self._refresh_ws_table()
-                    self._refresh_archived_table()
 
             self.push_screen(
                 ConfirmScreen(f"[bold {C_RED}]Delete[/bold {C_RED}] [bold]{_rich_escape(ws.name)}[/bold]?"),
@@ -1348,9 +1075,6 @@ class OrchestratorApp(App):
     # ── Brain dump ──
 
     def action_brain_dump(self):
-        if self.state.view_mode != ViewMode.WORKSTREAMS:
-            return
-
         def on_text(text: str | None):
             if text is None:
                 return
@@ -1479,8 +1203,6 @@ class OrchestratorApp(App):
         threading.Thread(target=drain, daemon=True, name=f"pty-drain-{session_id[:8]}").start()
 
     def action_spawn(self):
-        if self.state.view_mode != ViewMode.WORKSTREAMS:
-            return
         ws = self._selected_ws()
         if not ws:
             self.notify("No workstream selected", timeout=2)
@@ -1525,28 +1247,10 @@ class OrchestratorApp(App):
         self.launch_claude_session(ws)
 
     def action_resume(self):
-        if self.state.view_mode == ViewMode.WORKSTREAMS:
-            ws = self._selected_ws()
-            if ws:
-                do_resume(ws, self, self.state.sessions,
-                          sessions_for_ws_fn=lambda w: self.state.sessions_for_ws(w))
-        elif self.state.view_mode == ViewMode.SESSIONS:
-            self._resume_session()
-
-    def _resume_session(self):
-        session = self._selected_session()
-        if not session:
-            self.notify("No session selected", timeout=2)
-            return
-
-        ws = self.state.find_ws_for_session(session)
+        ws = self._selected_ws()
         if ws:
-            self.launch_claude_session(ws, session_id=session.session_id, cwd=session.project_path)
-        else:
-            self._suspend_claude(
-                ["claude", "--resume", session.session_id],
-                cwd=session.project_path,
-            )
+            do_resume(ws, self, self.state.sessions,
+                      sessions_for_ws_fn=lambda w: self.state.sessions_for_ws(w))
 
     def _suspend_claude(self, cmd: list[str], cwd: str | None = None):
         with self.suspend():
@@ -1559,10 +1263,7 @@ class OrchestratorApp(App):
     # ── Link action ──
 
     def action_link_action(self):
-        if self.state.view_mode == ViewMode.WORKSTREAMS:
-            self._add_link_to_ws()
-        elif self.state.view_mode == ViewMode.SESSIONS:
-            self._link_session_to_ws()
+        self._add_link_to_ws()
 
     def _add_link_to_ws(self):
         ws = self._selected_ws()
@@ -1578,42 +1279,17 @@ class OrchestratorApp(App):
 
         self.push_screen(AddLinkScreen(ws.name), callback=on_link)
 
-    def _link_session_to_ws(self):
-        session = self._selected_session()
-        if not session:
-            self.notify("No session selected", timeout=2)
-            return
-
-        def on_ws(ws: Workstream | None):
-            if ws:
-                ws.add_link(
-                    kind="claude-session",
-                    value=session.session_id,
-                    label=session.display_name,
-                )
-                self.state.store.update(ws)
-                self._refresh_ws_table()
-                self.notify(f"Linked session to {ws.name}", timeout=2)
-
-        self.push_screen(LinkSessionScreen(self.state.store, session), callback=on_ws)
-
     # ── Filter & sort ──
 
     def action_filter(self, mode: str):
-        if self.state.view_mode != ViewMode.WORKSTREAMS:
-            return
         self.state.set_filter(mode)
         self._refresh_ws_table()
 
     def action_sort(self, mode: str):
-        if self.state.view_mode != ViewMode.WORKSTREAMS:
-            return
         self.state.set_sort(mode)
         self._refresh_ws_table()
 
     def action_search(self):
-        if self.state.view_mode != ViewMode.WORKSTREAMS:
-            return
         self.query_one("#command-input", CommandInput).display = False
         search_input = self.query_one("#search-input", SearchInput)
         search_input.display = True
@@ -1652,17 +1328,14 @@ class OrchestratorApp(App):
             self._execute_command(cmd_text)
 
     def _execute_command(self, cmd_text: str):
-        ws = self._selected_ws() if self.state.view_mode == ViewMode.WORKSTREAMS else None
+        ws = self._selected_ws()
         result = self.state.execute_command(cmd_text, ws.id if ws else None)
 
         action = result.get("action", "noop")
         msg = result.get("msg", "")
 
-        if action == "view":
-            self._apply_view()
-        elif action == "refresh":
+        if action == "refresh":
             self._refresh_ws_table()
-            self._refresh_archived_table()
             if msg:
                 self.notify(msg, timeout=2)
         elif action == "notify":
@@ -1964,7 +1637,6 @@ class OrchestratorApp(App):
     def action_refresh(self):
         self.state.store.load()
         self._refresh_ws_table()
-        self._refresh_archived_table()
         self._load_sessions()
         self._poll_tmux()
         self.notify("Refreshed", timeout=1)
@@ -1977,7 +1649,6 @@ class OrchestratorApp(App):
         self.state._last_seen_valid = False  # pick up marks from detail screen
         self._preview_ws_id = None  # force preview rebuild
         self._refresh_ws_table()
-        self._refresh_archived_table()
 
     def _focus_main_list(self):
         """Focus the main workstream list. Used by InlineInput on cancel."""

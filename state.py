@@ -391,7 +391,7 @@ def content_search(
     results.sort(key=lambda r: r.total_score, reverse=True)
     return results
 from threads import Thread, ThreadActivity, session_activity, load_last_seen, mark_thread_seen
-from rendering import ViewMode, _best_activity, _all_sessions_seen
+from rendering import _best_activity, _all_sessions_seen
 
 
 class AppState:
@@ -403,7 +403,6 @@ class AppState:
 
     def __init__(self, store: Store | None = None):
         self.store = store or Store()
-        self.view_mode: ViewMode = ViewMode.WORKSTREAMS
         self.filter_mode: str = "all"
         self.sort_mode: str = "updated"
         self.search_text: str = ""
@@ -421,20 +420,6 @@ class AppState:
         self._session_mtimes: dict[str, float] = {}  # session_id -> last known mtime
         self.git_status_cache: dict[str, object] = {}  # path -> WorktreeStatus
         self.infer_repo_paths()
-
-    # ── View navigation ──
-
-    def next_view(self) -> ViewMode:
-        modes = list(ViewMode)
-        idx = modes.index(self.view_mode)
-        self.view_mode = modes[(idx + 1) % len(modes)]
-        return self.view_mode
-
-    def prev_view(self) -> ViewMode:
-        modes = list(ViewMode)
-        idx = modes.index(self.view_mode)
-        self.view_mode = modes[(idx - 1) % len(modes)]
-        return self.view_mode
 
     # ── Filtering & sorting ──
 
@@ -1037,7 +1022,7 @@ class AppState:
         """Execute a command palette command. Returns action dict for the app to handle.
 
         Returns: {"action": str, ...} where action is one of:
-            "view", "notify", "refresh", "spawn", "resume", "export",
+            "notify", "refresh", "spawn", "resume", "export",
             "brain", "help", "delete", "unarchive", "error"
         """
         from rendering import LINK_KINDS
@@ -1050,19 +1035,8 @@ class AppState:
         arg = parts[1] if len(parts) > 1 else ""
         ws = self.get_ws(selected_ws_id) if selected_ws_id else None
 
-        # View switching
-        if cmd in ("workstreams", "ws"):
-            self.view_mode = ViewMode.WORKSTREAMS
-            return {"action": "view"}
-        elif cmd == "sessions":
-            self.view_mode = ViewMode.SESSIONS
-            return {"action": "view"}
-        elif cmd == "archived":
-            self.view_mode = ViewMode.ARCHIVED
-            return {"action": "view"}
-
         # Link
-        elif cmd in ("link", "ln") and ws:
+        if cmd in ("link", "ln") and ws:
             if ":" not in arg:
                 return {"action": "error", "msg": "Usage: link kind:value (e.g. ticket:UB-1234)"}
             kind, value = arg.split(":", 1)

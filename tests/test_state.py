@@ -19,7 +19,6 @@ from state import (
     SearchHit, SessionSearchResult,
 )
 from sessions import SessionMessage
-from rendering import ViewMode
 
 
 # ─── Fixtures ────────────────────────────────────────────────────────
@@ -65,34 +64,6 @@ def _make_session(session_id="abc123", project_path="/tmp/test", **kwargs):
         session_id=session_id, project_dir="d", project_path=project_path,
         message_count=10, **kwargs,
     )
-
-
-# ─── View Navigation ────────────────────────────────────────────────
-
-class TestViewNavigation:
-    def test_initial_view_is_workstreams(self, state):
-        assert state.view_mode == ViewMode.WORKSTREAMS
-
-    def test_next_view_cycles(self, state):
-        state.next_view()
-        assert state.view_mode == ViewMode.SESSIONS
-        state.next_view()
-        assert state.view_mode == ViewMode.ARCHIVED
-        state.next_view()
-        assert state.view_mode == ViewMode.WORKSTREAMS
-
-    def test_prev_view_cycles(self, state):
-        state.prev_view()
-        assert state.view_mode == ViewMode.ARCHIVED
-        state.prev_view()
-        assert state.view_mode == ViewMode.SESSIONS
-        state.prev_view()
-        assert state.view_mode == ViewMode.WORKSTREAMS
-
-    def test_next_and_prev_are_inverse(self, state):
-        state.next_view()
-        state.prev_view()
-        assert state.view_mode == ViewMode.WORKSTREAMS
 
 
 # ─── Filtering ───────────────────────────────────────────────────────
@@ -610,10 +581,9 @@ class TestUnifiedItems:
 # ─── Command Execution ───────────────────────────────────────────────
 
 class TestCommandExecution:
-    def test_view_command(self, state):
+    def test_removed_view_command_is_error(self, state):
         result = state.execute_command("sessions")
-        assert result["action"] == "view"
-        assert state.view_mode == ViewMode.SESSIONS
+        assert result["action"] == "error"
 
     def test_sort_command(self, state):
         result = state.execute_command("sort name")
