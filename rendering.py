@@ -339,7 +339,7 @@ _BAR_LEGEND_LABELS = [
 
 def tool_bar_legend() -> str:
     """Return a Rich-markup legend for the tool usage bar."""
-    parts = [f"[{c}]▬ {label}[/{c}]" for label, c in _BAR_LEGEND_LABELS]
+    parts = [f"[{c}]▄ {label}[/{c}]" for label, c in _BAR_LEGEND_LABELS]
     return "  ".join(parts)
 
 
