@@ -11,7 +11,7 @@ from datetime import datetime
 from pathlib import Path
 
 from models import (
-    Category, Link, Status, Store, Workstream,
+    Category, Link, Status, Store, TodoItem, Workstream,
     STATUS_ICONS, STATUS_COLORS, CATEGORY_COLORS, STATUS_ORDER,
     _relative_time,
 )
@@ -502,6 +502,54 @@ def cmd_spawn(args):
         "-c", cwd,
         "claude", "-p", prompt,
     ])
+
+
+def cmd_distill(args):
+    """Distill session context — compact or crystallize."""
+    store = Store()
+
+    # Resolve workstream: explicit arg > env var
+    ws_id = getattr(args, "ws_id", None) or os.environ.get("ORCH_WS_ID")
+    if not ws_id:
+        print(_c("red", "  No workstream ID. Set ORCH_WS_ID or pass --ws-id."))
+        sys.exit(1)
+    ws = _resolve_ws(store, ws_id)
+
+    mode = args.distill_mode
+
+    if mode == "crystallize":
+        text = args.text
+        context = args.context or ""
+
+        # Read from stdin if --context is "-"
+        if context == "-":
+            context = sys.stdin.read()
+
+        todo = TodoItem(text=text, context=context)
+        ws.todos.append(todo)
+        store.update(ws)
+        print(f"  {_c('green', '✓')} Crystallized todo on {_c('bold', ws.name)}: {text}")
+        if context:
+            lines = context.strip().split("\n")
+            preview = lines[0][:80] + ("..." if len(lines[0]) > 80 or len(lines) > 1 else "")
+            print(f"    {_c('dim', 'context:')} {preview}")
+
+    elif mode == "compact":
+        summary = args.summary
+        # Read from stdin if --summary is "-"
+        if summary == "-":
+            summary = sys.stdin.read()
+
+        cont_dir = Path.home() / ".cache" / "claude-orchestrator" / "continuations"
+        cont_dir.mkdir(parents=True, exist_ok=True)
+        cont_file = cont_dir / f"{ws.id}.md"
+        cont_file.write_text(summary)
+        print(f"  {_c('green', '✓')} Continuation context saved for {_c('bold', ws.name)}")
+        print(f"    {_c('dim', 'Next session on this workstream will pick it up automatically.')}")
+
+    else:
+        print(_c("red", f"  Unknown distill mode: {mode}"))
+        sys.exit(1)
 
 
 def cmd_export(args):
@@ -1048,6 +1096,29 @@ and description as context. uses the worktree path as working directory.
 """)
     p_spawn.add_argument("id", help="Workstream ID (or prefix)")
 
+    # distill
+    p_distill = sub.add_parser("distill", help="Distill session context (compact or crystallize)",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""\
+examples:
+  orch distill crystallize --text "Refactor auth middleware" --context "..."
+  orch distill compact --summary "We investigated X and decided Y..."
+  echo "long context" | orch distill crystallize --text "task" --context -
+
+auto-detects workstream from ORCH_WS_ID env var (set by orch-claude),
+or pass --ws-id explicitly.
+""")
+    p_distill.add_argument("distill_mode", choices=["compact", "crystallize"],
+                           help="compact: save context for next session. crystallize: save as todo.")
+    p_distill.add_argument("--ws-id", dest="ws_id",
+                           help="Workstream ID (default: ORCH_WS_ID env var)")
+    p_distill.add_argument("--text", "-t",
+                           help="Todo text (crystallize mode)")
+    p_distill.add_argument("--context", "-c",
+                           help="Detailed context (crystallize) or ignored. Use '-' for stdin.")
+    p_distill.add_argument("--summary", "-s",
+                           help="Continuation summary (compact mode). Use '-' for stdin.")
+
     # export
     p_export = sub.add_parser("export", help="Export active workstreams as markdown",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -1115,6 +1186,7 @@ examples:
         "resume": cmd_resume,
         "watch": cmd_watch,
         "spawn": cmd_spawn,
+        "distill": cmd_distill,
         "export": cmd_export,
         "import": cmd_import,
         "seed": cmd_seed,

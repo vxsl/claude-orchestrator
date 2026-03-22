@@ -62,6 +62,26 @@ if [[ -n "$PROMPT" ]]; then
     CONTEXT+=$'\n\n'"Initial task: ${PROMPT}"
 fi
 
+# ─── Check for continuation context from a previous compact ──────
+CONT_DIR="$HOME/.cache/claude-orchestrator/continuations"
+CONT_FILE="${CONT_DIR}/${WS_ID}.md"
+if [[ -n "$WS_ID" && -f "$CONT_FILE" ]]; then
+    CONT_CONTENT=$(<"$CONT_FILE")
+    CONTEXT+=$'\n\n'"Continuation context from previous session:"$'\n'"${CONT_CONTENT}"
+    rm -f "$CONT_FILE"
+fi
+
+# ─── Append distill command hints to context ──────────────────────
+DISTILL_HINT='Session distillation commands (use via Bash tool):
+- `orch distill crystallize --text "task summary" --context "detailed context"` — saves a rich todo item to this workstream for a future session to pick up. Use when the user says "crystallize this" or wants to save investigation results as an actionable todo.
+- `orch distill compact --summary "continuation context"` — saves a summary for the next session on this workstream. Use when the user says "compact" and wants to start fresh with distilled context. After running, tell the user to start a new session from the TUI.
+Environment: $ORCH_WS_ID and $ORCH_SESSION_ID are set automatically.'
+
+# Only add distill hints if we have a workstream ID
+if [[ -n "$WS_ID" ]]; then
+    CONTEXT+=$'\n\n'"${DISTILL_HINT}"
+fi
+
 # ─── Record start time for elapsed calculation ─────────────────
 SESSION_START=$(date +%s)
 
@@ -102,6 +122,11 @@ tmux select-pane -L
 
 # ─── Tag this window with session ID (for reattach detection) ────
 tmux set-option -w @orch_session_id "$SESSION_ID" 2>/dev/null || true
+
+# ─── Export env vars for distill commands ──────────────────────────
+export ORCH_WS_ID="$WS_ID"
+export ORCH_SESSION_ID="$SESSION_ID"
+export ORCH_DIR
 
 # ─── Build and run Claude command ────────────────────────────────
 cd "$CWD"
