@@ -202,28 +202,25 @@ class TestDetailScreenPanelIds:
         s = self._make_screen_state(archived=[MagicMock()])
         assert s._panel_ids() == ["detail-sessions", "detail-archived", "detail-scroll"]
 
-    def test_sessions_and_feed(self):
+    def test_sessions_and_feed_no_longer_in_cycle(self):
+        """Feed pane is no longer in the panel cycle — notifications are inline."""
         s = self._make_screen_state(feed=[MagicMock()])
-        assert s._panel_ids() == ["detail-sessions", "detail-scroll", "detail-feed"]
+        assert s._panel_ids() == ["detail-sessions", "detail-scroll"]
+        assert "detail-feed" not in s._panel_ids()
 
-    def test_all_panels(self):
+    def test_all_panels_without_feed(self):
         s = self._make_screen_state(
             archived=[MagicMock()],
             feed=[MagicMock()],
         )
         assert s._panel_ids() == [
-            "detail-sessions", "detail-archived", "detail-scroll", "detail-feed"
+            "detail-sessions", "detail-archived", "detail-scroll"
         ]
 
     def test_empty_archived_skipped(self):
         s = self._make_screen_state(archived=[], feed=[MagicMock()])
         panels = s._panel_ids()
         assert "detail-archived" not in panels
-
-    def test_empty_feed_skipped(self):
-        s = self._make_screen_state(archived=[MagicMock()], feed=[])
-        panels = s._panel_ids()
-        assert "detail-feed" not in panels
 
 
 class TestOnKeyRouting:
