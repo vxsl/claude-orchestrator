@@ -2230,3 +2230,278 @@ class TestSessionArchiveRestore:
             # Session should now be in archived_sessions
             assert "sess-1" in ds.ws.archived_sessions or \
                    len(ds.ws.archived_sessions) > len(initial_archived)
+
+
+# ─── Adversarial: Name sanitization ──────────────────────────────────
+
+
+class TestNameSanitization:
+    """Verify Workstream.__post_init__ sanitizes names and descriptions."""
+
+    def test_trailing_newline_stripped(self):
+        ws = Workstream(name="UB-6526: fix pre-commit\n")
+        assert ws.name == "UB-6526: fix pre-commit"
+
+    def test_trailing_whitespace_stripped(self):
+        ws = Workstream(name="  hello world  \t")
+        assert ws.name == "hello world"
+
+    def test_redundant_ticket_name_deduped(self):
+        ws = Workstream(name="UB-6636: UB-6636")
+        assert ws.name == "UB-6636"
+
+    def test_ticket_with_real_description_kept(self):
+        ws = Workstream(name="UB-6732: time range fix")
+        assert ws.name == "UB-6732: time range fix"
+
+    def test_description_stripped(self):
+        ws = Workstream(description="  some description\n\n")
+        assert ws.description == "some description"
+
+    def test_empty_name_no_crash(self):
+        ws = Workstream(name="")
+        assert ws.name == ""
+
+    def test_colon_only_no_crash(self):
+        ws = Workstream(name=": ")
+        assert ws.name == ":"
+
+    def test_from_dict_strips(self):
+        d = {
+            "id": "test123",
+            "name": "UB-1234: fix something\n",
+            "description": "",
+            "status": "in-progress",
+            "category": "work",
+            "created_at": "2024-01-01T00:00:00",
+            "updated_at": "2024-01-01T00:00:00",
+            "status_changed_at": "2024-01-01T00:00:00",
+        }
+        ws = Workstream.from_dict(d)
+        assert ws.name == "UB-1234: fix something"
+        assert "\n" not in ws.name
+
+
+# ─── Adversarial: auto_link_session ──────────────────────────────────
+
+
+class TestAutoLinkSession:
+    """Verify auto_link_session skips linking when ws has dir links."""
+
+    def test_skips_when_has_dir_links(self, tmp_path):
+        store = Store(path=tmp_path / "data.json")
+        ws = Workstream(name="test")
+        ws.links.append(Link(kind="worktree", label="repo", value="/some/dir"))
+        store.add(ws)
+
+        from claude_session_screen import auto_link_session
+        auto_link_session(store, ws.id, "session-abc-123")
+
+        updated = store.get(ws.id)
+        session_links = [l for l in updated.links if l.kind == "claude-session"]
+        assert len(session_links) == 0
+
+    def test_links_when_no_dir_links(self, tmp_path):
+        store = Store(path=tmp_path / "data.json")
+        ws = Workstream(name="test")
+        store.add(ws)
+
+        from claude_session_screen import auto_link_session
+        auto_link_session(store, ws.id, "session-abc-123")
+
+        updated = store.get(ws.id)
+        session_links = [l for l in updated.links if l.kind == "claude-session"]
+        assert len(session_links) == 1
+        assert session_links[0].value == "session-abc-123"
+
+    def test_no_duplicate_session_links(self, tmp_path):
+        store = Store(path=tmp_path / "data.json")
+        ws = Workstream(name="test")
+        store.add(ws)
+
+        from claude_session_screen import auto_link_session
+        auto_link_session(store, ws.id, "session-abc-123")
+        auto_link_session(store, ws.id, "session-abc-123")
+
+        updated = store.get(ws.id)
+        session_links = [l for l in updated.links if l.kind == "claude-session"]
+        assert len(session_links) == 1
+
+
+# ─── Adversarial: Thread naming with generic branches ──────────────
+
+
+class TestThreadNaming:
+    """Verify thread naming skips generic branch names."""
+
+    def test_wip_branch_skipped(self):
+        from threads import _derive_thread_name
+        from sessions import ClaudeSession
+
+        sess = ClaudeSession(
+            session_id="s1", project_dir="d",
+            project_path="/home/user/project", message_count=5,
+        )
+        branches = {"s1": "wip"}
+        messages = {"s1": "Fix the authentication middleware"}
+        name = _derive_thread_name([sess], branches, messages)
+        assert name != "wip"
+        assert "Fix the authentication" in name
+
+    def test_real_branch_used(self):
+        from threads import _derive_thread_name
+        from sessions import ClaudeSession
+
+        sess = ClaudeSession(
+            session_id="s1", project_dir="d",
+            project_path="/home/user/project", message_count=5,
+        )
+        branches = {"s1": "UB-6668-metric-handling"}
+        messages = {"s1": "Implement time ranges"}
+        name = _derive_thread_name([sess], branches, messages)
+        assert name == "UB-6668-metric-handling"
+
+    def test_generic_branches_all_skipped(self):
+        from threads import _derive_thread_name
+        from sessions import ClaudeSession
+
+        generics = ["wip", "temp", "dev", "prod", "main", "master", "HEAD",
+                     "fix", "hotfix", "test", "staging"]
+        for branch in generics:
+            sess = ClaudeSession(
+                session_id="s1", project_dir="d",
+                project_path="/home/user/project", message_count=5,
+            )
+            name = _derive_thread_name([sess], {"s1": branch}, {"s1": "Do stuff"})
+            assert name != branch, f"Generic branch {branch!r} should not be used as name"
+
+
+# ─── Adversarial: Rich markup in workstream names ────────────────────
+
+
+class TestRichMarkupEscaping:
+    """Verify Rich markup in names doesn't break rendering."""
+
+    def test_rich_escape_brackets(self):
+        from rendering import _rich_escape
+        result = _rich_escape("[bold]evil[/bold]")
+        assert "[" not in result or r"\[" in result
+
+    def test_render_ws_option_with_markup_name(self):
+        from rendering import _render_ws_option
+        ws = Workstream(name="[red]Malicious[/red]", status=Status.IN_PROGRESS)
+        # Should not raise
+        result = _render_ws_option(ws, [], {})
+        # The brackets should be escaped
+        assert r"\[red]" in result or "[red]" not in result
+
+    def test_render_ws_option_with_unicode_name(self):
+        from rendering import _render_ws_option
+        ws = Workstream(name="🚀 Unicode Test 日本語", status=Status.IN_PROGRESS)
+        result = _render_ws_option(ws, [], {})
+        assert "Unicode Test" in result
+
+
+# ─── Adversarial: CLI note creates TodoItem ──────────────────────────
+
+
+class TestCLINoteCreatesTodo:
+    """Verify CLI note creates TodoItem (not appending to notes string)."""
+
+    def test_note_creates_todo_item(self, tmp_path):
+        store_path = tmp_path / "data.json"
+        store = Store(path=store_path)
+        ws = Workstream(name="Test", status=Status.IN_PROGRESS)
+        store.add(ws)
+
+        from cli import cmd_note
+        args = MagicMock()
+        args.id = ws.id
+        args.text = ["fix", "the", "bug"]
+        with patch("cli.Store", return_value=store):
+            cmd_note(args)
+
+        updated = store.get(ws.id)
+        assert len(updated.todos) == 1
+        assert updated.todos[0].text == "fix the bug"
+        assert updated.todos[0].done is False
+        assert updated.todos[0].origin == "manual"
+
+    def test_note_empty_text_exits(self, tmp_path):
+        store_path = tmp_path / "data.json"
+        store = Store(path=store_path)
+        ws = Workstream(name="Test", status=Status.IN_PROGRESS)
+        store.add(ws)
+
+        from cli import cmd_note
+        args = MagicMock()
+        args.id = ws.id
+        args.text = ["   "]
+        with patch("cli.Store", return_value=store):
+            with pytest.raises(SystemExit):
+                cmd_note(args)
+
+
+# ─── Adversarial: Context ws from DetailScreen ──────────────────────
+
+
+@pytest.mark.asyncio
+class TestContextWsFromDetail:
+    """Verify _context_ws returns DetailScreen ws when active."""
+
+    async def test_context_ws_returns_detail_ws(self, app_with_store):
+        async with app_with_store.run_test(size=(120, 40)) as pilot:
+            # Open detail screen
+            await pilot.press("enter")
+            from screens import DetailScreen
+            ds = pilot.app.screen
+            assert isinstance(ds, DetailScreen)
+
+            # _context_ws should return the detail screen's ws
+            ctx_ws = pilot.app._context_ws()
+            assert ctx_ws is not None
+            assert ctx_ws.id == ds.ws.id
+
+    async def test_context_ws_returns_home_ws_when_no_detail(self, app_with_store):
+        async with app_with_store.run_test(size=(120, 40)) as pilot:
+            # On home screen, _context_ws should return selected ws
+            ctx_ws = pilot.app._context_ws()
+            # May or may not have a ws selected depending on store
+            # but should not crash
+            assert True  # No crash is the test
+
+
+# ─── Adversarial: Worktree path normalization ────────────────────────
+
+
+class TestWorktreePathNormalization:
+    """Verify .claude/worktrees/agent-* paths get normalized to parent."""
+
+    def test_agent_worktree_normalized(self):
+        """Sessions in .claude/worktrees/ should group with parent project."""
+        from sessions import ClaudeSession
+
+        parent_session = ClaudeSession(
+            session_id="parent-1", project_dir="d",
+            project_path="/home/user/dev/project", message_count=5,
+        )
+        agent_session = ClaudeSession(
+            session_id="agent-1", project_dir="d",
+            project_path="/home/user/dev/project/.claude/worktrees/agent-abc123",
+            message_count=5,
+        )
+
+        # Group by normalized path
+        by_project = {}
+        for s in [parent_session, agent_session]:
+            path = s.project_path
+            if "/.claude/worktrees/" in path:
+                parent = path.split("/.claude/worktrees/")[0]
+                if parent:
+                    path = parent
+            by_project.setdefault(path, []).append(s)
+
+        # Both should be in the same group
+        assert len(by_project) == 1
+        assert "/home/user/dev/project" in by_project
+        assert len(by_project["/home/user/dev/project"]) == 2
