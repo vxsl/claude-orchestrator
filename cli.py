@@ -327,21 +327,19 @@ def cmd_link(args):
 
 
 def cmd_note(args):
-    """Append a note to a workstream."""
+    """Add a todo item to a workstream (same as TUI 'n' key)."""
     store = Store()
     ws = _resolve_ws(store, args.id)
 
     note_text = " ".join(args.text)
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
-    entry = f"[{timestamp}] {note_text}"
+    if not note_text.strip():
+        print(_c("red", "  Note text cannot be empty"))
+        sys.exit(1)
 
-    if ws.notes:
-        ws.notes += "\n" + entry
-    else:
-        ws.notes = entry
-
+    item = TodoItem(text=note_text.strip())
+    ws.todos.append(item)
     store.update(ws)
-    print(f"  {_c('green', '\u2713')} Note added to {_c('bold', ws.name)}")
+    print(f"  {_c('green', '\u2713')} Todo added to {_c('bold', ws.name)}: {note_text.strip()}")
 
 
 def cmd_archive(args):

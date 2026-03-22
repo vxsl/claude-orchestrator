@@ -1600,7 +1600,7 @@ class TestCLISubcommands:
         assert ws.id in captured.out
 
     def test_cmd_note(self, tmp_path, capsys):
-        """cmd_note should append a note to the workstream."""
+        """cmd_note should add a todo item to the workstream."""
         store, ws = self._make_store_with_ws(tmp_path)
         from cli import cmd_note
         args = MagicMock()
@@ -1608,9 +1608,9 @@ class TestCLISubcommands:
         args.text = ["hello", "from", "test"]
         with patch("cli.Store", return_value=store):
             cmd_note(args)
-        # Verify note was added
+        # Verify todo was added
         updated_ws = store.get(ws.id)
-        assert "hello from test" in updated_ws.notes
+        assert any(t.text == "hello from test" for t in updated_ws.todos)
 
     def test_cmd_distill_crystallize(self, tmp_path, capsys):
         """cmd_distill crystallize should add a todo to the workstream."""
@@ -1959,23 +1959,28 @@ class TestCLIEdgeCases:
         with pytest.raises(SystemExit):
             _resolve_ws(store, "bogus-id-that-does-not-exist")
 
-    def test_cmd_note_appends_to_existing(self, tmp_path, capsys):
-        """cmd_note should append (not replace) existing notes."""
+    def test_cmd_note_creates_todo_items(self, tmp_path, capsys):
+        """cmd_note should create todo items, not append to notes string."""
         store_path = tmp_path / "cli_data.json"
         store = Store(path=store_path)
         ws = Workstream(name="Test", status=Status.IN_PROGRESS)
-        ws.notes = "existing note"
         store.add(ws)
 
         from cli import cmd_note
         args = MagicMock()
         args.id = ws.id
-        args.text = ["new", "note"]
+        args.text = ["first", "todo"]
         with patch("cli.Store", return_value=store):
             cmd_note(args)
+
+        args.text = ["second", "todo"]
+        with patch("cli.Store", return_value=store):
+            cmd_note(args)
+
         updated = store.get(ws.id)
-        assert "existing note" in updated.notes
-        assert "new note" in updated.notes
+        assert len(updated.todos) == 2
+        assert updated.todos[0].text == "first todo"
+        assert updated.todos[1].text == "second todo"
 
     def test_cmd_show_with_links_and_notes(self, tmp_path, capsys):
         """cmd_show should display links and notes without crashing."""
