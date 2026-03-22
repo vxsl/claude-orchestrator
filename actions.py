@@ -138,6 +138,45 @@ def switch_to_tmux_window(window_id: str) -> bool:
         return False
 
 
+# ─── Git Remote Utilities ────────────────────────────────────────────
+
+def get_git_remote_host(path: str) -> str | None:
+    """Get the hostname of the git remote 'origin' for the repo at path.
+
+    Parses both SSH (git@gitlab.com:org/repo) and HTTPS
+    (https://github.com/user/repo) URL formats.
+    Returns just the hostname (e.g., "gitlab.com"), or None on failure.
+    """
+    try:
+        result = subprocess.run(
+            ["git", "-C", path, "remote", "get-url", "origin"],
+            capture_output=True, text=True, timeout=5,
+        )
+        if result.returncode != 0:
+            return None
+        url = result.stdout.strip()
+        if not url:
+            return None
+        # SSH format: git@hostname:org/repo.git
+        if url.startswith("git@"):
+            # git@gitlab.com:org/repo.git → gitlab.com
+            host_part = url.split("@", 1)[1]
+            hostname = host_part.split(":", 1)[0]
+            return hostname
+        # HTTPS format: https://hostname/user/repo
+        if "://" in url:
+            # https://github.com/user/repo → github.com
+            after_scheme = url.split("://", 1)[1]
+            hostname = after_scheme.split("/", 1)[0]
+            # Strip optional user:pass@ prefix
+            if "@" in hostname:
+                hostname = hostname.split("@", 1)[1]
+            return hostname
+        return None
+    except Exception:
+        return None
+
+
 # ─── Workstream Directory Helpers ────────────────────────────────────
 
 def ws_directories(ws: Workstream) -> list[str]:
