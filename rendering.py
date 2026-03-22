@@ -36,6 +36,7 @@ C_GREEN = "#87d787"      # 114 — success, done
 C_YELLOW = "#ffd75f"     # 221 — warnings, queued
 C_ORANGE = "#d7875f"     # 173 — secondary accents
 C_RED = "#d75f5f"        # 167 — errors, blocked
+C_GOLD = "#d7af5f"       # 179 — crystallized todos, distilled knowledge
 C_LIGHT = "#a0a0a0"      # soft foreground text
 C_DIM = "#585858"        # subdued — present but not loud
 
@@ -460,10 +461,12 @@ def _render_notification_option(notif, max_width: int = 40) -> str:
 TODO_UNDONE_ICON = "\u25cb"   # ○
 TODO_DONE_ICON = "\u25cf"     # ●
 TODO_ARCHIVED_ICON = "\u25cc"  # ◌
+TODO_CRYSTAL_ICON = "\u25c8"  # ◈
 
 
 def _render_todo_option(item: TodoItem, is_archived: bool = False) -> str:
     """Render a todo item as a formatted OptionList entry."""
+    is_crystal = getattr(item, "origin", "manual") == "crystallized"
     text_esc = _rich_escape(item.text)
     if is_archived:
         icon = TODO_ARCHIVED_ICON
@@ -471,11 +474,16 @@ def _render_todo_option(item: TodoItem, is_archived: bool = False) -> str:
     elif item.done:
         icon = TODO_DONE_ICON
         text_fmt = f"[{C_GREEN}]{text_esc}[/{C_GREEN}]"
+    elif is_crystal:
+        icon = TODO_CRYSTAL_ICON
+        text_fmt = f"[bold {C_GOLD}]{text_esc}[/bold {C_GOLD}]"
     else:
         icon = TODO_UNDONE_ICON
         text_fmt = text_esc
-    ctx_hint = f" [{C_DIM}]+ctx[/{C_DIM}]" if item.context else ""
+    icon_color = C_GOLD if is_crystal and not is_archived else (C_DIM if is_archived else C_LIGHT)
+    ctx_hint = f" [{C_GOLD}]\u2726[/{C_GOLD}]" if is_crystal and item.context else (f" [{C_DIM}]+ctx[/{C_DIM}]" if item.context else "")
+    tag = f" [{C_GOLD}]crystallized[/{C_GOLD}]" if is_crystal and not is_archived else ""
     age = _relative_time(item.created_at)
-    line1 = f" [{C_DIM if is_archived else C_LIGHT}]{icon}[/{C_DIM if is_archived else C_LIGHT}]  {text_fmt}{ctx_hint}"
-    line2 = f"      [{C_DIM}]{age}[/{C_DIM}]"
+    line1 = f" [{icon_color}]{icon}[/{icon_color}]  {text_fmt}{ctx_hint}"
+    line2 = f"      [{C_DIM}]{age}[/{C_DIM}]{tag}"
     return f"{line1}\n{line2}"

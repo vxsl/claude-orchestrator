@@ -757,11 +757,12 @@ class AppState:
 
     @staticmethod
     def active_todos(ws: Workstream) -> list[TodoItem]:
-        """Non-archived todos: undone first, then done, preserving insertion order."""
+        """Non-archived todos: crystallized first, then undone, then done."""
         active = [t for t in ws.todos if not t.archived]
-        undone = [t for t in active if not t.done]
+        crystallized = [t for t in active if not t.done and getattr(t, "origin", "manual") == "crystallized"]
+        undone = [t for t in active if not t.done and getattr(t, "origin", "manual") != "crystallized"]
         done = [t for t in active if t.done]
-        return undone + done
+        return crystallized + undone + done
 
     @staticmethod
     def archived_todos(ws: Workstream) -> list[TodoItem]:

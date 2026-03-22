@@ -38,7 +38,7 @@ from models import (
 from sessions import ClaudeSession
 from threads import Thread, ThreadActivity, session_activity, load_last_seen, mark_thread_seen
 from rendering import (
-    C_BLUE, C_CYAN, C_DIM, C_GREEN, C_LIGHT, C_ORANGE, C_PURPLE, C_RED, C_YELLOW,
+    C_BLUE, C_CYAN, C_DIM, C_GOLD, C_GREEN, C_LIGHT, C_ORANGE, C_PURPLE, C_RED, C_YELLOW,
     BG_BASE, BG_RAISED, BG_SURFACE,
     STATUS_THEME, CATEGORY_THEME,
     LINK_TYPE_ICONS, LINK_ORDER, LINK_KINDS,
@@ -481,12 +481,14 @@ class TodoScreen(_VimOptionListMixin, ModalScreen[None]):
         item = self._highlighted_item()
         ctx_widget = self.query_one("#todo-context", Static)
         if item and item.context:
+            is_crystal = getattr(item, "origin", "manual") == "crystallized"
             # Show first 4 lines of context
             lines = item.context.strip().split("\n")[:4]
             preview = "\n".join(lines)
             if len(item.context.strip().split("\n")) > 4:
                 preview += f"\n[{C_DIM}]...[/{C_DIM}]"
-            ctx_widget.update(f"[{C_BLUE}]Context:[/{C_BLUE}] {preview}")
+            label_color = C_GOLD if is_crystal else C_BLUE
+            ctx_widget.update(f"[{label_color}]Context:[/{label_color}] {preview}")
         elif item:
             ctx_widget.update(f"[{C_DIM}]No context \u2014 E to add[/{C_DIM}]")
         else:

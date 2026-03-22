@@ -72,6 +72,7 @@ class TodoItem:
     archived: bool = False
     context: str = ""  # extra instructions for spawning a session
     created_at: str = field(default_factory=lambda: datetime.now().isoformat())
+    origin: str = "manual"  # "manual" or "crystallized"
 
 
 @dataclass
@@ -189,7 +190,14 @@ class Workstream:
         d.setdefault("last_user_activity", "")
         d.setdefault("repo_path", "")
         d.setdefault("todos", [])
-        d["todos"] = [TodoItem(**t) if isinstance(t, dict) else t for t in d["todos"]]
+        todos = []
+        for t in d["todos"]:
+            if isinstance(t, dict):
+                t.setdefault("origin", "manual")
+                todos.append(TodoItem(**t))
+            else:
+                todos.append(t)
+        d["todos"] = todos
         return cls(**d)
 
 

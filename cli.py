@@ -525,7 +525,7 @@ def cmd_distill(args):
         if context == "-":
             context = sys.stdin.read()
 
-        todo = TodoItem(text=text, context=context)
+        todo = TodoItem(text=text, context=context, origin="crystallized")
         ws.todos.append(todo)
         store.update(ws)
         print(f"  {_c('green', '✓')} Crystallized todo on {_c('bold', ws.name)}: {text}")
