@@ -22,6 +22,21 @@ from textual.widgets import (
     Static,
 )
 from textual.widgets.option_list import Option
+from textual._widget_navigation import find_next_enabled_no_wrap
+
+# Monkeypatch OptionList to never wrap at top/bottom
+def _option_list_cursor_up(self) -> None:
+    self.highlighted = find_next_enabled_no_wrap(
+        self.options, anchor=self.highlighted, direction=-1,
+    )
+
+def _option_list_cursor_down(self) -> None:
+    self.highlighted = find_next_enabled_no_wrap(
+        self.options, anchor=self.highlighted, direction=1,
+    )
+
+OptionList.action_cursor_up = _option_list_cursor_up
+OptionList.action_cursor_down = _option_list_cursor_down
 
 from config import build_app_bindings
 from models import (

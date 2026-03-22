@@ -341,16 +341,14 @@ def _render_ws_option(
 ) -> str:
     """Render a workstream as a formatted 3-line OptionList entry.
 
-    Layout (padded for visual weight):
-                                                          {worktree}
-      {status_icon} {name}  {indicators}          {sessions} {tokens}
-         {status}  {category}  {updated}            {description}
+    Layout:
+      {icon} {name}  {indicators}
+         {status} · {category} · {worktree} · {N sess} · {tokens} · {updated}
+         {description}
     """
     from models import Origin
 
-    IND = "     "  # 5-space indent for metadata line
-    LW = line_width if line_width > 0 else 72
-
+    IND = "     "
     is_discovered = ws.origin == Origin.DISCOVERED
 
     # ── Status icon ──
@@ -368,20 +366,35 @@ def _render_ws_option(
         color = STATUS_THEME.get(ws.status, C_DIM)
         icon = f"[{color}]{STATUS_ICONS[ws.status]}[/{color}]"
 
-    # ── Name + indicators ──
+    # ── Line 1: icon + name + indicators ──
     name_esc = _rich_escape(ws.name)
-    name_fmt = f"[bold {C_LIGHT}]{name_esc}[/bold {C_LIGHT}]"
-
     indicators = ""
     if not is_discovered:
         indicators = _ws_indicators(ws, tmux_check=tmux_check)
     ind_markup = f"  [{C_DIM}]{indicators}[/{C_DIM}]" if indicators else ""
+    line1 = f" {icon} [bold {C_LIGHT}]{name_esc}[/bold {C_LIGHT}]{ind_markup}"
 
-    # ── Right side of line 1: session count + tokens ──
-    right_parts = []
+    # ── Line 2: metadata chain separated by dim dots ──
+    sep = f" [{C_FAINT}]·[/{C_FAINT}] "
+    parts: list[str] = []
+
+    sc = STATUS_THEME.get(ws.status, C_DIM)
+    if is_discovered:
+        parts.append(f"[{C_DIM}]discovered[/{C_DIM}]")
+    else:
+        parts.append(f"[{sc}]{ws.status.value}[/{sc}]")
+
+    cc = CATEGORY_THEME.get(ws.category, C_DIM)
+    parts.append(f"[{cc}]{ws.category.value}[/{cc}]")
+
+    wt_text, wt_color = _worktree_styled(ws)
+    if wt_text:
+        parts.append(f"[{wt_color}]{_rich_escape(wt_text)}[/{wt_color}]")
+
     sess_count = len(ws_sessions) if ws_sessions else 0
     if sess_count:
-        right_parts.append(f"[{C_DIM}]{sess_count} sess[/{C_DIM}]")
+        parts.append(f"[{C_DIM}]{sess_count} sess[/{C_DIM}]")
+
     if ws_sessions:
         total_tokens = sum(s.total_input_tokens + s.total_output_tokens for s in ws_sessions)
         if total_tokens > 0:
@@ -391,55 +404,22 @@ def _render_ws_option(
                 tk = f"{total_tokens / 1_000:.0f}k"
             else:
                 tk = str(total_tokens)
-            right_parts.append(_token_color_markup(tk, total_tokens))
-    right = "  ".join(right_parts)
+            parts.append(_token_color_markup(tk, total_tokens))
 
-    # ── Line 1: icon + name + indicators ... stats ──
-    prefix_w = 3  # " ● "
-    name_w = len(ws.name)
-    ind_w = len(indicators) + 2 if indicators else 0
-    import re
-    right_plain_w = len(re.sub(r"\[/?[^\]]*\]", "", right)) if right else 0
-    if right:
-        fill = max(2, LW - prefix_w - name_w - ind_w - right_plain_w)
-        line1 = f" {icon} {name_fmt}{ind_markup}{' ' * fill}{right}"
-    else:
-        line1 = f" {icon} {name_fmt}{ind_markup}"
+    parts.append(f"[{C_FAINT}]{_relative_time(ws.updated_at)}[/{C_FAINT}]")
 
-    # ── Line 2: status · category · worktree · updated  [description] ──
-    sc = STATUS_THEME.get(ws.status, C_DIM)
-    if is_discovered:
-        status_part = f"[{C_DIM}]discovered[/{C_DIM}]"
-    else:
-        status_part = f"[{sc}]{ws.status.value}[/{sc}]"
+    line2 = f"{IND}{sep.join(parts)}"
 
-    cc = CATEGORY_THEME.get(ws.category, C_DIM)
-    cat_part = f"[{cc}]{ws.category.value}[/{cc}]"
-
-    wt_text, wt_color = _worktree_styled(ws)
-    wt_part = f"[{wt_color}]{_rich_escape(wt_text)}[/{wt_color}]" if wt_text else ""
-
-    updated_part = f"[{C_FAINT}]{_relative_time(ws.updated_at)}[/{C_FAINT}]"
-
-    meta = f"[{C_FAINT}]·[/{C_FAINT}]".join(
-        f" {p} " for p in (status_part, cat_part, wt_part, updated_part) if p
-    )
-    line2 = f"{IND}{meta}"
-
-    # ── Line 3: description snippet (if any), faint ──
+    # ── Line 3: description snippet (if any) ──
+    lines = [line1, line2]
     if ws.description:
         desc = ws.description.replace("\n", " ").strip()
-        max_desc = LW - 5
+        max_desc = (line_width - 5) if line_width > 20 else 67
         if len(desc) > max_desc:
             desc = desc[:max_desc - 1] + "…"
-        line3 = f"{IND}[{C_DIM}]{_rich_escape(desc)}[/{C_DIM}]"
-    else:
-        line3 = ""
+        lines.append(f"{IND}[{C_DIM}]{_rich_escape(desc)}[/{C_DIM}]")
 
-    lines = [line1, line2]
-    if line3:
-        lines.append(line3)
-    # Trailing blank line creates visual separation between workstreams
+    # Trailing blank line for visual separation
     lines.append("")
     return "\n".join(lines)
 
