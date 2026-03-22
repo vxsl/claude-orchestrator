@@ -44,7 +44,7 @@ from rendering import (
     LINK_TYPE_ICONS, LINK_ORDER, LINK_KINDS,
     THROBBER_FRAMES,
     _status_markup, _category_markup, _link_icon,
-    _activity_icon, _activity_badge,
+    _activity_icon, _activity_badge, _is_session_seen,
     _colored_tokens, _token_color_markup,
     _short_model, _short_project,
     _render_session_option, _session_title,
@@ -556,7 +556,14 @@ class TodoScreen(_VimOptionListMixin, ModalScreen[None]):
         if not item:
             return
         self._app_state.toggle_todo(self.ws.id, item.id)
-        self._rebuild()
+        # Update the option prompt in place to avoid clear_options() focus loss
+        olist = self._focused_olist()
+        idx = olist.highlighted
+        if idx is not None:
+            is_archived = self._active_pane == "archived"
+            prompt = _render_todo_option(item, is_archived=is_archived)
+            olist.replace_option_prompt_at_index(idx, prompt)
+        self._update_context_preview()
 
     def action_edit_todo(self):
         item = self._highlighted_item()
@@ -1145,13 +1152,15 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         for i, s in enumerate(self._detail_sessions):
             if i < olist.option_count:
                 act = session_activity(s, self._last_seen_cache)
-                prompt = _render_session_option(s, act, self._throbber_frame, ws_repo_path=self.ws.repo_path)
+                seen = _is_session_seen(s, self._last_seen_cache)
+                prompt = _render_session_option(s, act, self._throbber_frame, ws_repo_path=self.ws.repo_path, seen=seen)
                 olist.replace_option_prompt_at_index(i, prompt)
         arch_olist = self.query_one("#detail-archived", OptionList)
         for i, s in enumerate(self._archived_sessions):
             if i < arch_olist.option_count:
                 act = session_activity(s, self._last_seen_cache)
-                prompt = _render_session_option(s, act, self._throbber_frame, ws_repo_path=self.ws.repo_path)
+                seen = _is_session_seen(s, self._last_seen_cache)
+                prompt = _render_session_option(s, act, self._throbber_frame, ws_repo_path=self.ws.repo_path, seen=seen)
                 arch_olist.replace_option_prompt_at_index(i, prompt)
 
 
