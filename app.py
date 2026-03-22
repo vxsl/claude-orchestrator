@@ -198,6 +198,7 @@ class OrchestratorApp(App):
         self._throbber_timer = None
         self._session_watcher: SessionWatcher | None = None
         self._refresh_pending = False  # debounce flag for _refresh_ws_table
+        self._preview_ws_id: str | None = None  # track current preview to skip redundant updates
         self._detached_terminals: dict[str, dict] = {}  # session_id -> detached state
 
     def on_key(self, event) -> None:
@@ -362,22 +363,24 @@ class OrchestratorApp(App):
         self._apply_view()
 
     def _apply_view(self):
-        ws_table = self.query_one("#ws-table", FastTable)
-        sessions_table = self.query_one("#sessions-table", FastTable)
-        archived_table = self.query_one("#archived-table", FastTable)
-        filter_bar = self.query_one("#filter-bar", Static)
+        with self.batch_update():
+            ws_table = self.query_one("#ws-table", FastTable)
+            sessions_table = self.query_one("#sessions-table", FastTable)
+            archived_table = self.query_one("#archived-table", FastTable)
+            filter_bar = self.query_one("#filter-bar", Static)
 
-        ws_table.display = self.state.view_mode == ViewMode.WORKSTREAMS
-        sessions_table.display = self.state.view_mode == ViewMode.SESSIONS
-        archived_table.display = self.state.view_mode == ViewMode.ARCHIVED
-        filter_bar.display = self.state.view_mode == ViewMode.WORKSTREAMS
+            ws_table.display = self.state.view_mode == ViewMode.WORKSTREAMS
+            sessions_table.display = self.state.view_mode == ViewMode.SESSIONS
+            archived_table.display = self.state.view_mode == ViewMode.ARCHIVED
+            filter_bar.display = self.state.view_mode == ViewMode.WORKSTREAMS
 
-        if self.state.view_mode == ViewMode.SESSIONS:
-            self._load_sessions()
+            if self.state.view_mode == ViewMode.SESSIONS:
+                self._load_sessions()
 
-        self._active_table().focus()
-        self._update_all_bars()
-        self._update_preview()
+            self._active_table().focus()
+            self._update_all_bars()
+            self._preview_ws_id = None
+            self._update_preview(force=True)
 
     # ── Navigation ──
 
@@ -478,21 +481,34 @@ class OrchestratorApp(App):
             self.call_from_thread(self._apply_liveness_change)
 
     def _apply_liveness_change(self):
+        self._preview_ws_id = None  # force preview refresh on liveness change
         self._refresh_ws_table_debounced()
         if self.state.view_mode == ViewMode.SESSIONS:
             self._refresh_sessions_table()
 
-    def _update_preview(self):
+    def _update_preview(self, force: bool = False):
         if not self.state.preview_visible:
             return
         if self.state.view_mode == ViewMode.WORKSTREAMS:
             ws = self._selected_ws()
+            ws_id = ws.id if ws else None
+            if not force and ws_id == self._preview_ws_id:
+                return
+            self._preview_ws_id = ws_id
             self._render_ws_preview(ws)
         elif self.state.view_mode == ViewMode.SESSIONS:
             session = self._selected_session()
+            sid = session.session_id if session else None
+            if not force and sid == self._preview_ws_id:
+                return
+            self._preview_ws_id = sid
             self._render_session_preview(session)
         elif self.state.view_mode == ViewMode.ARCHIVED:
             ws = self._selected_archived()
+            ws_id = ws.id if ws else None
+            if not force and ws_id == self._preview_ws_id:
+                return
+            self._preview_ws_id = ws_id
             self._render_ws_preview(ws, archived=True)
 
     @staticmethod
@@ -839,7 +855,7 @@ class OrchestratorApp(App):
         with self.batch_update():
             table.rebuild(rows, old_key=old_key, old_row=old_row)
             self._update_all_bars()
-            self._update_preview()
+            self._update_preview(force=True)
 
     def _selected_ws(self) -> Workstream | None:
         try:
@@ -941,8 +957,10 @@ class OrchestratorApp(App):
     def _apply_sessions(self, sessions: list[ClaudeSession],
                         threads: list[Thread], discovered: list[Workstream]):
         self.state.update_sessions(sessions, threads, discovered)
-        self._refresh_ws_table_debounced()
-        self._refresh_sessions_table()
+        self._preview_ws_id = None
+        with self.batch_update():
+            self._refresh_ws_table_debounced()
+            self._refresh_sessions_table()
         for screen in self.screen_stack:
             screen.post_message(SessionsChanged())
 
@@ -1627,9 +1645,9 @@ class OrchestratorApp(App):
     def _on_return_from_modal(self):
         self.state.store.load()
         self.state._last_seen_valid = False  # pick up marks from detail screen
+        self._preview_ws_id = None  # force preview rebuild
         self._refresh_ws_table()
         self._refresh_archived_table()
-        self._update_preview()
 
 
 if __name__ == "__main__":
