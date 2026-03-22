@@ -168,6 +168,7 @@ class ClaudeSession:
     total_input_tokens: int = 0
     total_output_tokens: int = 0
     message_count: int = 0
+    assistant_message_count: int = 0
     model: str = ""
     jsonl_path: str = ""
     is_live: bool = False
@@ -379,6 +380,10 @@ def parse_session(jsonl_path: Path) -> Optional[ClaudeSession]:
                 # Count user-sent messages
                 if msg_type == "user":
                     session.message_count += 1
+
+                # Count assistant messages
+                if msg_type == "assistant":
+                    session.assistant_message_count += 1
 
                 # Extract usage and stop_reason from assistant messages
                 if msg_type == "assistant" and "message" in data:

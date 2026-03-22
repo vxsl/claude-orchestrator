@@ -448,7 +448,7 @@ def _render_session_option(
     title_esc = _rich_escape(title_raw)
     sid = s.session_id[:8]
     tokens_plain = s.tokens_display
-    msgs_str = f"{s.message_count} msgs"
+    msgs_str = f"{s.message_count}↑{s.assistant_message_count}↓"
     duration = s.duration_display
     age_str = s.age
 
@@ -515,7 +515,7 @@ def _render_session_option(
             snippet += "…"
         is_user = s.last_message_role == "user"
         prefix = f"[{C_MID}]you:[/{C_MID}] " if is_user else ""
-        lines.append(f"{INDENT}{prefix}[{C_FAINT}]{snippet}[/{C_FAINT}]")
+        lines.append(f"{INDENT}{prefix}[italic {C_FAINT}]{snippet}[/italic {C_FAINT}]")
 
     return "\n".join(lines)
 
@@ -569,7 +569,7 @@ def _render_content_search_result(
     title = _rich_escape(title_raw)
     model = _short_model(s.model)
     hits_str = f"{result.hit_count} hit{'s' if result.hit_count != 1 else ''}"
-    msgs_str = f"{s.message_count} msgs"
+    msgs_str = f"{s.message_count}↑{s.assistant_message_count}↓"
     duration = s.duration_display
     age_str = s.age
     sid = s.session_id[:8]
