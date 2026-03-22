@@ -138,12 +138,18 @@ class TerminalWidget(Widget, can_focus=True):
         self,
         command: str = "bash",
         *,
+        env: dict[str, str] | None = None,
+        cwd: str | None = None,
+        passthrough_keys: set[str] | None = None,
         name: str | None = None,
         id: str | None = None,
         classes: str | None = None,
     ) -> None:
         super().__init__(name=name, id=id, classes=classes)
         self._command = command
+        self._extra_env = env or {}
+        self._cwd = cwd
+        self._passthrough_keys = passthrough_keys or set()
         self._ncol = 80
         self._nrow = 24
         self._screen = _Screen(self._ncol, self._nrow)
@@ -166,9 +172,12 @@ class TerminalWidget(Widget, can_focus=True):
         self._pid, self._fd = pty.fork()
         if self._pid == 0:
             # Child — exec the command
+            if self._cwd:
+                os.chdir(self._cwd)
             argv = shlex.split(self._command)
             env = os.environ.copy()
             env.update(TERM="xterm-256color", COLORTERM="truecolor")
+            env.update(self._extra_env)
             os.execvpe(argv[0], argv, env)
 
         self._p_out = os.fdopen(self._fd, "w+b", 0)
@@ -310,6 +319,9 @@ class TerminalWidget(Widget, can_focus=True):
     async def on_key(self, event: events.Key) -> None:
         if self._pid is None:
             return
+
+        if event.key in self._passthrough_keys:
+            return  # Let it bubble to parent screen
 
         event.stop()
         event.prevent_default()
