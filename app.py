@@ -1364,6 +1364,12 @@ class OrchestratorApp(App):
             self.notify(msg, timeout=2)
         elif action == "error":
             self.notify(msg, severity="error", timeout=2)
+        elif action == "add":
+            self.action_add()
+        elif action == "rename":
+            self.action_rename()
+        elif action == "open":
+            self.action_open_links()
         elif action == "spawn":
             self.action_spawn()
         elif action == "resume":

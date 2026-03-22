@@ -1384,6 +1384,40 @@ class TestCommandRegistry:
         result = state.execute_command("wip")
         assert result["action"] == "git-action"
 
+    def test_no_command_returns_unknown(self, state):
+        """No registry command should return 'Unknown command' error."""
+        for cmd in COMMAND_REGISTRY:
+            result = state.execute_command(cmd.name)
+            if result["action"] == "error":
+                assert "unknown command" not in result.get("msg", "").lower(), (
+                    f"Command '{cmd.name}' not dispatched: {result.get('msg')}"
+                )
+
+    def test_no_alias_returns_unknown(self, state):
+        """No registry alias should return 'Unknown command' error."""
+        for cmd in COMMAND_REGISTRY:
+            for alias in cmd.aliases:
+                result = state.execute_command(alias)
+                if result["action"] == "error":
+                    assert "unknown command" not in result.get("msg", "").lower(), (
+                        f"Alias '{alias}' (for '{cmd.name}') not dispatched: {result.get('msg')}"
+                    )
+
+    def test_newly_fixed_commands(self, state):
+        """Commands that were missing from execute_command dispatch."""
+        assert state.execute_command("add")["action"] == "add"
+        assert state.execute_command("new")["action"] == "add"
+        assert state.execute_command("create")["action"] == "add"
+        assert state.execute_command("rename")["action"] == "rename"
+        assert state.execute_command("open")["action"] == "open"
+        assert state.execute_command("o")["action"] == "open"
+        assert state.execute_command("refresh")["action"] == "refresh"
+        assert state.execute_command("braindump")["action"] == "brain"
+        assert state.execute_command("session")["action"] == "spawn"
+        assert state.execute_command("claude")["action"] == "spawn"
+        assert state.execute_command("r")["action"] == "resume"
+        assert state.execute_command("?")["action"] == "help"
+
 
 # ── Worktree Discovery + Enrichment ─────────────────────────────────
 

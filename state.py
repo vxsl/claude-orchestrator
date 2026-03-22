@@ -1242,8 +1242,26 @@ class AppState:
         arg = parts[1] if len(parts) > 1 else ""
         ws = self.get_ws(selected_ws_id) if selected_ws_id else None
 
+        # Add / Create
+        if cmd in ("add", "new", "create"):
+            return {"action": "add"}
+
+        # Rename
+        elif cmd == "rename":
+            return {"action": "rename"}
+
+        # Open links
+        elif cmd in ("open", "o"):
+            return {"action": "open"}
+
+        # Refresh
+        elif cmd == "refresh":
+            return {"action": "refresh"}
+
         # Link
-        if cmd in ("link", "ln") and ws:
+        elif cmd in ("link", "ln"):
+            if not ws:
+                return {"action": "error", "msg": "Select a workstream first"}
             if ":" not in arg:
                 return {"action": "error", "msg": "Usage: link kind:value (e.g. ticket:UB-1234)"}
             kind, value = arg.split(":", 1)
@@ -1254,14 +1272,18 @@ class AppState:
             return {"action": "refresh", "msg": f"Added {kind} link to {ws.name}"}
 
         # Note → Todo
-        elif cmd in ("note", "n", "todo", "t") and ws:
+        elif cmd in ("note", "n", "todo", "t"):
+            if not ws:
+                return {"action": "error", "msg": "Select a workstream first"}
             if not arg:
                 return {"action": "error", "msg": "Usage: note <text>"}
             self.add_todo(ws.id, arg)
             return {"action": "notify", "msg": f"Todo added to {ws.name}"}
 
         # Archive
-        elif cmd in ("archive", "a") and ws:
+        elif cmd in ("archive", "a"):
+            if not ws:
+                return {"action": "error", "msg": "Select a workstream first"}
             self.archive(ws.id)
             return {"action": "refresh", "msg": f"Archived: {ws.name}"}
 
@@ -1295,11 +1317,11 @@ class AppState:
             return {"action": "error", "msg": f"Filter: {', '.join(valid)}"}
 
         # Spawn
-        elif cmd == "spawn":
+        elif cmd in ("spawn", "session", "claude"):
             return {"action": "spawn"}
 
         # Resume
-        elif cmd == "resume":
+        elif cmd in ("resume", "r"):
             return {"action": "resume"}
 
         # Export
@@ -1307,7 +1329,7 @@ class AppState:
             return {"action": "export", "path": arg}
 
         # Brain
-        elif cmd == "brain":
+        elif cmd in ("brain", "braindump"):
             return {"action": "brain", "text": arg}
 
         # Close tab
@@ -1315,7 +1337,7 @@ class AppState:
             return {"action": "close"}
 
         # Help
-        elif cmd == "help":
+        elif cmd in ("help", "?"):
             return {"action": "help"}
 
         # ── Dev-workflow tool commands ──
