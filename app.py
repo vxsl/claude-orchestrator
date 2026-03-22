@@ -811,9 +811,6 @@ class OrchestratorApp(App):
             name_str = _rich_escape(ws.name)
             if indicators:
                 name_str += "  " + indicators
-            # Bold workstream name when it has a live session
-            if is_discovered and best in (ThreadActivity.THINKING, ThreadActivity.AWAITING_INPUT):
-                name_str = f"[bold]{name_str}[/bold]"
             name_cell = Text.from_markup(name_str)
 
             wt_text, wt_color = _worktree_styled(ws)

@@ -263,7 +263,7 @@ def _activity_badge(activity: ThreadActivity) -> str:
     if activity == ThreadActivity.THINKING:
         return f"[italic {C_CYAN}]thinking…[/italic {C_CYAN}]"
     if activity == ThreadActivity.AWAITING_INPUT:
-        return f"[bold {C_YELLOW}]your turn[/bold {C_YELLOW}]"
+        return f"[{C_YELLOW}]your turn[/{C_YELLOW}]"
     if activity == ThreadActivity.RESPONSE_READY:
         return f"[{C_YELLOW}]your turn[/{C_YELLOW}]"
     return ""
