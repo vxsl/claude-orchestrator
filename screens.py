@@ -1536,6 +1536,13 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         else:
             super().action_dismiss(None)
 
+    def on_key(self, event) -> None:
+        """Fallback: handle backspace via on_key if binding resolution misses it."""
+        if event.key in ("backspace", "ctrl+h"):
+            event.stop()
+            event.prevent_default()
+            self.action_go_back()
+
     def action_go_back(self):
         """Ctrl+H/Backspace: cancel search if active, otherwise dismiss."""
         if self._search_is_active():
