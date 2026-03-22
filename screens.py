@@ -11,6 +11,8 @@ import os
 from datetime import datetime, timezone
 from pathlib import Path
 
+from rich.table import Table as RichTable
+
 log = logging.getLogger("orch.screens")
 
 from textual import on, work
@@ -60,6 +62,15 @@ from actions import (
 )
 from notifications import Notification, dismiss_notification, dismiss_all_for_dirs
 from state import fuzzy_match, content_search, SessionSearchResult
+
+
+def _label_with_legend(left: str, legend: str) -> RichTable:
+    """Return a Rich grid with left text and right-aligned legend."""
+    t = RichTable.grid(expand=True)
+    t.add_column(ratio=1)
+    t.add_column(justify="right")
+    t.add_row(left, legend)
+    return t
 
 
 # ─── Messages ────────────────────────────────────────────────────────
@@ -1124,12 +1135,13 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         n_archived = len(self._archived_sessions)
         n_notified = len(self._session_notifications)
 
-        legend = f"  {tool_bar_legend()}"
+        legend = tool_bar_legend()
         notif_badge = f" [{C_GREEN}]({n_notified} new)[/{C_GREEN}]" if n_notified else ""
         if self._active_pane == "sessions":
-            sess_label.update(f"[bold {C_BLUE}]Sessions[/bold {C_BLUE}] [{C_DIM}]({n_active})[/{C_DIM}]{notif_badge}{legend}")
+            left = f"[bold {C_BLUE}]Sessions[/bold {C_BLUE}] [{C_DIM}]({n_active})[/{C_DIM}]{notif_badge}"
         else:
-            sess_label.update(f"[{C_DIM}]Sessions ({n_active})[/{C_DIM}]{notif_badge}{legend}")
+            left = f"[{C_DIM}]Sessions ({n_active})[/{C_DIM}]{notif_badge}"
+        sess_label.update(_label_with_legend(left, legend))
 
         if self._active_pane == "archived":
             arch_label.update(f"[bold {C_BLUE}]Archived[/bold {C_BLUE}] [{C_DIM}]({n_archived})[/{C_DIM}]")
@@ -1831,10 +1843,18 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
             return
         olist = self.query_one("#detail-sessions", OptionList)
         idx = olist.highlighted
-        sessions = self._archived_sessions if self._active_pane == "archived" else self._detail_sessions
-        if idx is None or idx >= len(sessions):
+        if idx is None:
             return
-        session = sessions[idx]
+        try:
+            oid = olist.get_option_at_index(idx).id
+        except Exception:
+            return
+        if not oid or oid == "__separator__":
+            return
+        sid = oid.removeprefix("a:")
+        session = self._find_session_by_id(sid)
+        if not session:
+            return
         from sessions import extract_session_content
         if session.session_id in self._content_cache:
             messages = self._content_cache[session.session_id]
@@ -2059,19 +2079,21 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         log.debug("archive_session: pane=%s idx=%s option_count=%d detail=%d archived=%d",
                   self._active_pane, idx, olist.option_count,
                   len(self._detail_sessions), len(self._archived_sessions))
+        if idx is None:
+            return
+        try:
+            oid = olist.get_option_at_index(idx).id
+        except Exception:
+            return
+        if not oid or oid == "__separator__":
+            return
         if self._active_pane == "archived":
-            if idx is None or idx >= len(self._archived_sessions):
-                log.warning("archive_session: idx out of range for archived")
-                return
-            sid = self._archived_sessions[idx].session_id
+            sid = oid.removeprefix("a:")
             log.debug("archive_session: unarchiving sid=%s", sid)
             self.ws.archived_sessions.pop(sid, None)
             self.store.update(self.ws)
         else:
-            if idx is None or idx >= len(self._detail_sessions):
-                log.warning("archive_session: idx out of range for detail")
-                return
-            sid = self._detail_sessions[idx].session_id
+            sid = oid
             log.debug("archive_session: archiving sid=%s", sid)
             if sid not in self.ws.archived_sessions:
                 self.ws.archived_sessions[sid] = datetime.now(timezone.utc).isoformat()
