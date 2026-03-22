@@ -361,7 +361,8 @@ def content_search(
         if result is not None:
             results.append(result)
 
-    results.sort(key=lambda r: r.total_score, reverse=True)
+    # Sort by score, with recency as tiebreaker for similar scores
+    results.sort(key=lambda r: (r.total_score, r.session.last_user_message_at or ""), reverse=True)
     return results
 from threads import Thread, ThreadActivity, session_activity, load_last_seen, mark_thread_seen
 from rendering import ViewMode, _best_activity
