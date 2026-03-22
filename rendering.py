@@ -32,7 +32,7 @@ from threads import Thread, ThreadActivity, session_activity, _ACTIVITY_PRIORITY
 C_BLUE = "#58a6ff"       # structural, borders
 C_PURPLE = "#d2a8ff"     # headings, personal category
 C_CYAN = "#56d4dd"       # active states, work category
-C_GREEN = "#56d364"      # success, done
+C_GREEN = "#6ab889"      # success, done — soft green
 C_YELLOW = "#e3b341"     # warnings, queued
 C_ORANGE = "#d7875f"     # secondary accents
 C_RED = "#ffa198"        # errors, blocked
