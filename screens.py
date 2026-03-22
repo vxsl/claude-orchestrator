@@ -841,7 +841,7 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         Binding("e", "open_todos", "Todos"),
         Binding("o", "open_links", "Open links"),
         Binding("x", "archive", "Archive"),
-        Binding("a", "archive_session", "Archive/restore", priority=True),
+        Binding("p", "peek_session", "Peek", priority=True),
         Binding("h", "go_back", show=False),
         Binding("enter,l", "select_session", show=False),
         Binding("d", "dismiss_notification", "Dismiss", show=False),
@@ -1195,6 +1195,11 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         self._detail_sessions = list(self._all_sessions)
         self._archived_sessions = list(self._all_archived)
 
+        # Don't rebuild OptionLists while peek is open — backing data is updated
+        # but the visible list stays showing the conversation.
+        if self._peek_mode:
+            return
+
         olist = self.query_one("#detail-sessions", OptionList)
         no_sess = self.query_one("#detail-no-sessions", Static)
         if self._detail_sessions:
@@ -1518,8 +1523,8 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
             ("^L", "resume"), ("s/S", "status"), ("c", "spawn"),
             ("n", "+todo"), ("e", "todos"),
             ("o", "open"), ("x", "archive ws"),
-            ("a", "archive/restore"),
-            ("space", "peek"),
+            ("space", "archive/restore"),
+            ("p", "peek"),
             ("^j/^k", "panels"), ("/", "search"),
             ("^H", "back"),
         ]
@@ -1652,11 +1657,11 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
                 event.prevent_default()
                 self._focus_search_results()
             return
-        # Space = peek into session conversation
+        # Space = archive/unarchive session
         if event.key == "space" and self._active_pane in ("sessions", "archived"):
             event.stop()
             event.prevent_default()
-            self._open_peek()
+            self.action_archive_session()
 
     # ── Session peek (replaces OptionList content in-place) ──
 
@@ -1684,7 +1689,7 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
             f"[bold {C_BLUE}]{_rich_escape(title_text)}[/bold {C_BLUE}]  "
             f"[{C_DIM}]{session.age} · {_short_model(session.model)} · "
             f"{session.message_count} msgs · {session.tokens_display}[/{C_DIM}]\n"
-            f"[{C_DIM}]space[/{C_DIM}] close  [{C_DIM}]j/k[/{C_DIM}] scroll"
+            f"[{C_DIM}]p[/{C_DIM}] close  [{C_DIM}]j/k[/{C_DIM}] scroll"
         )
         olist.clear_options()
         olist.add_option(Option(header, id="peek-header"))
@@ -1877,6 +1882,11 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
             self.app.push_screen(LinksScreen(self.ws, self.store))
         else:
             self.app.notify("No links to open", timeout=2)
+
+    def action_peek_session(self):
+        """p = peek into session conversation."""
+        if self._active_pane in ("sessions", "archived"):
+            self._open_peek()
 
     def action_archive(self):
         self.ws.archived = True
