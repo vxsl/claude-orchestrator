@@ -334,16 +334,12 @@ class OrchestratorApp(App):
     # ── Tab switching (placeholder — tabs will be wired in a later step) ──
 
     def action_next_tab(self):
-        """Tab key: cycle to next tab."""
-        if self._detail_screen_active:
-            return
+        """Ctrl+Tab: cycle to next tab."""
         if self.tabs.next_tab():
             self._apply_tab_switch()
 
     def action_prev_tab(self):
-        """Shift+Tab: cycle to previous tab."""
-        if self._detail_screen_active:
-            return
+        """Ctrl+Shift+Tab: cycle to previous tab."""
         if self.tabs.prev_tab():
             self._apply_tab_switch()
 
@@ -377,7 +373,12 @@ class OrchestratorApp(App):
         )
 
     def _on_detail_dismissed(self):
-        """Called when a DetailScreen is dismissed (back to Home)."""
+        """Called when a DetailScreen is dismissed (back to Home).
+
+        Skips reset if another DetailScreen is already active (tab switch).
+        """
+        if self._detail_screen_active and isinstance(self.screen, DetailScreen):
+            return  # another detail was pushed during tab switch
         self._detail_screen_active = False
         self.tabs.switch_to(0)
         self._sync_tab_bar()
