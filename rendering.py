@@ -379,6 +379,38 @@ def _render_ws_option(
     cc = CATEGORY_THEME.get(ws.category, C_DIM)
     parts.append(f"[{cc}]{ws.category.value}[/{cc}]")
 
+    # Ticket key + Jira status (enriched from cache)
+    ticket_key = getattr(ws, "ticket_key", "")
+    if ticket_key:
+        ticket_status = getattr(ws, "ticket_status", "")
+        if ticket_status:
+            # Color-code Jira status
+            ts_lower = ticket_status.lower()
+            if "progress" in ts_lower or "review" in ts_lower:
+                ts_color = C_CYAN
+            elif "done" in ts_lower or "closed" in ts_lower or "resolved" in ts_lower:
+                ts_color = C_GREEN
+            else:
+                ts_color = C_DIM
+            parts.append(f"[bold]{_rich_escape(ticket_key)}[/bold] [{ts_color}]{_rich_escape(ticket_status)}[/{ts_color}]")
+        else:
+            parts.append(f"[bold]{_rich_escape(ticket_key)}[/bold]")
+
+    # MR indicator
+    mr_url = getattr(ws, "mr_url", "")
+    if mr_url:
+        parts.append(f"[{C_PURPLE}]MR[/{C_PURPLE}]")
+
+    # Ticket-solve status badge
+    solve_status = getattr(ws, "ticket_solve_status", "")
+    if solve_status:
+        if solve_status.lower() in ("running", "active"):
+            parts.append(f"[{C_YELLOW}]solving[/{C_YELLOW}]")
+        elif solve_status.lower() in ("done", "complete"):
+            parts.append(f"[{C_GREEN}]solved[/{C_GREEN}]")
+        else:
+            parts.append(f"[{C_DIM}]solve:{_rich_escape(solve_status)}[/{C_DIM}]")
+
     wt_text, wt_color = _worktree_styled(ws)
     if wt_text:
         parts.append(f"[{wt_color}]{_rich_escape(wt_text)}[/{wt_color}]")

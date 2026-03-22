@@ -92,7 +92,10 @@ from models import (
     STATUS_ICONS, _relative_time,
 )
 from sessions import ClaudeSession, SessionMessage, extract_session_content, get_live_session_ids, refresh_session_tail
-from actions import get_git_remote_host
+from actions import (
+    get_git_remote_host, discover_worktrees, extract_ticket_key,
+    get_jira_cache, get_mr_cache, get_ticket_solve_status,
+)
 
 
 # ── Command registry ──────────────────────────────────────────────
@@ -681,6 +684,123 @@ class AppState:
             if ws.repo_path:
                 repos.add(os.path.expanduser(ws.repo_path).rstrip("/"))
         return sorted(p for p in repos if os.path.isdir(p))
+
+    # ── Worktree auto-discovery + enrichment ─────────────────────────
+
+    def discover_and_enrich_worktrees(self) -> bool:
+        """Auto-create workstreams for worktrees, enrich with Jira/MR/ticket-solve.
+
+        1. Discover worktrees across all known repos
+        2. Auto-create workstreams for worktrees not linked to any existing one
+        3. Enrich all workstreams that have ticket_key with Jira/MR/ticket-solve data
+        4. Auto-archive workstreams linked to worktree paths that no longer exist
+
+        Returns True if anything changed (so caller can refresh UI).
+        """
+        changed = False
+
+        # 1. Discover worktrees
+        repos = self.known_repos()
+        worktrees = discover_worktrees(repos)
+
+        # Build lookup: worktree_path -> existing workstream
+        ws_by_path: dict[str, Workstream] = {}
+        for ws in self.store.workstreams:
+            for link in ws.links:
+                if link.kind == "worktree":
+                    ws_by_path[os.path.expanduser(link.value).rstrip("/")] = ws
+            if ws.repo_path:
+                ws_by_path[os.path.expanduser(ws.repo_path).rstrip("/")] = ws
+
+        # 2. Auto-create for new worktrees
+        jira_cache = get_jira_cache()
+
+        for wt in worktrees:
+            path = wt["path"].rstrip("/")
+            if path in ws_by_path:
+                # Already linked — just ensure ticket_key is set
+                ws = ws_by_path[path]
+                if wt["ticket_key"] and not ws.ticket_key:
+                    ws.ticket_key = wt["ticket_key"]
+                continue
+
+            # New worktree — create a workstream
+            ticket_key = wt["ticket_key"]
+            branch = wt["branch"]
+            jira_info = jira_cache.get(ticket_key) if ticket_key else None
+
+            if jira_info and jira_info.summary:
+                name = f"{ticket_key}: {jira_info.summary}"
+            elif ticket_key:
+                name = f"{ticket_key}: {branch}"
+            else:
+                name = branch
+
+            ws = Workstream(
+                name=name,
+                repo_path=path,
+                status=Status.IN_PROGRESS,
+                category=Category.PERSONAL,
+            )
+            ws.add_link(kind="worktree", value=path, label=Path(path).name)
+            ws.ticket_key = ticket_key
+            self._infer_category_from_remote(ws)
+            self.store.add(ws)
+            ws_by_path[path] = ws
+            changed = True
+
+        # 3. Enrich all workstreams with ticket_key
+        mr_cache = get_mr_cache()
+        for ws in self.store.active:
+            # Try to extract ticket_key from branch if not already set
+            if not ws.ticket_key:
+                for link in ws.links:
+                    if link.kind == "ticket":
+                        ws.ticket_key = link.value
+                        break
+            if not ws.ticket_key:
+                # Try to get from git status cache
+                if ws.repo_path:
+                    git_st = self.git_status_cache.get(ws.repo_path)
+                    if git_st and hasattr(git_st, 'branch') and git_st.branch:
+                        ws.ticket_key = extract_ticket_key(git_st.branch)
+
+            if ws.ticket_key:
+                # Jira enrichment
+                jira_info = jira_cache.get(ws.ticket_key)
+                if jira_info:
+                    ws.ticket_summary = jira_info.summary
+                    ws.ticket_status = jira_info.status
+
+                # MR enrichment — match by branch name
+                git_st = self.git_status_cache.get(ws.repo_path) if ws.repo_path else None
+                branch = git_st.branch if git_st and hasattr(git_st, 'branch') else ""
+                if branch and branch in mr_cache:
+                    mr_info = mr_cache[branch]
+                    ws.mr_url = mr_info.get("web_url", "")
+
+                # Ticket-solve enrichment
+                solve_info = get_ticket_solve_status(ws.ticket_key)
+                if solve_info:
+                    ws.ticket_solve_status = solve_info.get("status", "")
+
+        # 4. Auto-archive workstreams linked to worktree paths that no longer exist
+        existing_paths = {wt["path"].rstrip("/") for wt in worktrees}
+        for ws in list(self.store.active):
+            wt_links = [link for link in ws.links if link.kind == "worktree"]
+            if not wt_links:
+                continue
+            # If ALL worktree links point to non-existent paths, auto-archive
+            all_gone = all(
+                not os.path.isdir(os.path.expanduser(link.value))
+                for link in wt_links
+            )
+            if all_gone:
+                ws.archived = True
+                self.store.update(ws)
+                changed = True
+
+        return changed
 
     # ── Full-system repo discovery ────────────────────────────────────
 

@@ -306,6 +306,8 @@ class OrchestratorApp(App):
         self.set_interval(30, self._poll_tmux)
         self._poll_git_status()
         self.set_interval(30, self._poll_git_status)
+        self._poll_worktrees()
+        self.set_interval(30, self._poll_worktrees)
 
         self._session_watcher = SessionWatcher(
             on_liveness=lambda: self.call_from_thread(self._refresh_session_liveness),
@@ -1619,6 +1621,17 @@ class OrchestratorApp(App):
     def _apply_git_status(self, new_cache: dict):
         self.state.git_status_cache = new_cache
         self._refresh_ws_table_debounced()
+
+    # ── Worktree discovery polling ──
+
+    def _poll_worktrees(self):
+        self._do_worktree_check()
+
+    @work(thread=True, exclusive=True, group="worktrees")
+    def _do_worktree_check(self):
+        changed = self.state.discover_and_enrich_worktrees()
+        if changed:
+            self.call_from_thread(self._refresh_ws_table_debounced)
 
     # ── Other ──
 

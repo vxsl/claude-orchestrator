@@ -114,6 +114,13 @@ class Workstream:
     last_user_activity: str = ""  # timestamp of last user message (for stable sorting)
     status_changed_at: str = field(default_factory=lambda: datetime.now().isoformat())
 
+    # ── Transient enrichment fields (NOT persisted) ──
+    ticket_key: str = field(default="", repr=False)           # e.g. "UB-1234", from branch name
+    ticket_summary: str = field(default="", repr=False)       # from Jira cache
+    ticket_status: str = field(default="", repr=False)        # from Jira cache
+    mr_url: str = field(default="", repr=False)               # from MR cache
+    ticket_solve_status: str = field(default="", repr=False)  # from ticket-solve cache
+
     def touch(self):
         self.updated_at = datetime.now().isoformat()
 
@@ -154,10 +161,18 @@ class Workstream:
         self.touch()
         return link
 
+    # Transient fields excluded from persistence
+    _TRANSIENT_FIELDS = frozenset({
+        "ticket_key", "ticket_summary", "ticket_status",
+        "mr_url", "ticket_solve_status",
+    })
+
     def to_dict(self) -> dict:
         d = asdict(self)
         d["status"] = self.status.value
         d["category"] = self.category.value
+        for k in self._TRANSIENT_FIELDS:
+            d.pop(k, None)
         return d
 
     @classmethod
@@ -170,6 +185,9 @@ class Workstream:
         d.setdefault("archived", False)
         d.setdefault("status_changed_at", d.get("updated_at", d.get("created_at", "")))
         d.pop("origin", None)
+        # Strip transient enrichment fields if somehow present in saved data
+        for k in cls._TRANSIENT_FIELDS:
+            d.pop(k, None)
         d.setdefault("thread_ids", [])
         d.setdefault("archived_thread_ids", [])
         # Migrate archived_session_ids list → archived_sessions dict

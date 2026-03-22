@@ -439,3 +439,132 @@ class TestGetGitRemoteHost:
             stdout="https://token@github.com/user/repo\n", returncode=0,
         )
         assert get_git_remote_host("/some/path") == "github.com"
+
+
+# ─── Ticket Key Extraction ───────────────────────────────────────────
+
+from actions import extract_ticket_key
+
+
+class TestExtractTicketKey:
+    def test_standard_branch(self):
+        assert extract_ticket_key("UB-1234-fix-thing") == "UB-1234"
+
+    def test_bare_ticket(self):
+        assert extract_ticket_key("UB-1234") == "UB-1234"
+
+    def test_multi_letter_project(self):
+        assert extract_ticket_key("PROJ-42-add-feature") == "PROJ-42"
+
+    def test_no_ticket(self):
+        assert extract_ticket_key("feature/some-feature") == ""
+
+    def test_main_branch(self):
+        assert extract_ticket_key("main") == ""
+
+    def test_lowercase_no_match(self):
+        assert extract_ticket_key("ub-1234-fix-thing") == ""
+
+
+# ─── MR Cache ────────────────────────────────────────────────────────
+
+from actions import get_mr_cache
+
+
+class TestMrCache:
+    def test_missing_cache(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("actions._MR_CACHE_PATH", tmp_path / "nonexistent.json")
+        assert get_mr_cache() == {}
+
+    def test_dict_format(self, tmp_path, monkeypatch):
+        import json
+        cache_path = tmp_path / "mr_cache.json"
+        cache_path.write_text(json.dumps({
+            "UB-1234-fix": {"web_url": "https://gitlab.com/mr/1", "state": "opened"},
+        }))
+        monkeypatch.setattr("actions._MR_CACHE_PATH", cache_path)
+        cache = get_mr_cache()
+        assert "UB-1234-fix" in cache
+        assert cache["UB-1234-fix"]["web_url"] == "https://gitlab.com/mr/1"
+
+    def test_list_format(self, tmp_path, monkeypatch):
+        import json
+        cache_path = tmp_path / "mr_cache.json"
+        cache_path.write_text(json.dumps([
+            {"source_branch": "UB-5678-feat", "web_url": "https://gitlab.com/mr/2"},
+        ]))
+        monkeypatch.setattr("actions._MR_CACHE_PATH", cache_path)
+        cache = get_mr_cache()
+        assert "UB-5678-feat" in cache
+
+
+# ─── Ticket-Solve Cache ─────────────────────────────────────────────
+
+from actions import get_ticket_solve_status
+
+
+class TestTicketSolveStatus:
+    def test_missing_file(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("actions._TICKET_SOLVE_DIR", tmp_path)
+        assert get_ticket_solve_status("UB-9999") is None
+
+    def test_valid_file(self, tmp_path, monkeypatch):
+        import json
+        monkeypatch.setattr("actions._TICKET_SOLVE_DIR", tmp_path)
+        (tmp_path / "UB-1234.json").write_text(json.dumps({"status": "running", "progress": 0.5}))
+        result = get_ticket_solve_status("UB-1234")
+        assert result is not None
+        assert result["status"] == "running"
+
+    def test_corrupt_file(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("actions._TICKET_SOLVE_DIR", tmp_path)
+        (tmp_path / "UB-1234.json").write_text("not json")
+        assert get_ticket_solve_status("UB-1234") is None
+
+
+# ─── Discover Worktrees ─────────────────────────────────────────────
+
+from actions import discover_worktrees
+
+
+class TestDiscoverWorktrees:
+    @patch("actions.get_worktree_list")
+    def test_basic_discovery(self, mock_wt):
+        mock_wt.return_value = [
+            {"path": "/home/user/dev/repo", "branch": "main"},
+            {"path": "/home/user/dev/repo-UB-1234", "branch": "UB-1234-fix-thing"},
+        ]
+        results = discover_worktrees(["/home/user/dev/repo"])
+        # main is skipped
+        assert len(results) == 1
+        assert results[0]["branch"] == "UB-1234-fix-thing"
+        assert results[0]["ticket_key"] == "UB-1234"
+
+    @patch("actions.get_worktree_list")
+    def test_skips_bare(self, mock_wt):
+        mock_wt.return_value = [
+            {"path": "/home/user/dev/repo", "branch": "feature-x", "bare": True},
+        ]
+        results = discover_worktrees(["/home/user/dev/repo"])
+        assert len(results) == 0
+
+    @patch("actions.get_worktree_list")
+    def test_skips_skip_branches(self, mock_wt):
+        mock_wt.return_value = [
+            {"path": "/p1", "branch": "main"},
+            {"path": "/p2", "branch": "master"},
+            {"path": "/p3", "branch": "develop"},
+            {"path": "/p4", "branch": "feature-x"},
+        ]
+        results = discover_worktrees(["/repo"])
+        assert len(results) == 1
+        assert results[0]["branch"] == "feature-x"
+
+    @patch("actions.get_worktree_list")
+    def test_deduplicates_paths(self, mock_wt):
+        mock_wt.return_value = [
+            {"path": "/home/user/dev/wt1", "branch": "feature-a"},
+        ]
+        # Same repo listed twice
+        results = discover_worktrees(["/repo", "/repo"])
+        assert len(results) == 1

@@ -562,6 +562,107 @@ def get_jira_ticket_info(ticket_id: str) -> JiraTicketInfo | None:
     return cache.get(ticket_id)
 
 
+# ─── MR Cache ────────────────────────────────────────────────────────
+
+_MR_CACHE_PATH = Path.home() / ".cache" / "jira-fzf" / "mr_cache.json"
+
+
+def get_mr_cache() -> dict[str, dict]:
+    """Read the dev-workflow-tools MR (merge request) cache.
+
+    Returns a dict of branch_name -> MR info dict.
+    """
+    import json
+
+    if not _MR_CACHE_PATH.exists():
+        return {}
+    try:
+        data = json.loads(_MR_CACHE_PATH.read_text())
+        if isinstance(data, dict):
+            return data
+        # Handle list format: each entry has a source_branch key
+        if isinstance(data, list):
+            result: dict[str, dict] = {}
+            for mr in data:
+                branch = mr.get("source_branch", "")
+                if branch:
+                    result[branch] = mr
+            return result
+    except (json.JSONDecodeError, OSError):
+        pass
+    return {}
+
+
+# ─── Ticket-Solve Cache ─────────────────────────────────────────────
+
+_TICKET_SOLVE_DIR = Path.home() / ".cache" / "ticket-solve"
+
+
+def get_ticket_solve_status(ticket_key: str) -> dict | None:
+    """Read ticket-solve status for a specific ticket.
+
+    Returns the parsed JSON dict or None if not found.
+    """
+    import json
+
+    cache_file = _TICKET_SOLVE_DIR / f"{ticket_key}.json"
+    if not cache_file.exists():
+        return None
+    try:
+        return json.loads(cache_file.read_text())
+    except (json.JSONDecodeError, OSError):
+        return None
+
+
+# ─── Worktree Discovery ─────────────────────────────────────────────
+
+import re
+
+_TICKET_KEY_RE = re.compile(r'^([A-Z]+-\d+)')
+_SKIP_BRANCHES = frozenset({"main", "master", "develop", "dev", "staging", "production"})
+
+
+def extract_ticket_key(branch: str) -> str:
+    """Extract Jira ticket key from branch name (e.g. 'UB-1234-fix-thing' -> 'UB-1234')."""
+    m = _TICKET_KEY_RE.match(branch)
+    return m.group(1) if m else ""
+
+
+def discover_worktrees(repo_paths: list[str]) -> list[dict]:
+    """Discover all git worktrees across repos.
+
+    Returns list of dicts with: path, branch, ticket_key, repo_path.
+    Skips bare worktrees and main/master/develop branches.
+    """
+    results: list[dict] = []
+    seen_paths: set[str] = set()
+
+    for repo in repo_paths:
+        worktrees = get_worktree_list(repo)
+        for wt in worktrees:
+            path = wt.get("path", "")
+            if not path or path in seen_paths:
+                continue
+            seen_paths.add(path)
+
+            if wt.get("bare"):
+                continue
+
+            branch = wt.get("branch", "")
+            if not branch or branch in _SKIP_BRANCHES:
+                continue
+
+            ticket_key = extract_ticket_key(branch)
+            results.append({
+                "path": path,
+                "branch": branch,
+                "ticket_key": ticket_key,
+                "repo_path": repo,
+            })
+
+    return results
+
+
 # ─── Dev-Workflow Tool Integration ───────────────────────────────────
 
 _DEV_TOOLS_DIR = Path.home() / "bin" / "dev-workflow-tools"

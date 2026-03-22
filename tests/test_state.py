@@ -1383,3 +1383,119 @@ class TestCommandRegistry:
         assert result["action"] == "ship"
         result = state.execute_command("wip")
         assert result["action"] == "git-action"
+
+
+# ── Worktree Discovery + Enrichment ─────────────────────────────────
+
+
+class TestDiscoverAndEnrichWorktrees:
+    def test_creates_workstream_for_new_worktree(self, state):
+        """A new worktree should auto-create a workstream."""
+        with patch("state.discover_worktrees") as mock_discover, \
+             patch("state.get_jira_cache") as mock_jira, \
+             patch("state.get_mr_cache") as mock_mr, \
+             patch("state.get_ticket_solve_status") as mock_solve, \
+             patch("os.path.isdir", return_value=True):
+            mock_discover.return_value = [
+                {"path": "/home/dev/repo-wt", "branch": "UB-1234-fix", "ticket_key": "UB-1234", "repo_path": "/home/dev/repo"},
+            ]
+            mock_jira.return_value = {}
+            mock_mr.return_value = {}
+            mock_solve.return_value = None
+
+            changed = state.discover_and_enrich_worktrees()
+            assert changed is True
+            # Should have created one workstream
+            assert len(state.store.active) == 1
+            ws = state.store.active[0]
+            assert "UB-1234" in ws.name
+            assert ws.ticket_key == "UB-1234"
+
+    def test_skips_existing_linked_worktree(self, state):
+        """If a worktree is already linked, don't create a duplicate."""
+        ws = Workstream(name="Existing", repo_path="/home/dev/repo-wt")
+        ws.add_link("worktree", "/home/dev/repo-wt", "repo-wt")
+        state.store.add(ws)
+
+        with patch("state.discover_worktrees") as mock_discover, \
+             patch("state.get_jira_cache") as mock_jira, \
+             patch("state.get_mr_cache") as mock_mr, \
+             patch("state.get_ticket_solve_status") as mock_solve, \
+             patch("os.path.isdir", return_value=True):
+            mock_discover.return_value = [
+                {"path": "/home/dev/repo-wt", "branch": "UB-1234-fix", "ticket_key": "UB-1234", "repo_path": "/home/dev/repo"},
+            ]
+            mock_jira.return_value = {}
+            mock_mr.return_value = {}
+            mock_solve.return_value = None
+
+            changed = state.discover_and_enrich_worktrees()
+            assert changed is False
+            assert len(state.store.active) == 1  # no new ws created
+
+    def test_enriches_from_jira_cache(self, state):
+        """Workstreams with ticket_key get enriched from Jira cache."""
+        from actions import JiraTicketInfo
+        ws = Workstream(name="Test", repo_path="/home/dev/repo")
+        ws.add_link("ticket", "UB-1234", "UB-1234")
+        state.store.add(ws)
+
+        with patch("state.discover_worktrees") as mock_discover, \
+             patch("state.get_jira_cache") as mock_jira, \
+             patch("state.get_mr_cache") as mock_mr, \
+             patch("state.get_ticket_solve_status") as mock_solve, \
+             patch("os.path.isdir", return_value=True):
+            mock_discover.return_value = []
+            mock_jira.return_value = {
+                "UB-1234": JiraTicketInfo(key="UB-1234", summary="Fix the bug", status="In Progress"),
+            }
+            mock_mr.return_value = {}
+            mock_solve.return_value = None
+
+            state.discover_and_enrich_worktrees()
+            ws = state.store.active[0]
+            assert ws.ticket_key == "UB-1234"
+            assert ws.ticket_summary == "Fix the bug"
+            assert ws.ticket_status == "In Progress"
+
+    def test_auto_archives_removed_worktree(self, state):
+        """Workstreams linked to non-existent worktree paths get auto-archived."""
+        ws = Workstream(name="Gone", repo_path="/gone/path")
+        ws.add_link("worktree", "/gone/path", "repo")
+        state.store.add(ws)
+
+        with patch("state.discover_worktrees") as mock_discover, \
+             patch("state.get_jira_cache") as mock_jira, \
+             patch("state.get_mr_cache") as mock_mr, \
+             patch("state.get_ticket_solve_status") as mock_solve, \
+             patch("os.path.isdir", return_value=False):
+            mock_discover.return_value = []
+            mock_jira.return_value = {}
+            mock_mr.return_value = {}
+            mock_solve.return_value = None
+
+            changed = state.discover_and_enrich_worktrees()
+            assert changed is True
+            assert len(state.store.active) == 0
+            assert len(state.store.archived) == 1
+
+    def test_creates_ws_with_jira_summary_name(self, state):
+        """When Jira cache has a summary, the ws name includes it."""
+        from actions import JiraTicketInfo
+        with patch("state.discover_worktrees") as mock_discover, \
+             patch("state.get_jira_cache") as mock_jira, \
+             patch("state.get_mr_cache") as mock_mr, \
+             patch("state.get_ticket_solve_status") as mock_solve, \
+             patch("os.path.isdir", return_value=True):
+            mock_discover.return_value = [
+                {"path": "/home/dev/wt", "branch": "UB-42-fix", "ticket_key": "UB-42", "repo_path": "/repo"},
+            ]
+            mock_jira.return_value = {
+                "UB-42": JiraTicketInfo(key="UB-42", summary="Fix login timeout"),
+            }
+            mock_mr.return_value = {}
+            mock_solve.return_value = None
+
+            state.discover_and_enrich_worktrees()
+            ws = state.store.active[0]
+            assert ws.name == "UB-42: Fix login timeout"
