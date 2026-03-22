@@ -3,6 +3,9 @@
 Uses `claude -p --model sonnet` for cheap, fast title generation.
 Results are cached in ~/.cache/claude-orchestrator/thread-names.json
 so each thread is only processed once.
+
+Thread titles are periodically re-evaluated when context changes
+(new sessions, new content). See refresh_thread_titles().
 """
 
 from __future__ import annotations
@@ -10,6 +13,7 @@ from __future__ import annotations
 import json
 import hashlib
 import subprocess
+from datetime import datetime, timedelta
 from pathlib import Path
 from dataclasses import dataclass
 from typing import Optional
@@ -20,6 +24,10 @@ from sessions import ClaudeSession
 CACHE_DIR = Path.home() / ".cache" / "claude-orchestrator"
 CACHE_FILE = CACHE_DIR / "thread-names.json"
 SESSION_TITLE_CACHE = CACHE_DIR / "session-titles.json"
+TITLE_EVAL_CACHE = CACHE_DIR / "thread-title-evals.json"
+
+# Minimum time between title re-evaluations per thread
+TITLE_REFRESH_COOLDOWN = timedelta(hours=6)
 
 # Max threads to title in one batch (to limit cost/latency)
 BATCH_SIZE = 15
@@ -226,6 +234,165 @@ def name_uncached_threads(threads: list[Thread]) -> int:
 
     _save_cache(cache)
     return named_count
+
+
+# ─── Thread title re-evaluation ──────────────────────────────────────
+
+
+def _load_eval_cache() -> dict[str, dict]:
+    """Load {fingerprint: {context_hash, evaluated_at}}."""
+    if not TITLE_EVAL_CACHE.exists():
+        return {}
+    try:
+        return json.loads(TITLE_EVAL_CACHE.read_text())
+    except (json.JSONDecodeError, OSError):
+        return {}
+
+
+def _save_eval_cache(cache: dict[str, dict]):
+    CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    TITLE_EVAL_CACHE.write_text(json.dumps(cache, indent=2))
+
+
+def _thread_context_hash(thread: Thread) -> str:
+    """Content-aware fingerprint. Changes when sessions change OR content changes."""
+    from threads import _extract_first_message
+
+    parts = [thread.project_path]
+    for s in sorted(thread.sessions, key=lambda s: s.session_id):
+        msg = _extract_first_message(s)
+        parts.append(f"{s.session_id}:{msg[:100] if msg else ''}")
+    raw = "\n".join(parts)
+    return hashlib.sha256(raw.encode()).hexdigest()[:16]
+
+
+def _build_refresh_prompt(threads_context: list[dict]) -> str:
+    """Build a prompt for re-evaluating thread titles."""
+    blocks = []
+    for ctx in threads_context:
+        block = f"""[THREAD {ctx['fingerprint']}]
+Current title: {ctx['current_title']}
+{ctx['context']}"""
+        blocks.append(block)
+
+    return f"""You maintain short titles for Claude Code session threads on a developer dashboard.
+
+For each thread below, look at the session activity and the current title, then decide:
+- If the current title still accurately captures the thread's purpose, respond with "keep"
+- If the work has evolved or the title is stale, write a new short title (3-8 words max)
+
+Rules:
+- Titles should be what a human would call this line of work
+- Use ticket IDs if present (e.g. "UB-6732 time range fix")
+- Keep titles lowercase unless they contain proper nouns or ticket IDs
+- If the current title is good, just say "keep" — don't change for the sake of changing
+
+Respond with ONLY a JSON object mapping fingerprint to either "keep" or the new title string.
+
+{chr(10).join(blocks)}"""
+
+
+def refresh_thread_titles(threads: list[Thread]) -> int:
+    """Re-evaluate titles for threads whose context has changed.
+
+    Returns the number of titles updated.
+    """
+    name_cache = _load_cache()
+    eval_cache = _load_eval_cache()
+    now = datetime.now()
+
+    candidates = []
+    for thread in threads:
+        fp = _thread_fingerprint(thread)
+
+        # Only re-evaluate threads that already have a title
+        if fp not in name_cache:
+            continue
+
+        ctx_hash = _thread_context_hash(thread)
+        cached_eval = eval_cache.get(fp, {})
+
+        # Skip if context hasn't changed
+        if cached_eval.get("context_hash") == ctx_hash:
+            continue
+
+        # Skip if evaluated recently (cooldown)
+        last_eval = cached_eval.get("evaluated_at", "")
+        if last_eval:
+            try:
+                last_dt = datetime.fromisoformat(last_eval)
+                if now - last_dt < TITLE_REFRESH_COOLDOWN:
+                    continue
+            except (ValueError, TypeError):
+                pass
+
+        candidates.append({
+            "thread": thread,
+            "fingerprint": fp,
+            "current_title": name_cache[fp].get("title", ""),
+            "context": _extract_context(thread),
+            "context_hash": ctx_hash,
+        })
+
+    if not candidates:
+        return 0
+
+    batch = candidates[:BATCH_SIZE]
+    prompt = _build_refresh_prompt(batch)
+
+    try:
+        result = subprocess.run(
+            ["claude", "-p", "--model", "haiku",
+             "--no-session-persistence",
+             "--output-format", "json",
+             "--max-budget-usd", "0.02",
+             "--allowedTools", ""],
+            input=prompt,
+            capture_output=True, text=True, timeout=30,
+        )
+
+        if result.returncode != 0:
+            return 0
+
+        try:
+            outer = json.loads(result.stdout)
+            text = outer.get("result", "") if isinstance(outer, dict) else result.stdout
+        except json.JSONDecodeError:
+            text = result.stdout
+
+        text = text.strip()
+        if text.startswith("```"):
+            lines = text.split("\n")
+            text = "\n".join(lines[1:-1] if lines[-1].strip() == "```" else lines[1:])
+
+        data = json.loads(text)
+        if not isinstance(data, dict):
+            return 0
+
+    except (subprocess.TimeoutExpired, OSError, json.JSONDecodeError):
+        return 0
+
+    updated = 0
+    for ctx in batch:
+        fp = ctx["fingerprint"]
+        new_title = data.get(fp, "keep")
+
+        # Update eval cache regardless (tracks that we evaluated)
+        eval_cache[fp] = {
+            "context_hash": ctx["context_hash"],
+            "evaluated_at": now.isoformat(),
+        }
+
+        if isinstance(new_title, str) and new_title.lower() != "keep" and new_title != ctx["current_title"]:
+            name_cache[fp]["title"] = new_title
+            # Also update the thread object in-place
+            ctx["thread"].ai_title = new_title
+            updated += 1
+
+    _save_eval_cache(eval_cache)
+    if updated > 0:
+        _save_cache(name_cache)
+    return updated
 
 
 # ─── Session-level titles ────────────────────────────────────────────

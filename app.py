@@ -33,7 +33,7 @@ from models import (
 )
 from sessions import ClaudeSession
 from threads import Thread, ThreadActivity, session_activity, mark_thread_seen, discover_threads
-from thread_namer import apply_cached_names, name_uncached_threads, title_sessions, get_session_title
+from thread_namer import apply_cached_names, name_uncached_threads, title_sessions, get_session_title, refresh_thread_titles
 from watcher import SessionWatcher
 from workstream_synthesizer import (
     synthesize_workstreams, get_discovered_workstreams, get_assigned_thread_ids,
@@ -903,6 +903,13 @@ class OrchestratorApp(App):
 
         new_count = synthesize_workstreams(threads, self.state.store.active)
         if new_count > 0 or named > 0:
+            discovered = get_discovered_workstreams(threads)
+            self.call_from_thread(self._apply_synthesis, threads, discovered)
+
+        # Lightweight title re-evaluation for threads (rate-limited internally to 6h per thread)
+        titles_updated = refresh_thread_titles(threads)
+        if titles_updated > 0:
+            apply_cached_names(threads)
             discovered = get_discovered_workstreams(threads)
             self.call_from_thread(self._apply_synthesis, threads, discovered)
 
