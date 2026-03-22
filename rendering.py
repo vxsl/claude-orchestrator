@@ -26,21 +26,21 @@ from sessions import ClaudeSession
 from threads import Thread, ThreadActivity, session_activity, _ACTIVITY_PRIORITY
 
 
-# ─── Color Palette (matching fzedit / jira-fzf) ─────────────────────
-# ANSI 256-color equivalents as hex for the mellow, desaturated palette
+# ─── Color Palette (GitHub Dark-inspired, high contrast) ─────────────
+# Aligned with alacritty GitHub Dark theme for consistent terminal feel
 
-C_BLUE = "#87afaf"       # 109 — borders, structural
-C_PURPLE = "#af87ff"     # 141 — headings, personal category
-C_CYAN = "#5fd7ff"       # 81  — active states, work category
-C_GREEN = "#87d787"      # 114 — success, done
-C_YELLOW = "#ffd75f"     # 221 — warnings, queued
-C_ORANGE = "#d7875f"     # 173 — secondary accents
-C_RED = "#d75f5f"        # 167 — errors, blocked
-C_GOLD = "#d7af5f"       # 179 — crystallized todos, distilled knowledge
-C_LIGHT = "#a0a0a0"      # soft foreground text
-C_MID = "#787878"        # medium gray — secondary metadata
-C_DIM = "#585858"        # subdued — present but not loud
-C_FAINT = "#3a3a3a"      # near-invisible — IDs, decorative
+C_BLUE = "#58a6ff"       # structural, borders
+C_PURPLE = "#bc8cff"     # headings, personal category
+C_CYAN = "#39c5cf"       # active states, work category
+C_GREEN = "#3fb950"      # success, done
+C_YELLOW = "#d29922"     # warnings, queued
+C_ORANGE = "#d7875f"     # secondary accents
+C_RED = "#ff7b72"        # errors, blocked
+C_GOLD = "#e3b341"       # crystallized todos, distilled knowledge
+C_LIGHT = "#b1bac4"      # primary text (matches terminal white)
+C_MID = "#8b949e"        # secondary metadata
+C_DIM = "#6e7681"        # subdued (matches terminal bright-black)
+C_FAINT = "#484f58"      # near-invisible — IDs, decorative
 
 # ─── Background Palette (hardcoded to bypass Textual's auto-tinting) ──
 BG_BASE = "#141414"      # deepest — screen background
@@ -397,10 +397,8 @@ def _render_session_option(
     duration = s.duration_display
     age_str = s.age
 
-    # Title styling: live sessions bold, idle dimmed, others normal.
-    if act == ThreadActivity.AWAITING_INPUT:
-        title_fmt = f"[bold {C_LIGHT}]{title_esc}[/bold {C_LIGHT}]"
-    elif act == ThreadActivity.IDLE:
+    # Title styling: idle sessions are dimmed, everything else is normal weight.
+    if act == ThreadActivity.IDLE:
         title_fmt = f"[{C_DIM}]{title_esc}[/{C_DIM}]"
     else:
         title_fmt = f"[{C_LIGHT}]{title_esc}[/{C_LIGHT}]"
