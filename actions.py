@@ -57,7 +57,7 @@ def find_tmux_windows_for_ws(ws_name: str) -> list[tuple[str, str]]:
         )
         if result.returncode != 0:
             return []
-        target_name = f"orch:{ws_name}"
+        target_name = f"\U0001f916{ws_name[:18]}"
         matches = []
         for line in result.stdout.strip().split("\n"):
             parts = line.split("\t")
