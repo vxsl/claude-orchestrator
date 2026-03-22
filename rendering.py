@@ -370,17 +370,18 @@ _BAR_CATS = [
 ]
 
 _BAR_LEGEND_LABELS = [
-    ("coding", C_ORANGE),
-    ("bash",   C_LIGHT),
-    ("research", C_DIM),
-    ("agents", C_PURPLE),
+    ("code", C_ORANGE),
+    ("bash", C_LIGHT),
+    ("read", C_DIM),
+    ("agent", C_PURPLE),
 ]
 
 
 def tool_bar_legend() -> str:
     """Return a Rich-markup legend for the tool usage bar."""
-    parts = [f"[not bold {c}]{label}[/not bold {c}]" for label, c in _BAR_LEGEND_LABELS]
-    return " ".join(parts)
+    example = "".join(f"[not bold {c}]▬[/not bold {c}]" for _, c in _BAR_LEGEND_LABELS)
+    labels = " ".join(f"[not bold {c}]{label}[/not bold {c}]" for label, c in _BAR_LEGEND_LABELS)
+    return f"{example} {labels}"
 
 
 def _tool_bar(tool_counts: dict[str, int], width: int = 6) -> str:
