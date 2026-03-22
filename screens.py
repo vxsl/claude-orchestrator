@@ -1285,8 +1285,8 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         return None
 
     @staticmethod
-    def _restore_highlight_by_sid(olist: OptionList, sessions: list, sid: str | None):
-        """Restore highlight to the session with the given ID, or default to 0."""
+    def _restore_highlight_by_sid(olist: OptionList, sessions: list, sid: str | None, old_idx: int | None = None):
+        """Restore highlight to the session with the given ID, or clamp to old position."""
         if not olist.option_count:
             return
         if sid:
@@ -1294,7 +1294,11 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
                 if s.session_id == sid:
                     olist.highlighted = i
                     return
-        olist.highlighted = 0
+        # Session was removed — keep cursor at same position, clamped.
+        if old_idx is not None:
+            olist.highlighted = min(old_idx, olist.option_count - 1)
+        else:
+            olist.highlighted = 0
 
     @staticmethod
     def _stable_merge(existing: list[ClaudeSession], fresh: list[ClaudeSession]) -> list[ClaudeSession]:
