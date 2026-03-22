@@ -122,14 +122,8 @@ class OrchestratorApp(App):
     Screen {{
         background: {BG_BASE};
     }}
-    #status-bar {{
-        height: 1; padding: 0 1; background: {BG_BASE}; dock: top;
-    }}
-    #view-bar {{
-        height: 1; padding: 0 1; background: {BG_BASE}; dock: top;
-    }}
-    #filter-bar {{
-        height: 1; padding: 0 1; background: {BG_BASE}; dock: top;
+    #top-bar {{
+        height: auto; max-height: 3; padding: 0 1; background: {BG_BASE}; dock: top;
     }}
     #summary-bar {{
         height: 1; padding: 0 1; background: {BG_BASE}; color: {C_DIM}; dock: bottom;
@@ -288,9 +282,7 @@ class OrchestratorApp(App):
     # ── Compose ──
 
     def compose(self) -> ComposeResult:
-        yield Static("", id="status-bar")
-        yield Static("", id="view-bar")
-        yield Static("", id="filter-bar")
+        yield Static("", id="top-bar")
         with Horizontal(id="main-content"):
             yield FastTable(id="ws-table")
             yield FastTable(id="sessions-table")
@@ -367,12 +359,10 @@ class OrchestratorApp(App):
             ws_table = self.query_one("#ws-table", FastTable)
             sessions_table = self.query_one("#sessions-table", FastTable)
             archived_table = self.query_one("#archived-table", FastTable)
-            filter_bar = self.query_one("#filter-bar", Static)
 
             ws_table.display = self.state.view_mode == ViewMode.WORKSTREAMS
             sessions_table.display = self.state.view_mode == ViewMode.SESSIONS
             archived_table.display = self.state.view_mode == ViewMode.ARCHIVED
-            filter_bar.display = self.state.view_mode == ViewMode.WORKSTREAMS
 
             if self.state.view_mode == ViewMode.SESSIONS:
                 self._load_sessions()
@@ -682,9 +672,13 @@ class OrchestratorApp(App):
 
     def _update_all_bars(self):
         try:
-            self.query_one("#status-bar", Static).update(self._render_status_bar())
-            self.query_one("#view-bar", Static).update(self._render_view_bar())
-            self.query_one("#filter-bar", Static).update(self._render_filter_bar())
+            lines = [
+                self._render_status_bar(),
+                self._render_view_bar(),
+            ]
+            if self.state.view_mode == ViewMode.WORKSTREAMS:
+                lines.append(self._render_filter_bar())
+            self.query_one("#top-bar", Static).update("\n".join(lines))
             self.query_one("#summary-bar", Static).update(self._render_summary_bar())
         except Exception:
             pass
