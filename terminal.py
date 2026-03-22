@@ -269,6 +269,7 @@ class TerminalWidget(Widget, can_focus=True):
         self._stream = _Stream(self._screen)
         self._seq_filter = _SeqFilter()
         self._mouse_tracking = False
+        self._sync_output = False  # DEC private mode 2026 (synchronized output)
 
         # PTY state
         self._pid: int | None = None
@@ -401,16 +402,8 @@ class TerminalWidget(Widget, can_focus=True):
                         self.post_message(self.Finished())
                         return
                     self._process_output(data)
-                # Debounce: let rapid output (e.g. full-screen redraws)
-                # accumulate before rendering a frame.
-                await asyncio.sleep(0.01)
-                while not queue.empty():
-                    data = queue.get_nowait()
-                    if data is None:
-                        self.post_message(self.Finished())
-                        return
-                    self._process_output(data)
-                self.refresh()
+                if not self._sync_output:
+                    self.refresh()
         except asyncio.CancelledError:
             pass
         finally:
@@ -429,6 +422,10 @@ class TerminalWidget(Widget, can_focus=True):
                     self._mouse_tracking = True
                 if "1000l" in params:
                     self._mouse_tracking = False
+                if "2026h" in params:
+                    self._sync_output = True
+                if "2026l" in params:
+                    self._sync_output = False
         data = self._seq_filter.feed(data)
         try:
             self._stream.feed(data)
