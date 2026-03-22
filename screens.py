@@ -1015,9 +1015,26 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         self._load_feed()
         self.query_one("#detail-sessions", OptionList).focus()
         self._update_pane_labels()
-        self._throbber_timer = self.set_interval(0.3, self._tick_throbber)
-        self.set_interval(3, self._refresh_session_liveness)
+        self._throbber_timer = self.set_interval(0.5, self._tick_throbber)
+        self.set_interval(10, self._schedule_liveness_refresh)
         self.set_interval(10, self._poll_feed)
+
+    def _schedule_liveness_refresh(self):
+        self._do_liveness_refresh()
+
+    @work(thread=True, exclusive=True, group="detail_liveness")
+    def _do_liveness_refresh(self):
+        from actions import refresh_liveness
+        from sessions import refresh_session_tail
+        refresh_liveness(self._detail_sessions)
+        refresh_liveness(self._archived_sessions)
+        for s in self._detail_sessions:
+            if s.is_live:
+                refresh_session_tail(s)
+        for s in self._archived_sessions:
+            if s.is_live:
+                refresh_session_tail(s)
+        self.call_from_thread(self._rebuild_all_options)
 
     def _focused_olist(self) -> OptionList:
         if self._active_pane == "archived":
@@ -1087,21 +1104,7 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
             except Exception:
                 pass
 
-    def _refresh_session_liveness(self):
-        from actions import refresh_liveness
-        from sessions import refresh_session_tail
-        refresh_liveness(self._detail_sessions)
-        refresh_liveness(self._archived_sessions)
-        # Tail-read live/recently-live sessions to pick up new messages
-        for s in self._detail_sessions:
-            if s.is_live:
-                refresh_session_tail(s)
-        for s in self._archived_sessions:
-            if s.is_live:
-                refresh_session_tail(s)
-        # Rebuild all options so non-animating sessions also update
-        self._rebuild_all_options()
-        self._update_animating_cache()
+    # _refresh_session_liveness replaced by _schedule_liveness_refresh + _do_liveness_refresh above
 
     def on_sessions_changed(self, event: SessionsChanged):
         self._refresh()
@@ -2161,12 +2164,17 @@ class SessionPickerScreen(_VimOptionListMixin, ModalScreen[ClaudeSession | None]
         self._last_seen_cache = load_last_seen()
         self._generate_titles()
         self._rebuild_options()
-        self._throbber_timer = self.set_interval(0.3, self._tick_throbber)
-        self.set_interval(3, self._refresh_session_liveness)
+        self._throbber_timer = self.set_interval(0.5, self._tick_throbber)
+        self.set_interval(10, self._schedule_picker_liveness)
 
-    def _refresh_session_liveness(self):
+    def _schedule_picker_liveness(self):
+        self._do_picker_liveness()
+
+    @work(thread=True, exclusive=True, group="picker_liveness")
+    def _do_picker_liveness(self):
         from actions import refresh_liveness
         refresh_liveness(self.picker_sessions)
+        self.app.call_from_thread(self._rebuild_options)
 
     def _tick_throbber(self):
         self._throbber_frame += 1
