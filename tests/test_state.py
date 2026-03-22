@@ -1278,3 +1278,54 @@ class TestArchivedFilter:
         result = populated_state.get_filtered_streams()
         assert len(result) == 1
         assert result[0].id == ws.id
+
+
+# ─── Category Auto-Detection from Git Remote ────────────────────────
+
+class TestInferCategoryFromRemote:
+    def test_gitlab_sets_work(self, state):
+        """A workstream with a gitlab remote should be auto-set to WORK."""
+        ws = Workstream(name="work repo", category=Category.PERSONAL, repo_path="/fake/repo")
+        state.store.add(ws)
+        with patch("state.get_git_remote_host", return_value="gitlab.com"):
+            state._infer_category_from_remote(ws)
+        assert ws.category == Category.WORK
+
+    def test_github_stays_personal(self, state):
+        """A workstream with a github remote stays PERSONAL (already default)."""
+        ws = Workstream(name="personal repo", category=Category.PERSONAL, repo_path="/fake/repo")
+        state.store.add(ws)
+        with patch("state.get_git_remote_host", return_value="github.com"):
+            state._infer_category_from_remote(ws)
+        assert ws.category == Category.PERSONAL
+
+    def test_no_override_explicit_work(self, state):
+        """Don't override an explicit WORK category (e.g. to PERSONAL for github)."""
+        ws = Workstream(name="explicit work", category=Category.WORK, repo_path="/fake/repo")
+        state.store.add(ws)
+        with patch("state.get_git_remote_host", return_value="github.com"):
+            state._infer_category_from_remote(ws)
+        assert ws.category == Category.WORK
+
+    def test_no_override_explicit_meta(self, state):
+        """Don't override an explicit META category."""
+        ws = Workstream(name="meta item", category=Category.META, repo_path="/fake/repo")
+        state.store.add(ws)
+        with patch("state.get_git_remote_host", return_value="gitlab.com"):
+            state._infer_category_from_remote(ws)
+        assert ws.category == Category.META
+
+    def test_no_remote_does_nothing(self, state):
+        """When get_git_remote_host returns None, category is unchanged."""
+        ws = Workstream(name="no remote", category=Category.PERSONAL, repo_path="/fake/repo")
+        state.store.add(ws)
+        with patch("state.get_git_remote_host", return_value=None):
+            state._infer_category_from_remote(ws)
+        assert ws.category == Category.PERSONAL
+
+    def test_no_repo_path_does_nothing(self, state):
+        """When repo_path is empty, category is unchanged."""
+        ws = Workstream(name="no repo", category=Category.PERSONAL)
+        state.store.add(ws)
+        state._infer_category_from_remote(ws)
+        assert ws.category == Category.PERSONAL

@@ -9,6 +9,7 @@ from actions import (
     ws_directories, ws_working_dir,
     find_sessions_for_ws, launch_orch_claude,
     has_tmux, do_resume, switch_to_tmux_window,
+    get_git_remote_host,
 )
 from screens import SessionPickerScreen
 
@@ -400,3 +401,41 @@ class TestDevToolsAvailable:
         # If dev-tools dir doesn't exist, returns empty
         # If it exists but tool doesn't, also returns empty
         assert isinstance(cmd, list)
+
+
+class TestGetGitRemoteHost:
+    @patch("actions.subprocess.run")
+    def test_ssh_url(self, mock_run):
+        """SSH remote git@gitlab.com:org/repo.git → 'gitlab.com'."""
+        mock_run.return_value = MagicMock(
+            stdout="git@gitlab.com:org/repo.git\n", returncode=0,
+        )
+        assert get_git_remote_host("/some/path") == "gitlab.com"
+
+    @patch("actions.subprocess.run")
+    def test_https_url(self, mock_run):
+        """HTTPS remote https://github.com/user/repo → 'github.com'."""
+        mock_run.return_value = MagicMock(
+            stdout="https://github.com/user/repo\n", returncode=0,
+        )
+        assert get_git_remote_host("/some/path") == "github.com"
+
+    @patch("actions.subprocess.run")
+    def test_failure_returns_none(self, mock_run):
+        """Subprocess failure (no remote, not a git repo, etc.) → None."""
+        mock_run.return_value = MagicMock(stdout="", returncode=128)
+        assert get_git_remote_host("/nonexistent") is None
+
+    @patch("actions.subprocess.run")
+    def test_exception_returns_none(self, mock_run):
+        """Subprocess exception → None."""
+        mock_run.side_effect = OSError("no such command")
+        assert get_git_remote_host("/some/path") is None
+
+    @patch("actions.subprocess.run")
+    def test_https_with_auth(self, mock_run):
+        """HTTPS remote with user:pass@ → strips auth, returns hostname."""
+        mock_run.return_value = MagicMock(
+            stdout="https://token@github.com/user/repo\n", returncode=0,
+        )
+        assert get_git_remote_host("/some/path") == "github.com"

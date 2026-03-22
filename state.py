@@ -92,6 +92,7 @@ from models import (
     STATUS_ICONS, _relative_time,
 )
 from sessions import ClaudeSession, SessionMessage, extract_session_content, get_live_session_ids, refresh_session_tail
+from actions import get_git_remote_host
 
 
 # ── Content search ─────────────────────────────────────────────────
@@ -549,6 +550,7 @@ class AppState:
                     expanded = os.path.expanduser(link.value).rstrip("/")
                     if os.path.isdir(expanded) and os.path.isdir(os.path.join(expanded, ".git")):
                         ws.repo_path = expanded
+                        self._infer_category_from_remote(ws)
                         count += 1
                         break
                 if ws.repo_path:
@@ -568,10 +570,30 @@ class AppState:
                 if paths:
                     best = max(paths, key=paths.get)
                     ws.repo_path = best
+                    self._infer_category_from_remote(ws)
                     count += 1
         if count:
             self.store.save()
         return count
+
+    def _infer_category_from_remote(self, ws: Workstream) -> None:
+        """Auto-set category based on git remote hostname.
+
+        Maps: hostname containing "gitlab" → WORK,
+              hostname containing "github" → PERSONAL.
+        Only auto-fills if the workstream's category is still the default
+        (PERSONAL) — don't override explicit user choices.
+        """
+        if not ws.repo_path:
+            return
+        if ws.category != Category.PERSONAL:
+            return
+        host = get_git_remote_host(ws.repo_path)
+        if not host:
+            return
+        host_lower = host.lower()
+        if "gitlab" in host_lower:
+            ws.category = Category.WORK
 
     def _ws_dirs(self, ws: Workstream) -> set[str]:
         """Collect all directory paths for a workstream (repo_path + links)."""
