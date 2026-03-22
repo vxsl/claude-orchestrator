@@ -1710,6 +1710,105 @@ class TestBrainDumpParser:
 # ─── Ctrl+L binding audit ────────────────────────────────────────────
 
 
+# ─── Watcher debounce unit tests ─────────────────────────────────────
+
+
+class TestLeadingEdgeDebounce:
+    """Test the leading-edge debounce in watcher.py."""
+
+    def test_fires_immediately_first_time(self):
+        from watcher import _LeadingEdgeDebounce
+        calls = []
+        d = _LeadingEdgeDebounce(lambda: calls.append(1), window=1.0)
+        d()
+        assert len(calls) == 1
+
+    def test_suppresses_within_window(self):
+        from watcher import _LeadingEdgeDebounce
+        calls = []
+        d = _LeadingEdgeDebounce(lambda: calls.append(1), window=1.0)
+        d()
+        d()  # within window
+        d()  # within window
+        assert len(calls) == 1  # only first fire
+
+
+class TestTrailingEdgeDebounce:
+    """Test the trailing-edge debounce in watcher.py."""
+
+    def test_fires_after_quiet(self):
+        import time
+        from watcher import _TrailingEdgeDebounce
+        calls = []
+        d = _TrailingEdgeDebounce(lambda: calls.append(1), window=0.05)
+        d()
+        time.sleep(0.1)
+        assert len(calls) == 1
+
+    def test_resets_on_rapid_calls(self):
+        import time
+        from watcher import _TrailingEdgeDebounce
+        calls = []
+        d = _TrailingEdgeDebounce(lambda: calls.append(1), window=0.1)
+        d()
+        time.sleep(0.03)
+        d()  # reset timer
+        time.sleep(0.03)
+        d()  # reset timer again
+        # Should still be 0 (timer keeps resetting)
+        assert len(calls) == 0
+        time.sleep(0.15)
+        # Now it should have fired once
+        assert len(calls) == 1
+
+
+class TestSplitHandler:
+    """Test that _SplitHandler correctly classifies events."""
+
+    def test_jsonl_is_content(self):
+        from watcher import _SplitHandler
+        liveness = []
+        content = []
+        h = _SplitHandler(
+            on_liveness=lambda: liveness.append(1),
+            on_content=lambda: content.append(1),
+            liveness_debounce=0.01,
+            content_debounce=0.01,
+        )
+        from unittest.mock import MagicMock
+        event = MagicMock()
+        event.src_path = "/home/user/.claude/projects/test/session.jsonl"
+        event.is_directory = False
+        kind = h._classify(event)
+        assert kind == "content"
+
+    def test_session_json_is_liveness(self):
+        from watcher import _SplitHandler, CLAUDE_SESSIONS_DIR
+        h = _SplitHandler(
+            on_liveness=lambda: None,
+            on_content=lambda: None,
+        )
+        from unittest.mock import MagicMock
+        event = MagicMock()
+        event.src_path = str(CLAUDE_SESSIONS_DIR / "abc123.json")
+        event.is_directory = False
+        kind = h._classify(event)
+        assert kind == "liveness"
+
+    def test_random_file_is_none(self):
+        from watcher import _SplitHandler
+        h = _SplitHandler(
+            on_liveness=lambda: None,
+            on_content=lambda: None,
+        )
+        from unittest.mock import MagicMock
+        event = MagicMock()
+        event.src_path = "/tmp/random.txt"
+        event.is_directory = False
+        kind = h._classify(event)
+        assert kind is None
+
+
 class TestCtrlLBinding:
     """Verify ctrl+l works correctly across screens."""
 
@@ -1902,6 +2001,108 @@ class TestCLIEdgeCases:
 
 
 # ─── E2E: Session archive/restore in DetailScreen ───────────────────
+
+
+@pytest.mark.asyncio
+# ─── E2E: DetailScreen search ────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+class TestDetailScreenSearch:
+    """Test the search flow (/ key) inside DetailScreen."""
+
+    async def test_slash_activates_search(self, app_with_store):
+        """Pressing / in DetailScreen should show the search input."""
+        async with app_with_store.run_test(size=(120, 40)) as pilot:
+            await pilot.press("enter")
+            from screens import DetailScreen
+            ds = pilot.app.screen
+            assert isinstance(ds, DetailScreen)
+            await pilot.press("/")
+            search_input = ds.query_one("#detail-search-input")
+            assert search_input.has_class("visible")
+
+    async def test_escape_cancels_search(self, app_with_store):
+        """Escape during search should close search, not dismiss screen."""
+        async with app_with_store.run_test(size=(120, 40)) as pilot:
+            await pilot.press("enter")
+            from screens import DetailScreen
+            ds = pilot.app.screen
+            await pilot.press("/")
+            assert ds._search_is_active()
+            # Escape should cancel search, not dismiss
+            await pilot.press("escape")
+            assert not ds._search_is_active()
+            # Should still be on DetailScreen
+            assert isinstance(pilot.app.screen, DetailScreen)
+
+    async def test_double_escape_dismisses_screen(self, app_with_store):
+        """First escape cancels search, second dismisses DetailScreen."""
+        async with app_with_store.run_test(size=(120, 40)) as pilot:
+            await pilot.press("enter")
+            from screens import DetailScreen
+            assert isinstance(pilot.app.screen, DetailScreen)
+            await pilot.press("/")
+            await pilot.press("escape")  # cancel search
+            await pilot.press("escape")  # dismiss screen
+            assert not isinstance(pilot.app.screen, DetailScreen)
+
+    async def test_search_hides_archived_pane(self, app_with_store):
+        """Opening search should hide the archived pane."""
+        async with app_with_store.run_test(size=(120, 40)) as pilot:
+            await pilot.press("enter")
+            from screens import DetailScreen
+            ds = pilot.app.screen
+            await pilot.press("/")
+            arch_pane = ds.query_one("#detail-archived-pane")
+            assert arch_pane.display is False
+
+
+# ─── E2E: Modal return and refresh ──────────────────────────────────
+
+
+@pytest.mark.asyncio
+class TestOnReturnFromModal:
+    """Test that _on_return_from_modal properly refreshes state."""
+
+    async def test_return_from_detail_refreshes_table(self, app_with_store):
+        """After detail screen closes, table should be refreshed."""
+        async with app_with_store.run_test(size=(120, 40)) as pilot:
+            table = pilot.app.query_one("#ws-table")
+            count_before = table.option_count
+            # Open and close detail
+            await pilot.press("enter")
+            from screens import DetailScreen
+            assert isinstance(pilot.app.screen, DetailScreen)
+            await pilot.press("escape")
+            assert not isinstance(pilot.app.screen, DetailScreen)
+            # Table should still have same count (no data changed)
+            await pilot.pause()
+            count_after = table.option_count
+            assert count_after == count_before
+
+    async def test_note_in_detail_persists_after_dismiss(self, app_with_sessions):
+        """Add a note in detail, dismiss — note should be in the store."""
+        app, sessions, ws_id = app_with_sessions
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.press("enter")
+            from screens import DetailScreen, QuickNoteScreen
+            ds = pilot.app.screen
+            assert isinstance(ds, DetailScreen)
+            ws_before = ds.ws
+            # Add a note via n
+            await pilot.press("n")
+            assert isinstance(pilot.app.screen, QuickNoteScreen)
+            for char in "test note in detail":
+                await pilot.press(char)
+            await pilot.press("enter")
+            # Back to detail
+            assert isinstance(pilot.app.screen, DetailScreen)
+            # Dismiss detail
+            await pilot.press("escape")
+            # Note should be persisted in store
+            ws_after = pilot.app.store.get(ws_before.id)
+            assert any(t.text == "test note in detail" for t in ws_after.todos)
 
 
 @pytest.mark.asyncio
