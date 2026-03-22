@@ -8,7 +8,14 @@ from __future__ import annotations
 from enum import Enum
 from pathlib import Path
 
-from rich.markup import escape as _rich_escape
+def _rich_escape(text: str) -> str:
+    """Escape ALL [ characters for Rich markup.
+
+    rich.markup.escape() only escapes sequences that look like valid tags,
+    but arbitrary text with [ can still break when embedded inside markup
+    (e.g. "[#585858][Binding(key=...)[/#585858]" confuses the parser).
+    """
+    return text.replace("[", r"\[")
 
 from models import (
     Category, Status, TodoItem, Workstream,
