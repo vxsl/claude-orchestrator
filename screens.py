@@ -1065,6 +1065,9 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         self._mark_all_seen()
         self._load_feed()
         self._load_detail_sessions()
+        # Sync-refresh live sessions so activity badges are correct immediately
+        # (avoids brief stale "your turn" flash when returning from session view)
+        self._sync_refresh_live()
         self.query_one("#detail-title", Static).update(self._render_title())
         self.query_one("#detail-meta", Static).update(self._render_meta())
         self.query_one("#detail-body", Static).update(self._render_body())
@@ -1096,6 +1099,21 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         from threads import save_last_seen
         save_last_seen(data)
         self._last_seen_cache = data
+
+    def _sync_refresh_live(self):
+        """Tail-read live sessions synchronously to prevent stale activity badges.
+
+        Only reads the last 8KB of each live session's JSONL — fast enough
+        for the main thread (~µs per file) and avoids the 1-2 second gap
+        before the next background liveness refresh corrects the display.
+        """
+        from sessions import refresh_session_tail
+        for s in self._detail_sessions:
+            if s.is_live:
+                refresh_session_tail(s)
+        for s in self._archived_sessions:
+            if s.is_live:
+                refresh_session_tail(s)
 
     def _periodic_refresh(self):
         """Single merged timer: liveness check + feed poll."""
