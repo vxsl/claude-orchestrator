@@ -18,6 +18,8 @@ import re
 import shlex
 import signal
 import struct
+import subprocess
+import tempfile
 import termios
 from pathlib import Path
 
@@ -322,6 +324,7 @@ class TerminalWidget(Widget, can_focus=True):
         self._fd: int | None = None
         self._p_out = None
         self._read_task: asyncio.Task | None = None
+        self._persistent_session: str | None = None
 
     # ── Lifecycle ──────────────────────────────────────────────────
 
@@ -408,8 +411,167 @@ class TerminalWidget(Widget, can_focus=True):
         self._set_pty_size(self._nrow, self._ncol)
         self._read_task = asyncio.create_task(self._read_loop())
 
-    def on_unmount(self) -> None:
+    # ── Persistent (tmux-backed) lifecycle ───────────────────────
+
+    TMUX_SOCKET = "orch-sessions"
+
+    @staticmethod
+    def _tmux_conf_path() -> str:
+        """Return path to a minimal tmux config that makes tmux invisible."""
+        conf = Path(tempfile.gettempdir()) / "orch-tmux.conf"
+        if not conf.exists():
+            conf.write_text(
+                "set -g status off\n"
+                "set -g prefix None\n"
+                "set -s escape-time 0\n"
+                "set -g mouse on\n"
+            )
+        return str(conf)
+
+    def start_persistent(self, session_name: str) -> None:
+        """Start the command inside a tmux session, then attach to it.
+
+        The tmux server (on a dedicated socket) owns the PTY, so the
+        child process survives if orch is killed.
+        """
+        if self._pid is not None:
+            return
+
+        conf = self._tmux_conf_path()
+        argv = shlex.split(self._command)
+        env = os.environ.copy()
+        env.update(TERM="xterm-256color", COLORTERM="truecolor")
+        env.update(self._extra_env)
+        # Unset TMUX so nested tmux works
+        env.pop("TMUX", None)
+
+        # Build the inner command with env vars prepended
+        env_prefix = " ".join(
+            f"{k}={shlex.quote(v)}" for k, v in self._extra_env.items()
+        )
+        inner_cmd = f"env TERM=xterm-256color COLORTERM=truecolor {env_prefix} {self._command}"
+
+        # Create the tmux session (detached) running our command
+        subprocess.run(
+            ["tmux", "-L", self.TMUX_SOCKET, "-f", conf,
+             "new-session", "-d",
+             "-s", session_name,
+             "-x", str(self._ncol), "-y", str(self._nrow),
+             inner_cmd],
+            env=env, timeout=5,
+        )
+
+        # Now attach to it via pty.fork — the attach process is what we
+        # manage; the actual claude process lives in the tmux server.
+        self._persistent_session = session_name
+        self._pid, self._fd = pty.fork()
+        if self._pid == 0:
+            try:
+                os.execvpe("tmux", [
+                    "tmux", "-L", self.TMUX_SOCKET,
+                    "attach", "-t", session_name,
+                ], env)
+            except Exception:
+                os._exit(127)
+
+        self._p_out = os.fdopen(self._fd, "w+b", 0)
+        self._set_pty_size(self._nrow, self._ncol)
+        self._read_task = asyncio.create_task(self._read_loop())
+
+    def attach_persistent(self, session_name: str) -> None:
+        """Reattach to a surviving tmux session."""
+        if self._pid is not None:
+            return
+
+        env = os.environ.copy()
+        env.update(TERM="xterm-256color", COLORTERM="truecolor")
+        env.pop("TMUX", None)
+
+        self._persistent_session = session_name
+        self._pid, self._fd = pty.fork()
+        if self._pid == 0:
+            try:
+                os.execvpe("tmux", [
+                    "tmux", "-L", self.TMUX_SOCKET,
+                    "attach", "-t", session_name,
+                ], env)
+            except Exception:
+                os._exit(127)
+
+        self._p_out = os.fdopen(self._fd, "w+b", 0)
+        self._set_pty_size(self._nrow, self._ncol)
+        self._read_task = asyncio.create_task(self._read_loop())
+
+    @classmethod
+    def tmux_session_alive(cls, session_name: str) -> bool:
+        """Check if a persistent tmux session is still running."""
+        try:
+            result = subprocess.run(
+                ["tmux", "-L", cls.TMUX_SOCKET,
+                 "has-session", "-t", session_name],
+                capture_output=True, timeout=3,
+            )
+            return result.returncode == 0
+        except Exception:
+            return False
+
+    @classmethod
+    def list_tmux_sessions(cls) -> list[str]:
+        """Return names of all live sessions on the orch tmux socket."""
+        try:
+            result = subprocess.run(
+                ["tmux", "-L", cls.TMUX_SOCKET,
+                 "list-sessions", "-F", "#{session_name}"],
+                capture_output=True, text=True, timeout=3,
+            )
+            if result.returncode == 0:
+                return [s.strip() for s in result.stdout.splitlines() if s.strip()]
+        except Exception:
+            pass
+        return []
+
+    def stop_persistent(self) -> None:
+        """Kill the tmux session (and thus the child process), then clean up the attach process."""
+        name = getattr(self, "_persistent_session", None)
+        # Kill the attach client
         self.stop()
+        # Kill the tmux session so the actual process dies
+        if name:
+            try:
+                subprocess.run(
+                    ["tmux", "-L", self.TMUX_SOCKET,
+                     "kill-session", "-t", name],
+                    capture_output=True, timeout=3,
+                )
+            except Exception:
+                pass
+
+    def detach_persistent(self) -> None:
+        """Detach from the tmux session without killing it.
+
+        The tmux server keeps the process alive.  We just kill the
+        local attach client and clean up our PTY state.
+        """
+        if self._read_task:
+            self._read_task.cancel()
+            self._read_task = None
+        # Kill just the tmux attach client, not the session
+        if self._pid is not None:
+            try:
+                os.kill(self._pid, signal.SIGTERM)
+                os.waitpid(self._pid, 0)
+            except (OSError, ChildProcessError):
+                pass
+        self._pid = None
+        self._fd = None
+        self._p_out = None
+
+    def on_unmount(self) -> None:
+        # For persistent terminals, just detach (don't kill the session)
+        if getattr(self, "_persistent_session", None):
+            self.detach_persistent()
+        else:
+            self.stop()
 
     # ── PTY I/O ────────────────────────────────────────────────────
 

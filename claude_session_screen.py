@@ -38,7 +38,7 @@ from thread_namer import get_session_title
 log = logging.getLogger("orch.claude_session")
 
 # Keys that pass through the TerminalWidget to the screen for panel navigation
-_PASSTHROUGH_KEYS = {"ctrl+j", "ctrl+k", "ctrl+e", "ctrl+h", "ctrl+backslash"}
+_PASSTHROUGH_KEYS = {"ctrl+j", "ctrl+k", "ctrl+e", "ctrl+h", "ctrl+z", "ctrl+backslash"}
 
 ORCH_DIR = str(Path(__file__).parent)
 
@@ -286,6 +286,7 @@ class SessionFooterWidget(Static):
         parts.append(f"[{C_DIM}]│[/]")
         parts.append(f"[{C_YELLOW}]C-e[/] [{C_DIM}]extract[/]")
         parts.append(f"[{C_YELLOW}]C-j/k[/] [{C_DIM}]panels[/]")
+        parts.append(f"[{C_YELLOW}]C-z[/] [{C_DIM}]zoom[/]")
 
         self.update("  ".join(parts))
 
@@ -325,6 +326,9 @@ class ClaudeSessionScreen(Screen):
         border: round {C_BLUE};
         background: {BG_SURFACE};
     }}
+    .panel-hidden {{
+        display: none;
+    }}
     """
 
     def __init__(
@@ -334,7 +338,7 @@ class ClaudeSessionScreen(Screen):
         session_id: str | None = None,
         prompt: str | None = None,
         cwd: str | None = None,
-        pty_state: dict | None = None,
+        reattach_tmux: bool = False,
     ) -> None:
         super().__init__()
         self._ws = ws
@@ -345,8 +349,9 @@ class ClaudeSessionScreen(Screen):
         self._session_id = session_id or str(uuid.uuid4())
         self._sys_prompt = self._build_context()
         self._active_panel = "cs-terminal"
+        self._zoomed_panel: str | None = None
         self._start_time = time.time()
-        self._pty_state = pty_state  # reattach to existing PTY if set
+        self._reattach_tmux = reattach_tmux  # reattach to surviving tmux session
 
         # Pre-compute everything compose() needs (no I/O in compose)
         self._sync_slash_commands()
@@ -358,8 +363,8 @@ class ClaudeSessionScreen(Screen):
         self._git_branch = self._detect_git_branch()
         self._jsonl = self._jsonl_path()
 
-        log.debug("ClaudeSessionScreen.__init__: sid=%s cwd=%s new=%s reattach=%s",
-                  self._session_id[:8], self._cwd, self._is_new, pty_state is not None)
+        log.debug("ClaudeSessionScreen.__init__: sid=%s cwd=%s new=%s reattach_tmux=%s",
+                  self._session_id[:8], self._cwd, self._is_new, reattach_tmux)
 
     def _resolve_cwd(self) -> str:
         from actions import ws_working_dir
@@ -540,13 +545,13 @@ set status-view-show-untracked-dirs = no
     def on_mount(self) -> None:
         log.debug("ClaudeSessionScreen.on_mount: starting terminals")
         claude_tw = self.query_one("#cs-terminal", TerminalWidget)
-        if self._pty_state:
-            # Reattach to existing PTY (coming back from DetailScreen)
-            claude_tw.attach(self._pty_state)
-            log.debug("  reattached cs-terminal")
+        if self._reattach_tmux:
+            # Reattach to a surviving tmux session
+            claude_tw.attach_persistent(self._session_id)
+            log.debug("  reattached cs-terminal via tmux")
         else:
-            claude_tw.start()
-            log.debug("  started cs-terminal")
+            claude_tw.start_persistent(self._session_id)
+            log.debug("  started cs-terminal via tmux")
         for tw in self.query(TerminalWidget):
             if tw.id != "cs-terminal":
                 try:
@@ -596,6 +601,11 @@ set status-view-show-untracked-dirs = no
     # ── Navigation ─────────────────────────────────────────────────
 
     def on_key(self, event: events.Key) -> None:
+        if event.key == "ctrl+z":
+            event.stop()
+            event.prevent_default()
+            self.action_zoom_panel()
+            return
         # Textual reports ctrl+h as key="backspace" character="\x08";
         # distinguish from physical backspace (character="\x7f").
         if event.key == "backspace" and event.character == "\x08":
@@ -604,14 +614,13 @@ set status-view-show-untracked-dirs = no
             self.action_go_back()
 
     def action_go_back(self) -> None:
-        """Detach from the session — process keeps running in the PTY."""
+        """Detach from the session — process keeps running in tmux."""
         claude_tw = self.query_one("#cs-terminal", TerminalWidget)
-        pty_state = claude_tw.detach()
-        if pty_state:
-            self.dismiss({"detached": True, "pty_state": pty_state,
-                          "session_id": self._session_id,
-                          "ws": self._ws, "start_time": self._start_time,
-                          "jsonl": self._jsonl})
+        claude_tw.detach_persistent()
+        self.dismiss({"detached": True,
+                      "session_id": self._session_id,
+                      "ws": self._ws, "start_time": self._start_time,
+                      "jsonl": self._jsonl})
 
     # ── Panel navigation ──────────────────────────────────────────
 
@@ -654,6 +663,27 @@ set status-view-show-untracked-dirs = no
             self.query_one(f"#{prev_id}").focus()
         except Exception:
             pass
+
+    # ── C-z: zoom panel ──────────────────────────────────────────
+
+    def action_zoom_panel(self) -> None:
+        """Toggle zoom on the active panel — hide everything else."""
+        if self._zoomed_panel:
+            # Unzoom: show everything
+            self._zoomed_panel = None
+            for w in self.query(".panel-hidden"):
+                w.remove_class("panel-hidden")
+        else:
+            # Zoom the active panel
+            self._zoomed_panel = self._active_panel
+            if self._active_panel == "cs-terminal":
+                # Hide sidebar, keep header/footer
+                self.query_one("#cs-sidebar").add_class("panel-hidden")
+            elif self._active_panel in ("cs-tig-status", "cs-tig-log"):
+                # Hide main column, hide the other sidebar panel
+                self.query_one("#cs-main-col").add_class("panel-hidden")
+                other = "cs-tig-log" if self._active_panel == "cs-tig-status" else "cs-tig-status"
+                self.query_one(f"#{other}").add_class("panel-hidden")
 
     # ── C-e: extract todo ─────────────────────────────────────────
 

@@ -123,11 +123,8 @@ class OrchestratorApp(App):
     Screen {{
         background: {BG_BASE};
     }}
-    #tab-bar {{
-        height: 1; dock: top; background: {BG_BASE}; padding: 0 1;
-    }}
     #top-bar {{
-        height: auto; max-height: 3; padding: 0 1; background: {BG_BASE}; dock: top;
+        height: auto; max-height: 4; padding: 0 1; background: {BG_BASE}; dock: top;
     }}
     #summary-bar {{
         height: 1; padding: 0 1; background: {BG_BASE}; color: {C_DIM}; dock: bottom;
@@ -201,8 +198,9 @@ class OrchestratorApp(App):
         self._session_watcher: SessionWatcher | None = None
         self._refresh_pending = False  # debounce flag for _refresh_ws_table
         self._preview_ws_id: str | None = None  # track current preview to skip redundant updates
-        self._detached_terminals: dict[str, dict] = {}  # session_id -> detached state
+        self._detached_sessions: dict[str, dict] = {}  # session_id -> {ws, start_time, jsonl}
         self._detail_screen_active: bool = False  # True when a DetailScreen is pushed
+        self._detail_screen_cache: dict[str, DetailScreen] = {}  # ws_id -> cached screen
         self._last_liveness_check: float = 0.0  # rate limiter for liveness checks
         self._liveness_deferred: bool = False  # trailing-edge pending flag
 
@@ -221,6 +219,12 @@ class OrchestratorApp(App):
                     screen.action_prev_panel()
                 else:
                     self.action_prev_panel()
+        elif event.key == "ctrl+z":
+            event.prevent_default()
+            event.stop()
+            screen = self.screen
+            if hasattr(screen, 'action_zoom_panel'):
+                screen.action_zoom_panel()
         elif event.key == "ctrl+l":
             event.prevent_default()
             event.stop()
@@ -285,7 +289,6 @@ class OrchestratorApp(App):
     # ── Compose ──
 
     def compose(self) -> ComposeResult:
-        yield TabBar(id="tab-bar")
         yield Static("", id="top-bar")
         with Horizontal(id="main-content"):
             yield OptionList(id="ws-table")
@@ -371,6 +374,14 @@ class OrchestratorApp(App):
         """Close the active tab (cannot close Home)."""
         closed = self.tabs.close_active_tab()
         if closed:
+            # Evict cached screen for closed tab
+            if closed in self._detail_screen_cache:
+                screen_name = f"detail:{closed}"
+                try:
+                    self.uninstall_screen(screen_name)
+                except Exception:
+                    pass
+                del self._detail_screen_cache[closed]
             self._apply_tab_switch()
 
     def _apply_tab_switch(self):
@@ -387,14 +398,16 @@ class OrchestratorApp(App):
                 self.screen.dismiss()
 
     def _push_detail_for_tab(self, ws: Workstream):
-        """Push a DetailScreen for a workstream tab."""
+        """Push a DetailScreen for a workstream tab (cached for instant re-entry)."""
         if self._detail_screen_active:
             self.screen.dismiss()
         self._detail_screen_active = True
-        self.push_screen(
-            DetailScreen(ws, self.state.store),
-            callback=lambda _: self._on_detail_dismissed(),
-        )
+        screen_name = f"detail:{ws.id}"
+        if ws.id not in self._detail_screen_cache:
+            screen = DetailScreen(ws, self.state.store)
+            self._detail_screen_cache[ws.id] = screen
+            self.install_screen(screen, screen_name)
+        self.push_screen(screen_name, callback=lambda _: self._on_detail_dismissed())
 
     def _on_detail_dismissed(self):
         """Called when a DetailScreen is dismissed (back to Home).
@@ -690,6 +703,7 @@ class OrchestratorApp(App):
     def _update_all_bars(self):
         try:
             lines = [
+                self._render_tab_bar(),
                 self._render_status_bar(),
                 self._render_filter_bar(),
             ]
@@ -1121,10 +1135,12 @@ class OrchestratorApp(App):
         self.tabs.open_tab(ws.id, ws.name, "\u25cf")
         self._sync_tab_bar()
         self._detail_screen_active = True
-        self.push_screen(
-            DetailScreen(ws, self.state.store),
-            callback=lambda _: self._on_detail_dismissed(),
-        )
+        screen_name = f"detail:{ws.id}"
+        if ws.id not in self._detail_screen_cache:
+            screen = DetailScreen(ws, self.state.store)
+            self._detail_screen_cache[ws.id] = screen
+            self.install_screen(screen, screen_name)
+        self.push_screen(screen_name, callback=lambda _: self._on_detail_dismissed())
 
     # ── Workstream actions ──
 
@@ -1299,24 +1315,29 @@ class OrchestratorApp(App):
     ) -> None:
         """Push a ClaudeSessionScreen for the given workstream."""
         from claude_session_screen import ClaudeSessionScreen
+        from terminal import TerminalWidget
 
-        # Check for a detached PTY we can reattach to
-        pty_state = None
+        # Check if this session is still alive in tmux
+        reattach = False
         effective_sid = session_id
-        if session_id and session_id in self._detached_terminals:
-            info = self._detached_terminals.pop(session_id)
-            info["active"] = False  # stop drain thread
-            pty_state = info["pty_state"]
+        if session_id:
+            self._detached_sessions.pop(session_id, None)
+            if TerminalWidget.tmux_session_alive(session_id):
+                reattach = True
 
         screen = ClaudeSessionScreen(
             ws=ws, store=self.state.store,
             session_id=effective_sid, prompt=prompt, cwd=cwd,
-            pty_state=pty_state,
+            reattach_tmux=reattach,
         )
 
         def _on_dismiss(result):
             if isinstance(result, dict) and result.get("detached"):
-                self._start_pty_drain(result)
+                self._detached_sessions[result["session_id"]] = {
+                    "ws": result["ws"],
+                    "start_time": result["start_time"],
+                    "jsonl": result["jsonl"],
+                }
                 # Parse the JSONL so we can inject the session immediately
                 jsonl = result.get("jsonl")
                 if jsonl:
@@ -1339,52 +1360,7 @@ class OrchestratorApp(App):
                 callback(result)
         self.push_screen(screen, callback=_on_dismiss)
 
-    def _start_pty_drain(self, info: dict) -> None:
-        """Start a background thread that drains the PTY so the process
-        doesn't block on write while the user is in DetailScreen."""
-        import select
-        import threading
-        from claude_session_screen import auto_link_session, log_session_exit
 
-        session_id = info["session_id"]
-        pty_state = info["pty_state"]
-        info["active"] = True
-        self._detached_terminals[session_id] = info
-
-        def drain():
-            fd = pty_state["fd"]
-            backend = pty_state.get("backend")
-            if not backend:
-                seq_filter = pty_state["seq_filter"]
-                stream = pty_state["stream"]
-            while info.get("active"):
-                try:
-                    ready, _, _ = select.select([fd], [], [], 0.5)
-                    if ready:
-                        data = os.read(fd, 65536)
-                        if not data:
-                            break  # EOF — process exited
-                        if backend:
-                            backend.feed(data)
-                        else:
-                            text = data.decode(errors="replace")
-                            text = seq_filter.feed(text)
-                            try:
-                                stream.feed(text)
-                            except Exception:
-                                pass
-                except OSError:
-                    break
-            # Clean up if process actually exited (not just reattached)
-            if info.get("active"):
-                self._detached_terminals.pop(session_id, None)
-                ws = info["ws"]
-                auto_link_session(self.state.store, ws.id, session_id)
-                log_session_exit(session_id, ws.name, info["start_time"],
-                                 exit_type="bg-drain")
-                self.call_from_thread(self._refresh_ws_table)
-
-        threading.Thread(target=drain, daemon=True, name=f"pty-drain-{session_id[:8]}").start()
 
     def action_spawn(self):
         ws = self._selected_ws()
