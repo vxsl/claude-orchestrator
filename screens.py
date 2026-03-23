@@ -1008,6 +1008,8 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         self._peek_mode: bool = False
         self._loading_frame: int = 0
         self._loading_timer = None
+        self._refresh_timer = None
+        self._mounted_once: bool = False  # skip first on_screen_resume (on_mount handles it)
 
     def compose(self) -> ComposeResult:
         with Vertical(id="detail-container"):
@@ -1049,10 +1051,34 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         self.query_one("#detail-body", Static).update(self._render_body())
         self.query_one("#detail-sessions", OptionList).focus()
         self._update_pane_labels()
-        # Backstop only — app's watcher handles real-time liveness via SessionsChanged
-        self.set_interval(30, self._periodic_refresh)
+        self._refresh_timer = self.set_interval(30, self._periodic_refresh)
+        self._mounted_once = True
         if self._sessions_loading():
             self._loading_timer = self.set_interval(0.12, self._tick_loading)
+
+    def on_screen_resume(self):
+        """Lightweight refresh when returning to a cached screen."""
+        if not self._mounted_once:
+            return  # on_mount handles first activation
+        # Refresh workstream data (may have changed while screen was suspended)
+        self.ws = self.store.get(self.ws.id) or self.ws
+        self._last_seen_cache = load_last_seen()
+        self._mark_all_seen()
+        self._load_feed()
+        self._load_detail_sessions()
+        self.query_one("#detail-title", Static).update(self._render_title())
+        self.query_one("#detail-meta", Static).update(self._render_meta())
+        self.query_one("#detail-body", Static).update(self._render_body())
+        self._update_pane_labels()
+        self.query_one("#detail-sessions", OptionList).focus()
+        # Restart periodic refresh
+        self._refresh_timer = self.set_interval(30, self._periodic_refresh)
+
+    def on_screen_suspend(self):
+        """Pause timers when screen is covered or dismissed."""
+        if hasattr(self, '_refresh_timer') and self._refresh_timer:
+            self._refresh_timer.stop()
+            self._refresh_timer = None
 
     def _mark_all_seen(self):
         """Mark all sessions in this workstream as seen right now — batched."""
@@ -2079,10 +2105,12 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
             self.app.notify("No conversation content to peek", timeout=2)
             return
         title_text = _session_title(session)
+        ctx = _context_bar(session.context_tokens, session.context_window_size) if session.context_tokens > 0 else ""
+        ctx_part = f"  {ctx}" if ctx else ""
         header = (
             f"[bold {C_BLUE}]{_rich_escape(title_text)}[/bold {C_BLUE}]  "
             f"[{C_DIM}]{session.age} · {_short_model(session.model)} · "
-            f"{session.message_count} msgs · {session.tokens_display}[/{C_DIM}]\n"
+            f"{session.message_count} msgs · {session.tokens_display}[/{C_DIM}]{ctx_part}\n"
             f"[{C_DIM}]p[/{C_DIM}] close  [{C_DIM}]j/k[/{C_DIM}] scroll"
         )
         options = [Option(header, id="peek-header")]
