@@ -326,7 +326,21 @@ class TerminalWidget(Widget, can_focus=True):
         self._read_task: asyncio.Task | None = None
         self._persistent_session: str | None = None
 
+        # Render rate-limiting: data processing and rendering are decoupled.
+        # _has_dirty is set by the read loop; _render_tick flushes at 20fps.
+        self._has_dirty = False
+
     # ── Lifecycle ──────────────────────────────────────────────────
+
+    def on_mount(self) -> None:
+        """Start the render tick — decouples rendering from the read loop."""
+        self.set_interval(1 / 20, self._render_tick)
+
+    def _render_tick(self) -> None:
+        """Flush pending terminal output to screen, capped at 20fps."""
+        if self._has_dirty and not self._sync_output:
+            self._has_dirty = False
+            self._refresh_dirty()
 
     def start(self) -> None:
         """Fork the PTY and begin reading."""
@@ -612,8 +626,9 @@ class TerminalWidget(Widget, can_focus=True):
             while True:
                 await event.wait()
                 event.clear()
-                # Process at most a few chunks before yielding to the event
-                # loop, so keystrokes and other events don't starve.
+                # Process available chunks in small batches, yielding between
+                # each batch so keystrokes and UI events aren't starved.
+                # Rendering is handled separately by _render_tick at 20fps.
                 chunks_this_batch = 0
                 while not queue.empty():
                     data = queue.get_nowait()
@@ -626,14 +641,11 @@ class TerminalWidget(Widget, can_focus=True):
                         self._process_output(data.decode(errors="replace"))
                     chunks_this_batch += 1
                     if chunks_this_batch >= 4:
-                        # Yield to let keystrokes and UI events through,
-                        # then continue draining in the next iteration.
-                        if not self._sync_output:
-                            self._refresh_dirty()
+                        # Yield to let keystrokes and UI events through.
                         await asyncio.sleep(0)
                         chunks_this_batch = 0
-                if not self._sync_output:
-                    self._refresh_dirty()
+                # Signal render needed; _render_tick will call _refresh_dirty.
+                self._has_dirty = True
         except asyncio.CancelledError:
             pass
         finally:
@@ -664,6 +676,7 @@ class TerminalWidget(Widget, can_focus=True):
 
     def _process_output_vterm(self, data: bytes) -> None:
         """Feed raw bytes to libvterm and detect sync output."""
+        prev_sync = self._sync_output
         if b'\x1b[?2026h' in data:
             self._sync_output = True
         if b'\x1b[?2026l' in data:
@@ -681,6 +694,10 @@ class TerminalWidget(Widget, can_focus=True):
             max_offset = len(self._backend.scrollback)
             self._scroll_offset = min(self._scroll_offset, max_offset)
         self._backend.new_scrollback_lines = 0
+        # When synchronized output mode ends (2026l = "frame complete"),
+        # render immediately rather than waiting for the next tick.
+        if prev_sync and not self._sync_output:
+            self._refresh_dirty()
 
     # ── Rendering ──────────────────────────────────────────────────
 
@@ -972,10 +989,23 @@ class TerminalWidget(Widget, can_focus=True):
 
         # Vim-style scroll bindings
         if key == "ctrl+u" or key == "shift+pageup":
-            self._scroll_up(self._nrow // 2)
+            if self._backend and self._backend.scrollback:
+                self._scroll_up(self._nrow // 2)
+            elif self._mouse_tracking:
+                # No local scrollback (tmux manages its own history); forward
+                # as mouse scroll-up events so tmux copy mode handles it.
+                cx, cy = self._ncol // 2 + 1, self._nrow // 2 + 1
+                for _ in range(5):
+                    self._write_to_pty(f"\x1b[<64;{cx};{cy}M")
             return
         if key == "ctrl+d" or key == "shift+pagedown":
-            self._scroll_down(self._nrow // 2)
+            if self._scroll_offset > 0:
+                self._scroll_down(self._nrow // 2)
+            elif self._mouse_tracking:
+                # No local scroll; forward as mouse scroll-down to tmux.
+                cx, cy = self._ncol // 2 + 1, self._nrow // 2 + 1
+                for _ in range(5):
+                    self._write_to_pty(f"\x1b[<65;{cx};{cy}M")
             return
         if key == "shift+up" or (key == "k" and self._scroll_offset > 0):
             self._scroll_up(1)
