@@ -651,15 +651,14 @@ def _render_session_option(
 
     lines = [line1, line2]
 
-    # Line 3: context bar + tool usage bar + file touchpoints + project path
-    ctx_bar = _context_bar_compact(s.context_tokens, s.context_window_size)
+    # Line 3: tool usage bar + file touchpoints + project path
     bar = _tool_bar(s.tool_counts)
     files = _file_touchpoints(s.files_mutated)
     proj_label = ""
     if ws_repo_path and s.project_path and s.project_path.rstrip("/") != ws_repo_path.rstrip("/"):
         proj_label = f"[{C_FAINT}]{Path(s.project_path).name}[/{C_FAINT}]"
 
-    left = "  ".join(p for p in (ctx_bar, bar, files) if p)
+    left = "  ".join(p for p in (bar, files) if p)
     if not left:
         left = f"[{C_FAINT}]{'─' * 6}[/{C_FAINT}]"
     if proj_label:
@@ -687,7 +686,8 @@ def _render_session_option(
             snippet += "…"
         is_user = s.last_message_role == "user"
         prefix = f"[{C_MID}]you:[/{C_MID}] " if is_user else ""
-        lines.append(f"{INDENT}{prefix}[italic #3b4048]{snippet}[/italic #3b4048]")
+        msg_color = C_MID if is_user else "#3b4048"
+        lines.append(f"{INDENT}{prefix}[italic {msg_color}]{snippet}[/italic {msg_color}]")
 
     return "\n".join(lines)
 
@@ -768,15 +768,14 @@ def _render_content_search_result(
 
     lines = [line1, line2]
 
-    # Line 3: context bar + tool usage bar + file touchpoints + project path
-    ctx_bar = _context_bar_compact(s.context_tokens, s.context_window_size)
+    # Line 3: tool usage bar + file touchpoints + project path
     bar = _tool_bar(s.tool_counts)
     files = _file_touchpoints(s.files_mutated)
     proj_label = ""
     if ws_repo_path and s.project_path and s.project_path.rstrip("/") != ws_repo_path.rstrip("/"):
         proj_label = f"[{C_FAINT}]{Path(s.project_path).name}[/{C_FAINT}]"
 
-    left = "  ".join(p for p in (ctx_bar, bar, files) if p)
+    left = "  ".join(p for p in (bar, files) if p)
     if not left:
         left = f"[{C_FAINT}]{'─' * 6}[/{C_FAINT}]"
     if proj_label:
@@ -951,7 +950,8 @@ def _render_notified_session_option(
             snippet_esc = _rich_escape(snippet_raw)
             is_user = s.last_message_role == "user"
             prefix = f"[{C_MID}]you:[/{C_MID}] " if is_user else ""
-            line4 = f"{INDENT}{prefix}[italic {snippet_color}]{snippet_esc}[/italic {snippet_color}]"
+            msg_color = C_MID if is_user else snippet_color
+            line4 = f"{INDENT}{prefix}[italic {msg_color}]{snippet_esc}[/italic {msg_color}]"
         else:
             line4 = f"{INDENT}[{C_FAINT}]{'─' * 6}[/{C_FAINT}]"
 

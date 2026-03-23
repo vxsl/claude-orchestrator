@@ -53,7 +53,6 @@ from rendering import (
     _render_todo_option, _render_notification_option,
     _render_notified_session_option, QUIET_SEPARATOR_LABEL,
     _render_content_search_result, tool_bar_legend,
-    _context_bar,
     TODO_UNDONE_ICON, TODO_DONE_ICON,
     _rich_escape,
 )
@@ -1888,12 +1887,6 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
                 f"[{C_DIM}]{n} sessions \u00b7 {total_msgs} msgs \u00b7 "
                 f"{_token_color_markup(_tk, total_tok)}[/{C_DIM}]"
             )
-            # Show context bar for the most active (highest context) session
-            ctx_sessions = [s for s in self._detail_sessions if s.context_tokens > 0]
-            if ctx_sessions:
-                top = max(ctx_sessions, key=lambda s: s.context_tokens)
-                bar = _context_bar(top.context_tokens, top.context_window_size)
-                parts.append(bar)
         return "  ".join(parts)
 
     def _render_body(self) -> str:
@@ -2105,12 +2098,10 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
             self.app.notify("No conversation content to peek", timeout=2)
             return
         title_text = _session_title(session)
-        ctx = _context_bar(session.context_tokens, session.context_window_size) if session.context_tokens > 0 else ""
-        ctx_part = f"  {ctx}" if ctx else ""
         header = (
             f"[bold {C_BLUE}]{_rich_escape(title_text)}[/bold {C_BLUE}]  "
             f"[{C_DIM}]{session.age} · {_short_model(session.model)} · "
-            f"{session.message_count} msgs · {session.tokens_display}[/{C_DIM}]{ctx_part}\n"
+            f"{session.message_count} msgs · {session.tokens_display}[/{C_DIM}]\n"
             f"[{C_DIM}]p[/{C_DIM}] close  [{C_DIM}]j/k[/{C_DIM}] scroll"
         )
         options = [Option(header, id="peek-header")]

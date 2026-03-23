@@ -102,6 +102,8 @@ files = []
 tool_counts = {}
 last_msg = ''
 last_role = ''
+ctx_tokens = 0
+ctx_window = 200_000
 sid_short = SESSION_ID[:8]
 
 from pathlib import Path
@@ -120,6 +122,8 @@ if JSONL_PATH and Path(JSONL_PATH).exists():
             tool_counts = s.tool_counts or {}
             last_msg = s.last_user_message_text or s.last_message_text or ''
             last_role = 'user' if s.last_user_message_text else (s.last_message_role or '')
+            ctx_tokens = s.context_tokens
+            ctx_window = s.context_window_size
 
             # Resolve title
             from thread_namer import get_session_title
@@ -167,6 +171,23 @@ def file_list(fs):
         return f'{D}{\" \".join(fs)}{X}'
     shown = ' '.join(fs[:3])
     return f'{D}{shown} +{len(fs) - 3}{X}'
+
+# ── Context bar (ANSI version) ──
+def context_bar(ctx_tokens, window_size=200_000, width=6):
+    if ctx_tokens <= 0:
+        return ''
+    pct = min(100.0, ctx_tokens / window_size * 100)
+    filled = max(0, min(width, round(pct / 100 * width)))
+    empty = width - filled
+    if pct >= 90:
+        color = R
+    elif pct >= 75:
+        color = O
+    elif pct >= 50:
+        color = Y
+    else:
+        color = G
+    return f'{color}{"▬" * filled}{X}{F}{"─" * empty}{X} {color}{pct:.0f}%{X}'
 
 # ── Build lines ──
 def pad_between(left_len, right_len, total):
@@ -228,11 +249,19 @@ if r2_text:
 
 line2 = f'{l2} '
 
-# Line 3: tool bar + files │ last message snippet
+# Line 3: context bar + tool bar + files │ last message snippet
+cbar = context_bar(ctx_tokens, ctx_window)
 bar = tool_bar(tool_counts)
 flist = file_list(files)
-l3_left = f'{BG} {bar}'
-l3_plain_left = 1 + 8  # space + bar width
+l3_left = f'{BG} '
+l3_plain_left = 1
+if cbar:
+    # context bar is: 6 chars bar + space + up to 4 chars pct (e.g. "100%")
+    pct_str = f'{min(100.0, ctx_tokens / ctx_window * 100):.0f}%'
+    l3_left += f'{cbar}  '
+    l3_plain_left += 6 + 1 + len(pct_str) + 2  # bar + space + pct + gap
+l3_left += bar
+l3_plain_left += 8  # tool bar width
 if flist:
     l3_left += f'  {flist}'
     fl_plain = sum(len(f) for f in files[:4]) + min(len(files), 4) - 1
