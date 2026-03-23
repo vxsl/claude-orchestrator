@@ -1,4 +1,11 @@
-"""Claude session discovery — scan ~/.claude/projects/ for sessions and parse JSONL data."""
+"""Claude session discovery — scan ~/.claude/projects/ for sessions and parse JSONL data.
+
+Supports two backends:
+  1. Rust daemon (orch-session-engine): reads pre-parsed data from SQLite (~3ms)
+  2. Python fallback: parses JSONL files directly (~1200ms cold)
+
+The Rust backend is used automatically when the SQLite database exists.
+"""
 
 from __future__ import annotations
 
@@ -6,6 +13,8 @@ import copy
 import json
 import os
 import re
+import shutil
+import sqlite3
 import time
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -15,6 +24,150 @@ from typing import Optional
 
 CLAUDE_PROJECTS_DIR = Path.home() / ".claude" / "projects"
 CLAUDE_SESSIONS_DIR = Path.home() / ".claude" / "sessions"
+
+# ─── Rust session engine integration ─────────────────────────────────
+
+def _default_db_path() -> Path:
+    """Default SQLite DB path matching the Rust daemon's default."""
+    cache = os.environ.get("XDG_CACHE_HOME", str(Path.home() / ".cache"))
+    return Path(cache) / "claude-orchestrator" / "orch-sessions.db"
+
+
+_rust_db_conn: Optional[sqlite3.Connection] = None
+_rust_db_generation: int = -1
+
+
+def _get_rust_db() -> Optional[sqlite3.Connection]:
+    """Get a read-only connection to the Rust engine's SQLite DB, or None."""
+    global _rust_db_conn
+    db_path = _default_db_path()
+    if not db_path.exists():
+        _rust_db_conn = None
+        return None
+    if _rust_db_conn is not None:
+        return _rust_db_conn
+    try:
+        conn = sqlite3.connect(str(db_path), timeout=1.0)
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA query_only=ON")
+        # Verify table exists
+        conn.execute("SELECT 1 FROM sessions LIMIT 1")
+        _rust_db_conn = conn
+        return conn
+    except (sqlite3.Error, sqlite3.OperationalError):
+        _rust_db_conn = None
+        return None
+
+
+def _rust_db_changed() -> bool:
+    """Check if the Rust engine has written new data since our last read."""
+    global _rust_db_generation
+    conn = _get_rust_db()
+    if conn is None:
+        return False
+    try:
+        row = conn.execute("SELECT value FROM meta WHERE key='generation'").fetchone()
+        if row:
+            gen = int(row[0])
+            if gen != _rust_db_generation:
+                _rust_db_generation = gen
+                return True
+    except sqlite3.Error:
+        pass
+    return False
+
+
+def _hydrate_session(row: dict) -> ClaudeSession:
+    """Convert a SQLite row dict into a ClaudeSession object."""
+    return ClaudeSession(
+        session_id=row["session_id"],
+        project_dir=row["project_dir"],
+        project_path=row["project_path"],
+        title=row["title"],
+        started_at=row["started_at"],
+        last_activity=row["last_activity"],
+        total_input_tokens=row["total_input_tokens"],
+        total_output_tokens=row["total_output_tokens"],
+        message_count=row["message_count"],
+        assistant_message_count=row["assistant_message_count"],
+        model=row["model"],
+        jsonl_path=row["jsonl_path"],
+        is_live=bool(row["is_live"]),
+        last_message_role=row["last_message_role"],
+        last_user_message_at=row["last_user_message_at"],
+        last_stop_reason=row["last_stop_reason"],
+        turn_complete=bool(row["turn_complete"]),
+        all_session_ids=json.loads(row["all_session_ids"]) if row["all_session_ids"] else [],
+        last_message_text=row["last_message_text"],
+        last_user_message_text=row["last_user_message_text"],
+        last_tool_name=row["last_tool_name"],
+        last_commit_sha=row["last_commit_sha"],
+        last_commit_summary=row["last_commit_summary"],
+        tool_counts=json.loads(row["tool_counts"]) if row["tool_counts"] else {},
+        files_mutated=json.loads(row["files_mutated"]) if row["files_mutated"] else [],
+        git_branch=row["git_branch"],
+        first_message=row["first_message"],
+        context_tokens=row["context_tokens"],
+    )
+
+
+def _discover_sessions_from_db(
+    limit: int = 0,
+    project_filter: str = "",
+    min_messages: int = 1,
+) -> Optional[list[ClaudeSession]]:
+    """Try to read sessions from the Rust engine's SQLite DB.
+
+    Returns None if the DB is unavailable (caller should fall back to Python).
+    """
+    conn = _get_rust_db()
+    if conn is None:
+        return None
+
+    try:
+        query = "SELECT * FROM sessions WHERE message_count >= ?"
+        params: list = [min_messages]
+        if project_filter:
+            query += " AND project_dir LIKE ?"
+            params.append(f"%{project_filter}%")
+        query += " ORDER BY is_live DESC, last_activity DESC"
+        if limit > 0:
+            query += f" LIMIT {limit}"
+
+        conn.row_factory = sqlite3.Row
+        cursor = conn.execute(query, params)
+        sessions = [_hydrate_session(dict(row)) for row in cursor]
+        conn.row_factory = None
+        return sessions
+    except sqlite3.Error:
+        return None
+
+
+def ensure_rust_engine_running() -> bool:
+    """Start the Rust session engine daemon if not already running.
+
+    Returns True if the daemon is (now) running.
+    """
+    engine = shutil.which("orch-session-engine")
+    if engine is None:
+        return False
+    # Check if daemon is already running by looking for its pipe
+    uid = os.getuid()
+    pipe_path = f"/tmp/orch-session-engine.{uid}.pipe"
+    if os.path.exists(pipe_path):
+        return True
+    # Start daemon in background
+    import subprocess
+    try:
+        subprocess.Popen(
+            [engine, "daemon"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+        return True
+    except OSError:
+        return False
 
 
 # ─── Tool category mapping ────────────────────────────────────────
@@ -777,8 +930,19 @@ def discover_sessions(
         min_messages: Minimum number of assistant messages to include.
 
     Returns sorted by last_activity (most recent first).
-    Uses an mtime-based cache to avoid re-parsing unchanged JSONL files.
+
+    Uses the Rust session engine's SQLite DB when available (3ms),
+    falling back to Python JSONL parsing (1200ms cold).
     """
+    # Fast path: read from Rust engine's SQLite DB.
+    # Only use when CLAUDE_PROJECTS_DIR is the real default (not patched in tests).
+    _real_projects = Path.home() / ".claude" / "projects"
+    if CLAUDE_PROJECTS_DIR == _real_projects:
+        db_sessions = _discover_sessions_from_db(limit, project_filter, min_messages)
+        if db_sessions is not None:
+            return db_sessions
+
+    # Slow path: Python JSONL parsing (fallback when daemon isn't running)
     if not CLAUDE_PROJECTS_DIR.exists():
         return []
 

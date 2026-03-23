@@ -48,9 +48,10 @@ from models import (
     Category, Link, Store, Workstream,
     _relative_time,
 )
-from sessions import ClaudeSession, invalidate_live_session_cache
+from sessions import ClaudeSession, invalidate_live_session_cache, ensure_rust_engine_running
 from threads import Thread, session_activity, mark_thread_seen, discover_threads
 from thread_namer import apply_cached_names, name_uncached_threads, title_sessions, get_session_title, refresh_thread_titles
+from session_bridge import SessionBridge
 from watcher import SessionWatcher
 from workstream_synthesizer import (
     synthesize_workstreams, get_discovered_workstreams,
@@ -195,6 +196,7 @@ class OrchestratorApp(App):
         self.tabs = TabManager()
         self._throbber_timer = None
         self._session_watcher: SessionWatcher | None = None
+        self._session_bridge: SessionBridge | None = None
         self._refresh_pending = False  # debounce flag for _refresh_ws_table
         self._preview_ws_id: str | None = None  # track current preview to skip redundant updates
         self._detached_sessions: dict[str, dict] = {}  # session_id -> {ws, start_time, jsonl}
@@ -316,16 +318,25 @@ class OrchestratorApp(App):
         self.set_timer(5, self._start_git_polling)
         self.set_timer(10, self._start_worktree_polling)
 
-        # ── File watcher ──
-        # Liveness (session start/stop .json): 1s leading-edge — fast detection.
-        # Content (JSONL writes): 2s trailing-edge — batches rapid writes.
-        self._session_watcher = SessionWatcher(
-            on_liveness=lambda: self.call_from_thread(self._on_liveness_file_change),
-            on_content=lambda: self.call_from_thread(self._on_session_file_change),
-            debounce=1.0,
-            content_debounce=2.0,
-        )
-        self._session_watcher.start()
+        # ── Session change notifications ──
+        # Try Rust daemon's pipe first (instant, no debouncing needed).
+        # Fall back to Python watchdog if daemon isn't running.
+        self._session_bridge = SessionBridge()
+        if self._session_bridge.available:
+            self._session_bridge.start(
+                callback=lambda: self.call_from_thread(self._on_rust_engine_update)
+            )
+        else:
+            # Try to start the Rust daemon for next time
+            ensure_rust_engine_running()
+            # Fall back to Python watchdog
+            self._session_watcher = SessionWatcher(
+                on_liveness=lambda: self.call_from_thread(self._on_liveness_file_change),
+                on_content=lambda: self.call_from_thread(self._on_session_file_change),
+                debounce=1.0,
+                content_debounce=2.0,
+            )
+            self._session_watcher.start()
 
         self.set_timer(15, self._start_session_polling)
         self.set_timer(20, self._start_liveness_backstop)
@@ -333,6 +344,8 @@ class OrchestratorApp(App):
         ws_table.focus()
 
     def on_unmount(self):
+        if self._session_bridge:
+            self._session_bridge.stop()
         if self._session_watcher:
             self._session_watcher.stop()
 
@@ -512,6 +525,30 @@ class OrchestratorApp(App):
         pane = self.query_one("#preview-pane")
         self.state.preview_visible = not self.state.preview_visible
         pane.display = self.state.preview_visible
+
+    def _on_rust_engine_update(self):
+        """Callback from the Rust session engine's notification pipe.
+
+        The daemon has already parsed the changed files and written to SQLite.
+        We just need to re-read from the DB (3ms) and refresh the UI.
+        No debouncing needed — the Rust side handles that.
+        """
+        self._do_refresh_from_db()
+
+    @work(thread=True, exclusive=True, group="rust_engine")
+    def _do_refresh_from_db(self):
+        """Re-read sessions from SQLite and update the UI."""
+        threads = discover_threads()
+        apply_cached_names(threads)
+
+        sessions = []
+        for t in threads:
+            sessions.extend(t.sessions)
+        sessions.sort(key=lambda s: s.last_activity or "", reverse=True)
+
+        from workstream_synthesizer import get_discovered_workstreams
+        discovered = get_discovered_workstreams(threads)
+        self.call_from_thread(self._apply_sessions, sessions, threads, discovered)
 
     def _on_liveness_file_change(self):
         """Watcher callback for session .json changes (start/stop).
