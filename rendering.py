@@ -651,14 +651,15 @@ def _render_session_option(
 
     lines = [line1, line2]
 
-    # Line 3: tool usage bar + file touchpoints + project path
+    # Line 3: context bar + tool usage bar + file touchpoints + project path
+    ctx_bar = _context_bar_compact(s.context_tokens, s.context_window_size)
     bar = _tool_bar(s.tool_counts)
     files = _file_touchpoints(s.files_mutated)
     proj_label = ""
     if ws_repo_path and s.project_path and s.project_path.rstrip("/") != ws_repo_path.rstrip("/"):
         proj_label = f"[{C_FAINT}]{Path(s.project_path).name}[/{C_FAINT}]"
 
-    left = "  ".join(p for p in (bar, files) if p)
+    left = "  ".join(p for p in (ctx_bar, bar, files) if p)
     if not left:
         left = f"[{C_FAINT}]{'─' * 6}[/{C_FAINT}]"
     if proj_label:
@@ -768,14 +769,15 @@ def _render_content_search_result(
 
     lines = [line1, line2]
 
-    # Line 3: tool usage bar + file touchpoints + project path
+    # Line 3: context bar + tool usage bar + file touchpoints + project path
+    ctx_bar = _context_bar_compact(s.context_tokens, s.context_window_size)
     bar = _tool_bar(s.tool_counts)
     files = _file_touchpoints(s.files_mutated)
     proj_label = ""
     if ws_repo_path and s.project_path and s.project_path.rstrip("/") != ws_repo_path.rstrip("/"):
         proj_label = f"[{C_FAINT}]{Path(s.project_path).name}[/{C_FAINT}]"
 
-    left = "  ".join(p for p in (bar, files) if p)
+    left = "  ".join(p for p in (ctx_bar, bar, files) if p)
     if not left:
         left = f"[{C_FAINT}]{'─' * 6}[/{C_FAINT}]"
     if proj_label:
