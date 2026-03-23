@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 import os
+import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -71,6 +72,18 @@ def _label_with_legend(left: str, legend: str) -> RichTable:
     t.add_column(justify="right")
     t.add_row(left, legend)
     return t
+
+
+def _copy_to_clipboard(text: str) -> bool:
+    """Copy text to system clipboard. Returns True on success."""
+    for cmd in (["wl-copy"], ["xclip", "-selection", "clipboard"], ["xsel", "--clipboard", "--input"]):
+        try:
+            subprocess.run(cmd, input=text.encode(), check=True,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            return True
+        except (FileNotFoundError, subprocess.CalledProcessError):
+            continue
+    return False
 
 
 # ─── Messages ────────────────────────────────────────────────────────
@@ -863,6 +876,7 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         Binding("p", "peek_session", "Peek", priority=True),
         Binding("h", "go_back", show=False),
         Binding("enter,l", "select_session", show=False),
+        Binding("y", "yank_resume_cmd", "Yank cmd"),
         Binding("d", "dismiss_notification", "Dismiss", show=False),
         Binding("D", "dismiss_all_notifications", "Dismiss all", show=False),
         Binding("/", "search", "Search", show=False, priority=True),
@@ -1946,7 +1960,7 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
             ("n", "+todo"), ("e", "todos"), ("L", "+link"),
             ("o", "open"), ("x", "archive ws"),
             ("space", "archive/restore"),
-            ("p", "peek"),
+            ("p", "peek"), ("y", "yank cmd"),
             ("^j/^k", "panels"), ("/", "search"),
             ("^H", "back"),
         ]
@@ -2386,6 +2400,30 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
                 self.ws, session_id=session.session_id,
                 cwd=session.project_path,
             )
+
+    def action_yank_resume_cmd(self):
+        """Copy 'claude --resume <session-id>' for the highlighted session."""
+        olist = self._focused_olist()
+        idx = olist.highlighted
+        if idx is None or self._active_pane not in ("sessions", "archived"):
+            return
+        try:
+            oid = olist.get_option_at_index(idx).id
+        except Exception:
+            return
+        if not oid or oid == "__separator__":
+            return
+        sid = oid.removeprefix("a:")
+        session = self._find_session_by_id(sid)
+        if not session:
+            return
+        cmd = f"claude --resume {session.session_id}"
+        copied = _copy_to_clipboard(cmd)
+        # Show command in the footer help bar
+        help_bar = self.query_one("#detail-help", Static)
+        prefix = "Copied" if copied else "Resume"
+        help_bar.update(f"[{C_GREEN}]{prefix}:[/{C_GREEN}] [{C_LIGHT}]{cmd}[/{C_LIGHT}]")
+        self.set_timer(5, lambda: help_bar.update(self._render_help()))
 
     def action_add_link(self):
         def on_link(link: Link | None):

@@ -274,21 +274,36 @@ class SessionFooterWidget(Static):
         self._git_branch = git_branch
 
     def on_mount(self) -> None:
+        self._update_footer()
+
+    def on_resize(self) -> None:
+        self._update_footer()
+
+    def _update_footer(self) -> None:
+        import re
         sid_short = self._session_id[:8]
         short_cwd = self._cwd.replace(os.path.expanduser("~"), "~")
 
-        parts = [
+        left_parts = [
             f"[{C_BLUE}]{sid_short}[/]",
             f"[{C_DIM}]{_esc(short_cwd)}[/]",
         ]
         if self._git_branch:
-            parts.append(f"[{C_PURPLE}]{_esc(self._git_branch)}[/]")
-        parts.append(f"[{C_DIM}]│[/]")
-        parts.append(f"[{C_YELLOW}]C-e[/] [{C_DIM}]extract[/]")
-        parts.append(f"[{C_YELLOW}]C-j/k[/] [{C_DIM}]panels[/]")
-        parts.append(f"[{C_YELLOW}]C-z[/] [{C_DIM}]zoom[/]")
+            left_parts.append(f"[{C_PURPLE}]{_esc(self._git_branch)}[/]")
+        left_parts.append(f"[{C_DIM}]│[/]")
+        left_parts.append(f"[{C_YELLOW}]C-e[/] [{C_DIM}]extract[/]")
+        left_parts.append(f"[{C_YELLOW}]C-j/k[/] [{C_DIM}]panels[/]")
+        left_parts.append(f"[{C_YELLOW}]C-z[/] [{C_DIM}]zoom[/]")
 
-        self.update("  ".join(parts))
+        left = "  ".join(left_parts)
+        right = f"[{C_DIM}]claude --resume {self._session_id}[/]"
+
+        # Compute visible widths (strip Rich markup)
+        left_w = len(re.sub(r"\[/?[^\]]*\]", "", left))
+        right_w = len(re.sub(r"\[/?[^\]]*\]", "", right))
+        width = self.size.width - 4  # subtract padding
+        gap = max(2, width - left_w - right_w)
+        self.update(f"{left}{' ' * gap}{right}")
 
 
 # ── Claude Session Screen ────────────────────────────────────────────
