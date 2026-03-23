@@ -531,8 +531,23 @@ class OrchestratorApp(App):
 
         The daemon has already parsed the changed files and written to SQLite.
         We just need to re-read from the DB (3ms) and refresh the UI.
-        No debouncing needed — the Rust side handles that.
+        Rate-limited to avoid flooding the UI thread during heavy activity.
         """
+        now = _time.monotonic()
+        if now - getattr(self, '_last_rust_update', 0) < 1.0:
+            # Schedule a trailing-edge update if not already pending
+            if not getattr(self, '_rust_update_pending', False):
+                self._rust_update_pending = True
+                self.set_timer(1.0, self._fire_deferred_rust_update)
+            return
+        self._last_rust_update = now
+        self._rust_update_pending = False
+        self._do_refresh_from_db()
+
+    def _fire_deferred_rust_update(self):
+        """Trailing-edge fire for rate-limited Rust engine updates."""
+        self._rust_update_pending = False
+        self._last_rust_update = _time.monotonic()
         self._do_refresh_from_db()
 
     @work(thread=True, exclusive=True, group="rust_engine")

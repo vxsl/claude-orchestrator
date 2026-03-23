@@ -612,6 +612,9 @@ class TerminalWidget(Widget, can_focus=True):
             while True:
                 await event.wait()
                 event.clear()
+                # Process at most a few chunks before yielding to the event
+                # loop, so keystrokes and other events don't starve.
+                chunks_this_batch = 0
                 while not queue.empty():
                     data = queue.get_nowait()
                     if data is None:
@@ -621,6 +624,14 @@ class TerminalWidget(Widget, can_focus=True):
                         self._process_output_vterm(data)
                     else:
                         self._process_output(data.decode(errors="replace"))
+                    chunks_this_batch += 1
+                    if chunks_this_batch >= 4:
+                        # Yield to let keystrokes and UI events through,
+                        # then continue draining in the next iteration.
+                        if not self._sync_output:
+                            self._refresh_dirty()
+                        await asyncio.sleep(0)
+                        chunks_this_batch = 0
                 if not self._sync_output:
                     self._refresh_dirty()
         except asyncio.CancelledError:
