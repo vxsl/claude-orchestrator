@@ -1280,6 +1280,9 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
                 else:
                     quiet.append(s)
         notified.sort(key=lambda s: self._session_notifications[s.session_id].dt, reverse=True)
+        _sort_by_activity = lambda s: s.last_activity or ""
+        elevated.sort(key=_sort_by_activity, reverse=True)
+        quiet.sort(key=_sort_by_activity, reverse=True)
         all_elevated = notified + elevated
 
         # If the notified/elevated/quiet structure changed, the in-place index
@@ -1395,17 +1398,11 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         if self._search_text:
             return
 
-        # Stable merge when the user is focused on that pane (avoid jarring
-        # reorders mid-interaction); fresh sorted order otherwise so active
-        # threads float to the top when the user looks back.
-        if self._active_pane == "sessions":
-            self._detail_sessions = self._stable_merge(self._detail_sessions, self._all_sessions)
-        else:
-            self._detail_sessions = list(self._all_sessions)
-        if self._active_pane == "archived":
-            self._archived_sessions = self._stable_merge(self._archived_sessions, self._all_archived)
-        else:
-            self._archived_sessions = list(self._all_archived)
+        # Always use fresh sorted order so most-recent sessions are at top.
+        # The notified/elevated/quiet grouping in _build_session_list handles
+        # keeping important sessions visible without needing stable merge.
+        self._detail_sessions = list(self._all_sessions)
+        self._archived_sessions = list(self._all_archived)
 
         # Don't rebuild OptionLists while peek is open — backing data is updated
         # but the visible list stays showing the conversation.
@@ -1534,8 +1531,11 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
                 else:
                     quiet.append(s)
 
-        # Sort notified by notification recency (newest first)
+        # Sort each group by recency (newest first)
         notified.sort(key=lambda s: self._session_notifications[s.session_id].dt, reverse=True)
+        _sort_by_activity = lambda s: s.last_activity or ""
+        elevated.sort(key=_sort_by_activity, reverse=True)
+        quiet.sort(key=_sort_by_activity, reverse=True)
 
         # Build all options before touching widget tree
         all_elevated = notified + elevated
