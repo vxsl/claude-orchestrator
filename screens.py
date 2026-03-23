@@ -53,7 +53,6 @@ from rendering import (
     _render_todo_option, _render_notification_option,
     _render_notified_session_option, QUIET_SEPARATOR_LABEL,
     _render_content_search_result, tool_bar_legend,
-    _context_bar, _context_color,
     TODO_UNDONE_ICON, TODO_DONE_ICON,
     _rich_escape,
 )
@@ -1866,21 +1865,6 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
 
     def _render_body(self) -> str:
         lines = []
-
-        # Context window usage for sessions with data
-        ctx_sessions = [s for s in self._detail_sessions if s.context_tokens > 0]
-        if ctx_sessions:
-            lines.append(f"[bold {C_BLUE}]Context[/bold {C_BLUE}]")
-            for s in ctx_sessions[:6]:
-                bar = _context_bar(s.context_tokens, s.context_window_size)
-                name = _rich_escape(_session_title(s)[:30])
-                win = "1M" if s.context_window_size > 200_000 else "200k"
-                live = f" [{C_GREEN}]●[/{C_GREEN}]" if s.is_live else ""
-                lines.append(f"  {bar}  [{C_DIM}]{s.context_display}/{win}[/{C_DIM}]{live}  [{C_DIM}]{name}[/{C_DIM}]")
-            if len(ctx_sessions) > 6:
-                lines.append(f"  [{C_DIM}]+{len(ctx_sessions) - 6} more[/{C_DIM}]")
-            lines.append("")
-
         ext_links = [lnk for lnk in self.ws.links
                      if lnk.kind not in ("worktree", "file", "claude-session")]
         if ext_links:
