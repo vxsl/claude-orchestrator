@@ -452,14 +452,16 @@ class TerminalWidget(Widget, can_focus=True):
         inner_cmd = f"env TERM=xterm-256color COLORTERM=truecolor {env_prefix} {self._command}"
 
         # Create the tmux session (detached) running our command
-        subprocess.run(
-            ["tmux", "-L", self.TMUX_SOCKET, "-f", conf,
-             "new-session", "-d",
-             "-s", session_name,
-             "-x", str(self._ncol), "-y", str(self._nrow),
-             inner_cmd],
-            env=env, timeout=5,
-        )
+        tmux_cmd = [
+            "tmux", "-L", self.TMUX_SOCKET, "-f", conf,
+            "new-session", "-d",
+            "-s", session_name,
+            "-x", str(self._ncol), "-y", str(self._nrow),
+        ]
+        if self._cwd:
+            tmux_cmd.extend(["-c", self._cwd])
+        tmux_cmd.append(inner_cmd)
+        subprocess.run(tmux_cmd, env=env, timeout=5)
 
         # Now attach to it via pty.fork — the attach process is what we
         # manage; the actual claude process lives in the tmux server.
