@@ -378,11 +378,12 @@ class TestTabSwitching:
             assert pilot.app.tabs.is_home
             assert pilot.app.tabs.active_idx == 0
 
-    async def test_tab_bar_exists(self, app_with_store):
+    async def test_tab_bar_renders_in_top_bar(self, app_with_store):
+        """Tab bar renders as the first line of the top-bar Static."""
         async with app_with_store.run_test(size=(120, 40)) as pilot:
-            from widgets import TabBar
-            tab_bar = pilot.app.query_one("#tab-bar", TabBar)
-            assert tab_bar is not None
+            top_bar = pilot.app.query_one("#top-bar")
+            rendered = top_bar.render()
+            assert "Home" in str(rendered)
 
     async def test_archived_filter_shows_archived(self, app_with_store):
         """Pressing 6 activates archived filter instead of a separate view."""
@@ -919,12 +920,12 @@ class TestTabBarE2E:
     """Tab bar appears, can be navigated with ctrl+tab, and tabs close with x."""
 
     async def test_tab_bar_renders(self, app_with_store):
-        """Tab bar widget is present and rendering."""
+        """Tab bar renders as first line of top-bar."""
         async with app_with_store.run_test(size=(120, 40)) as pilot:
-            from widgets import TabBar
-            bar = pilot.app.query_one("#tab-bar", TabBar)
-            assert bar is not None
-            assert bar.tab_count >= 1  # At least "Home"
+            top_bar = pilot.app.query_one("#top-bar")
+            rendered = str(top_bar.render())
+            assert "Home" in rendered
+            assert len(pilot.app.tabs.tabs) >= 1  # At least "Home"
 
     async def test_open_detail_creates_tab(self, app_with_store):
         """Opening a workstream detail adds a tab."""

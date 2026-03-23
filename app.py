@@ -58,7 +58,7 @@ from workstream_synthesizer import (
 from description_refresher import refresh_descriptions
 
 from rendering import (
-    C_BLUE, C_CYAN, C_DIM, C_GREEN, C_PURPLE, C_RED, C_YELLOW,
+    C_BLUE, C_CYAN, C_DIM, C_FAINT, C_GREEN, C_PURPLE, C_RED, C_YELLOW,
     BG_BASE,
     _token_color, _token_color_markup,
     _category_markup,
@@ -79,7 +79,6 @@ from screens import (
     AddLinkScreen, LinkSessionScreen, ConfirmScreen,
     RepoPickerScreen, WorkstreamPickerScreen, _SENTINEL_NEW,
 )
-from widgets import TabBar
 
 
 # ─── Inline Inputs ──────────────────────────────────────────────────
@@ -422,16 +421,22 @@ class OrchestratorApp(App):
         self._on_return_from_modal()
 
     def _sync_tab_bar(self):
-        """Update the TabBar widget to match TabManager state."""
-        try:
-            tab_bar = self.query_one("#tab-bar", TabBar)
-            tab_bar._tabs = [
-                (t.id, t.label, t.icon) for t in self.tabs.tabs
-            ]
-            tab_bar._active_idx = self.tabs.active_idx
-            tab_bar._render_tabs()
-        except Exception:
-            pass
+        """Re-render the top bar to reflect current tab state."""
+        self._update_all_bars()
+
+    def _render_tab_bar(self) -> str:
+        """Render the tab bar line as Rich markup."""
+        parts = []
+        for i, tab in enumerate(self.tabs.tabs):
+            prefix = f"{tab.icon} " if tab.icon else ""
+            label = tab.label[:20] + "\u2026" if len(tab.label) > 20 else tab.label
+            if i == self.tabs.active_idx:
+                parts.append(f"[bold {C_CYAN}] {prefix}{_rich_escape(label)} [/bold {C_CYAN}]")
+            else:
+                parts.append(f"[{C_DIM}] {prefix}{_rich_escape(label)} [/{C_DIM}]")
+            if i < len(self.tabs.tabs) - 1:
+                parts.append(f"[{C_FAINT}]\u2502[/{C_FAINT}]")
+        return "".join(parts)
 
     # ── Navigation ──
 
