@@ -53,6 +53,7 @@ from rendering import (
     _render_todo_option, _render_notification_option,
     _render_notified_session_option, QUIET_SEPARATOR_LABEL,
     _render_content_search_result, tool_bar_legend,
+    _context_bar,
     TODO_UNDONE_ICON, TODO_DONE_ICON,
     _rich_escape,
 )
@@ -1861,6 +1862,12 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
                 f"[{C_DIM}]{n} sessions \u00b7 {total_msgs} msgs \u00b7 "
                 f"{_token_color_markup(_tk, total_tok)}[/{C_DIM}]"
             )
+            # Show context bar for the most active (highest context) session
+            ctx_sessions = [s for s in self._detail_sessions if s.context_tokens > 0]
+            if ctx_sessions:
+                top = max(ctx_sessions, key=lambda s: s.context_tokens)
+                bar = _context_bar(top.context_tokens, top.context_window_size)
+                parts.append(bar)
         return "  ".join(parts)
 
     def _render_body(self) -> str:
