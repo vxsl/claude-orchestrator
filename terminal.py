@@ -804,6 +804,34 @@ class TerminalWidget(Widget, can_focus=True):
         _flush()
         return Strip(segments, self._ncol)
 
+    # Style cache: (fg, bg, attrs) -> Style — avoids re-creating identical Style objects
+    _style_cache: dict[tuple, Style] = {}
+
+    @classmethod
+    def _get_style(cls, key: tuple) -> Style:
+        """Get or create a cached Style for the given (fg, bg, attrs) key."""
+        cached = cls._style_cache.get(key)
+        if cached is not None:
+            return cached
+        if key == ("cursor",):
+            style = Style(reverse=True)
+        else:
+            fg, bg, attrs = key
+            style = Style(
+                color=fg,
+                bgcolor=bg,
+                bold=bool(attrs & 0x01),
+                italic=bool(attrs & 0x08),
+                underline=bool((attrs >> 1) & 0x03),
+                strike=bool(attrs & 0x80),
+                reverse=bool(attrs & 0x20),
+            )
+        # Limit cache size to prevent unbounded growth
+        if len(cls._style_cache) > 4096:
+            cls._style_cache.clear()
+        cls._style_cache[key] = style
+        return style
+
     def _render_line_vterm(self, y: int) -> Strip:
         backend = self._backend
         if y >= backend.lines:
@@ -812,25 +840,33 @@ class TerminalWidget(Widget, can_focus=True):
         # When scrolled up, some lines come from scrollback
         if self._scroll_offset > 0 and backend.scrollback:
             sb_len = len(backend.scrollback)
-            # Line index into the virtual buffer (scrollback + screen)
-            # scroll_offset = how many lines we've scrolled up
-            # Top of viewport maps to sb_len - scroll_offset
             sb_start = sb_len - self._scroll_offset
             virtual_line = sb_start + y
             if virtual_line < 0:
                 return Strip.blank(self._ncol)
             if virtual_line < sb_len:
                 return self._render_scrollback_line(virtual_line)
-            # Otherwise it's a live screen line
             screen_y = virtual_line - sb_len
             if screen_y >= backend.lines:
                 return Strip.blank(self._ncol)
             y = screen_y
 
         cursor_x = backend.cursor_x if backend.cursor_y == y else -1
-        # Don't show cursor when scrolled up
         if self._scroll_offset > 0:
             cursor_x = -1
+        if not self.has_focus:
+            cursor_x = -1
+
+        # Use batch row rendering to minimize per-cell overhead
+        if hasattr(backend, 'render_row_segments'):
+            raw_segments = backend.render_row_segments(y, backend.columns, cursor_x)
+            segments = [
+                Segment(text, self._get_style(key))
+                for text, key in raw_segments
+            ]
+            return Strip(segments, self._ncol)
+
+        # Fallback: per-cell rendering (shouldn't be reached with vterm)
         segments: list[Segment] = []
         run_text: list[str] = []
         run_style: Style | None = None
@@ -844,7 +880,7 @@ class TerminalWidget(Widget, can_focus=True):
         for x in range(backend.columns):
             cell = backend.get_cell(y, x)
 
-            if x == cursor_x and self.has_focus:
+            if x == cursor_x:
                 style = Style(reverse=True)
             else:
                 attrs = cell.attrs

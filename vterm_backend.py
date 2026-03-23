@@ -261,6 +261,69 @@ class VTermBackend:
             self._screen, self._pos, ctypes.byref(self._cell))
         return self._cell
 
+    def render_row_segments(self, row: int, cols: int,
+                            cursor_x: int = -1) -> list[tuple[str, tuple]]:
+        """Render an entire row as run-length-encoded (text, style_tuple) pairs.
+
+        Returns a list of (text, (fg, bg, attrs)) tuples where fg/bg are
+        Rich color strings or None, and attrs is the raw bitfield.
+        This avoids per-cell Style object creation in Python.
+        """
+        pos = self._pos
+        cell = self._cell
+        cell_ref = ctypes.byref(cell)
+        screen = self._screen
+        ctmp = self._ctmp
+
+        segments: list[tuple[str, tuple]] = []
+        run_chars: list[str] = []
+        run_key: tuple = ()  # (fg, bg, attrs) or ("cursor",)
+
+        for x in range(cols):
+            pos.row = row
+            pos.col = x
+            _vterm_screen_get_cell(screen, pos, cell_ref)
+
+            if x == cursor_x:
+                key = ("cursor",)
+            else:
+                # Inline color conversion to avoid method call overhead
+                fg_color = self._color_to_str(cell.fg, ctmp, screen)
+                bg_color = self._color_to_str(cell.bg, ctmp, screen)
+                key = (fg_color, bg_color, cell.attrs)
+
+            # Get character
+            cp = cell.chars[0]
+            ch = chr(cp) if 0 < cp <= 0x10FFFF else " "
+
+            if key != run_key:
+                if run_chars:
+                    segments.append(("".join(run_chars), run_key))
+                run_chars = [ch]
+                run_key = key
+            else:
+                run_chars.append(ch)
+
+        if run_chars:
+            segments.append(("".join(run_chars), run_key))
+        return segments
+
+    @staticmethod
+    def _color_to_str(color: VTermColor, ctmp: VTermColor,
+                      screen) -> str | None:
+        """Fast inline color conversion without method dispatch."""
+        t = color.type
+        if t & 0x02 or t & 0x04:
+            return None
+        if t & 0x01:
+            ctmp.type = t
+            ctmp.red = color.red
+            ctmp.green = color.green
+            ctmp.blue = color.blue
+            _vterm_screen_convert_color_to_rgb(screen, ctypes.byref(ctmp))
+            return f"#{ctmp.red:02x}{ctmp.green:02x}{ctmp.blue:02x}"
+        return f"#{color.red:02x}{color.green:02x}{color.blue:02x}"
+
     def get_scrollback_cell(self, sb_index: int, col: int) -> VTermScreenCell | None:
         """Read a cell from a scrollback line. Returns the internal reusable
         struct (same as get_cell) or None if out of bounds."""
