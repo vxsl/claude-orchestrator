@@ -52,7 +52,7 @@ from rendering import (
     _short_model, _short_project,
     _render_session_option, _session_title,
     _render_todo_option, _render_notification_option,
-    _render_notified_session_option, QUIET_SEPARATOR_LABEL, DEFERRED_SEPARATOR_LABEL,
+    _render_notified_session_option, QUIET_SEPARATOR_LABEL, DEFERRED_SEPARATOR_LABEL, THINKING_SEPARATOR_LABEL,
     _render_content_search_result, tool_bar_legend,
     TODO_UNDONE_ICON, TODO_DONE_ICON,
     _rich_escape,
@@ -1421,24 +1421,23 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
                     quiet.append(s)
         notified.sort(key=lambda s: self._session_notifications[s.session_id].dt, reverse=True)
         elevated.sort(key=lambda s: s.last_activity or "", reverse=True)
-        def _quiet_sort_key(s):
-            act = session_activity(s, self._last_seen_cache)
-            if act == ThreadActivity.THINKING:
-                return (1, s.started_at or "")
-            return (0, s.last_activity or "")
-        quiet.sort(key=_quiet_sort_key, reverse=True)
+        quiet.sort(key=lambda s: s.last_activity or "", reverse=True)
         quiet_active = [s for s in quiet if s.session_id not in self._deferred_set]
         quiet_deferred = [s for s in quiet if s.session_id in self._deferred_set]
+        quiet_thinking = [s for s in quiet_active if session_activity(s, self._last_seen_cache) == ThreadActivity.THINKING]
+        quiet_other = [s for s in quiet_active if s not in quiet_thinking]
         all_elevated = notified + elevated
 
         # If the notified/elevated/quiet structure changed, the in-place index
         # mapping is invalid (separator may have moved or appeared/disappeared).
         # Fall back to a full rebuild to avoid stale/duplicate entries.
         has_separator = bool(all_elevated and (quiet_active or quiet_deferred))
+        has_thinking_sep = bool(quiet_thinking)
         has_deferred_sep = bool(quiet_deferred)
         expected_count = (
             len(self._detail_sessions)
             + (1 if has_separator else 0)
+            + (1 if has_thinking_sep else 0)
             + (1 if has_deferred_sep else 0)
         )
         olist = self.query_one("#detail-sessions", OptionList)
@@ -1481,13 +1480,23 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
                 if has_separator:
                     idx += 1  # skip quiet separator
 
-                for s in quiet_active:
+                for s in quiet_other:
                     if idx < olist.option_count:
                         act = session_activity(s, self._last_seen_cache)
                         seen = _is_session_seen(s, self._last_seen_cache)
                         prompt = _render_session_option(s, act, self._throbber_frame, ws_repo_path=self.ws.repo_path, seen=seen, line_width=lw)
                         olist.replace_option_prompt_at_index(idx, prompt)
                     idx += 1
+
+                if has_thinking_sep:
+                    idx += 1  # skip thinking separator
+                    for s in quiet_thinking:
+                        if idx < olist.option_count:
+                            act = session_activity(s, self._last_seen_cache)
+                            seen = _is_session_seen(s, self._last_seen_cache)
+                            prompt = _render_session_option(s, act, self._throbber_frame, ws_repo_path=self.ws.repo_path, seen=seen, line_width=lw)
+                            olist.replace_option_prompt_at_index(idx, prompt)
+                        idx += 1
 
                 if has_deferred_sep:
                     idx += 1  # skip deferred separator
@@ -1714,21 +1723,16 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
                     quiet.append(s)
 
         # Sort each group by recency (newest first)
-        # THINKING sessions float to the top of quiet (tier 1) and sort by
-        # started_at so they don't jitter while the agent streams new messages.
-        # Non-thinking sessions stay in tier 0, sorted by last_activity.
         notified.sort(key=lambda s: self._session_notifications[s.session_id].dt, reverse=True)
         elevated.sort(key=lambda s: s.last_activity or "", reverse=True)
-        def _quiet_sort_key(s):
-            act = session_activity(s, self._last_seen_cache)
-            if act == ThreadActivity.THINKING:
-                return (1, s.started_at or "")
-            return (0, s.last_activity or "")
-        quiet.sort(key=_quiet_sort_key, reverse=True)
+        quiet.sort(key=lambda s: s.last_activity or "", reverse=True)
 
-        # Split quiet into active and deferred; deferred sink to the bottom
+        # Split quiet into other, thinking, and deferred sections
+        # Order: other (top) → thinking → deferred (bottom)
         quiet_active = [s for s in quiet if s.session_id not in self._deferred_set]
         quiet_deferred = [s for s in quiet if s.session_id in self._deferred_set]
+        quiet_thinking = [s for s in quiet_active if session_activity(s, self._last_seen_cache) == ThreadActivity.THINKING]
+        quiet_other = [s for s in quiet_active if s not in quiet_thinking]
 
         # Build all options before touching widget tree
         all_elevated = notified + elevated
@@ -1768,9 +1772,9 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
             idx += 1
 
         earlier_sep_inserted = False
-        for qi, s in enumerate(quiet_active):
+        for qi, s in enumerate(quiet_other):
             act = session_activity(s, self._last_seen_cache)
-            if act in (ThreadActivity.THINKING, ThreadActivity.AWAITING_INPUT):
+            if act == ThreadActivity.AWAITING_INPUT:
                 animating.append((idx, act))
             seen = _is_session_seen(s, self._last_seen_cache)
             if not earlier_sep_inserted and qi > 0 and not _is_today(s.last_activity or s.started_at or ""):
@@ -1782,6 +1786,17 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
             prompt = _render_session_option(s, act, self._throbber_frame, ws_repo_path=self.ws.repo_path, seen=seen, line_width=lw)
             options.append(Option(prompt, id=s.session_id))
             idx += 1
+
+        if quiet_thinking:
+            options.append(Option(THINKING_SEPARATOR_LABEL, id="__sep_thinking__", disabled=True))
+            idx += 1
+            for s in quiet_thinking:
+                act = session_activity(s, self._last_seen_cache)
+                animating.append((idx, act))
+                seen = _is_session_seen(s, self._last_seen_cache)
+                prompt = _render_session_option(s, act, self._throbber_frame, ws_repo_path=self.ws.repo_path, seen=seen, line_width=lw)
+                options.append(Option(prompt, id=s.session_id))
+                idx += 1
 
         if quiet_deferred:
             options.append(Option(DEFERRED_SEPARATOR_LABEL, id="__sep_deferred__", disabled=True))

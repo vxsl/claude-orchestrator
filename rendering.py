@@ -694,10 +694,16 @@ def _render_session_option(
             line4 = f"{INDENT}[{C_FAINT}]─[/{C_FAINT}]"
         return "\n".join([line1, line2, line3, line4])
 
-    # ── Staleness: not active today → dim two notches ──
-    stale = not _is_today(s.last_activity or s.started_at or "")
-    s_mid = C_FAINT if stale else C_MID     # secondary text
-    s_dim = C_FAINT if stale else C_DIM     # tertiary text
+    # ── Archived: all text collapsed to faint ──
+    if archived:
+        s_mid = C_FAINT
+        s_dim = C_FAINT
+        stale = True
+    else:
+        # ── Staleness: not active today → dim two notches ──
+        stale = not _is_today(s.last_activity or s.started_at or "")
+        s_mid = C_FAINT if stale else C_MID     # secondary text
+        s_dim = C_FAINT if stale else C_DIM     # tertiary text
 
     # Resolved state: session's last action was a git commit
     # But active states (thinking, awaiting input) take priority — the session
@@ -705,7 +711,11 @@ def _render_session_option(
     _active = act in (ThreadActivity.THINKING, ThreadActivity.AWAITING_INPUT)
     committed = bool(s.last_commit_sha) and not _active
 
-    if committed:
+    if archived:
+        icon = f"[{C_FAINT}]·[/{C_FAINT}]"
+        badge = ""
+        badge_w = 0
+    elif committed:
         icon = f"[{C_RESOLVED}]✓[/{C_RESOLVED}]"
         badge = f"[{C_RESOLVED}]committed[/{C_RESOLVED}]"
         badge_w = 9
@@ -724,8 +734,10 @@ def _render_session_option(
     age_str = s.age
 
     # Title styling: committed = dim, idle = dim, thinking = cyan, active = bright
-    # Stale sessions shift bright → dim (two notches)
-    if committed:
+    # Stale/archived sessions shift to faint
+    if archived:
+        title_fmt = f"[{C_FAINT}]{title_esc}[/{C_FAINT}]"
+    elif committed:
         title_fmt = f"[{s_dim}]{title_esc}[/{s_dim}]"
     elif act == ThreadActivity.IDLE:
         title_fmt = f"[{s_dim}]{title_esc}[/{s_dim}]"
