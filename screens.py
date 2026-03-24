@@ -946,7 +946,6 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         self._all_sessions: list[ClaudeSession] = []
         self._all_archived: list[ClaudeSession] = []
         self._peek_mode: bool = False
-        self._peek_session_id: str | None = None
         self._loading_frame: int = 0
         self._loading_timer = None
         self._throbber_timer = None
@@ -2198,12 +2197,6 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
                 event.prevent_default()
                 self._focus_search_results()
             return
-        # Ctrl+Space = archive current peeked session and close peek
-        if event.key == "ctrl+space" and self._peek_mode:
-            event.stop()
-            event.prevent_default()
-            self._archive_peek_session_and_close()
-            return
         # Space = archive/unarchive session
         if event.key == "space" and self._active_pane in ("sessions", "archived"):
             event.stop()
@@ -2263,7 +2256,6 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         if olist.option_count > 0:
             olist.highlighted = olist.option_count - 1
         self._peek_mode = True
-        self._peek_session_id = sid
         sess_label = self.query_one("#detail-sessions-label", Static)
         sess_label.update(
             f"[bold {C_BLUE}]Conversation[/bold {C_BLUE}] "
@@ -2273,22 +2265,11 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
     def _close_peek(self):
         """Restore the normal session list."""
         self._peek_mode = False
-        self._peek_session_id = None
         self._build_session_list()
         olist = self.query_one("#detail-sessions", OptionList)
         if olist.option_count > 0:
             olist.highlighted = 0
         self._update_pane_labels()
-
-    def _archive_peek_session_and_close(self):
-        """Ctrl+Space: archive the peeked session and return to session list."""
-        sid = self._peek_session_id
-        if sid and sid not in self.ws.archived_sessions:
-            self.ws.archived_sessions[sid] = datetime.now(timezone.utc).isoformat()
-            self.store.update(self.ws)
-        self._close_peek()
-        self._refresh()
-        self.app.notify("Session archived", timeout=1)
 
     @work(thread=True, exclusive=True, group="content_cache")
     def _warm_content_cache(self):
@@ -3025,6 +3006,7 @@ class CurrentSessionsScreen(_VimOptionListMixin, ModalScreen[None]):
         Binding("backspace,ctrl+h", "dismiss", "back"),
         Binding("enter,l", "select_session", show=False),
         Binding("r", "resume", "Resume"),
+        Binding("ctrl+space", "archive_session", "Archive", show=False),
         Binding("colon", "command_palette", ":", show=False),
         Binding("question_mark", "help", "?", show=False),
     ] + _VimOptionListMixin.VIM_BINDINGS
@@ -3229,6 +3211,15 @@ class CurrentSessionsScreen(_VimOptionListMixin, ModalScreen[None]):
         ws, sid = self._get_selected()
         if ws and sid:
             self.app.launch_claude_session(ws, session_id=sid)
+
+    def action_archive_session(self) -> None:
+        ws, sid = self._get_selected()
+        if not ws or not sid:
+            return
+        if sid not in ws.archived_sessions:
+            ws.archived_sessions[sid] = datetime.now(timezone.utc).isoformat()
+            self.app.state.store.update(ws)
+        self.dismiss()
 
     def action_command_palette(self) -> None:
         self.app.action_command_palette()
