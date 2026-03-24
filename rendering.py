@@ -318,7 +318,7 @@ def _activity_icon(activity: ThreadActivity, throbber_frame: int = 0, seen: bool
         char = THROBBER_FRAMES[throbber_frame % len(THROBBER_FRAMES)]
         return f"[bold {C_BLUE}]{char}[/bold {C_BLUE}]"
     if activity in (ThreadActivity.AWAITING_INPUT, ThreadActivity.RESPONSE_READY):
-        color = C_DIM if seen else C_YELLOW
+        color = C_DIM if seen else C_GREEN
         return f"[{color}]●[/{color}]"
     return f"[{C_DIM}]·[/{C_DIM}]"
 
