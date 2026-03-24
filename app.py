@@ -14,6 +14,7 @@ import subprocess
 import time as _time
 from pathlib import Path
 
+log = logging.getLogger("orch.app")
 _perf_log = logging.getLogger("orch.perf")
 _PERF_ENABLED = os.environ.get("ORCH_PERF_LOG", "")
 if _PERF_ENABLED:
@@ -27,7 +28,7 @@ if _PERF_ENABLED:
 from textual import on, work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.containers import Horizontal, VerticalScroll
+from textual.containers import Horizontal, Vertical
 from textual.theme import Theme
 from textual.widgets import (
     Input,
@@ -73,7 +74,7 @@ from description_refresher import refresh_descriptions
 
 from rendering import (
     C_BLUE, C_CYAN, C_DIM, C_FAINT, C_GREEN, C_MID, C_PURPLE, C_RED, C_YELLOW,
-    BG_BASE, BG_CHROME, BG_RAISED,
+    BG_BASE, BG_CHROME, BG_RAISED, BG_SURFACE,
     _token_color, _token_color_markup,
     _category_markup,
     _is_session_seen, _is_today, _any_session_today,
@@ -85,7 +86,9 @@ from actions import (
     ws_directories,
     do_resume, resume_session_now, open_link,
     refresh_liveness,
+    ws_working_dir, generate_tig_tigrc,
 )
+from terminal import TerminalWidget
 from screens import (
     SessionsChanged,
     HelpScreen, QuickNoteScreen, TodoScreen, LinksScreen,
@@ -152,19 +155,29 @@ class OrchestratorApp(App):
     #summary-bar {{
         height: 1; padding: 0 2; background: {BG_CHROME}; color: {C_DIM}; dock: bottom;
     }}
-    #main-content {{ height: 1fr; }}
+    #main-body {{ height: 1fr; }}
+    #main-lists {{ height: 2fr; }}
+    #main-lower {{ height: 3fr; background: {BG_RAISED}; }}
+    .main-list-pane {{ height: 1fr; border: blank; }}
+    .main-list-pane.pane-focused {{ border: round {C_BLUE}; background: {BG_SURFACE}; }}
+    .main-list-label {{
+        height: 1; padding: 0 2;
+        color: {C_BLUE}; text-style: bold;
+    }}
+    #main-ws-pane {{ width: 3fr; }}
+    #main-sessions-pane {{ width: 2fr; min-width: 36; border-left: blank; }}
     #ws-table {{
-        width: 3fr; height: 1fr; margin: 0; padding: 0;
+        height: 1fr; margin: 0; padding: 0;
         border: none; background: {BG_BASE};
     }}
-    #preview-pane {{
-        width: 2fr; min-width: 36; border-left: blank;
-        padding: 1 2; background: {BG_BASE};
-    }}
-    #preview-content {{ width: 100%; }}
     #preview-sessions {{
-        height: auto; max-height: 16; width: 100%; margin: 0; padding: 0;
+        height: 1fr; width: 100%; margin: 0; padding: 0;
+        border: none; background: {BG_BASE};
     }}
+    #main-no-sessions {{ padding: 1 2; color: {C_DIM}; }}
+    .main-tig-wrap {{ height: 1fr; border: blank; background: {BG_RAISED}; }}
+    .main-tig-wrap.pane-focused {{ border: round {C_BLUE}; background: {BG_RAISED}; }}
+    #main-tig-status, #main-tig-log {{ height: 1fr; }}
     #search-input, #note-input, #rename-input {{
         dock: bottom; height: 1; display: none; border: none; background: {BG_BASE};
     }}
@@ -223,6 +236,9 @@ class OrchestratorApp(App):
         self._session_bridge: SessionBridge | None = None
         self._refresh_pending = False  # debounce flag for _refresh_ws_table
         self._preview_ws_id: str | None = None  # track current preview to skip redundant updates
+        self._main_tig_cwd: str | None = None   # cwd currently shown in main tig pane
+        self._main_tig_env: dict = {}
+        self._main_tigrc_path: str | None = None
         self._detached_sessions: dict[str, dict] = {}  # session_id -> {ws, start_time, jsonl}
         self._detail_screen_active: bool = False  # True when a DetailScreen or CurrentSessionsScreen is pushed
         self._detail_screen_cache: dict[str, DetailScreen] = {}  # ws_id -> cached screen
@@ -330,11 +346,17 @@ class OrchestratorApp(App):
     def compose(self) -> ComposeResult:
         yield Static("", id="top-bar")
         yield Static("", id="filter-bar")
-        with Horizontal(id="main-content"):
-            yield OptionList(id="ws-table")
-            with VerticalScroll(id="preview-pane"):
-                yield Static("", id="preview-content")
-                yield OptionList(id="preview-sessions")
+        with Vertical(id="main-body"):
+            with Horizontal(id="main-lists"):
+                with Vertical(id="main-ws-pane", classes="main-list-pane"):
+                    yield Static("Workstreams", id="main-ws-label", classes="main-list-label")
+                    yield OptionList(id="ws-table")
+                with Vertical(id="main-sessions-pane", classes="main-list-pane"):
+                    yield Static("Sessions", id="main-sessions-label", classes="main-list-label")
+                    yield OptionList(id="preview-sessions")
+                    yield Static(f"[{C_DIM}]No sessions[/{C_DIM}]", id="main-no-sessions")
+            with Horizontal(id="main-lower"):
+                pass  # tig widgets mounted dynamically in on_mount / _update_main_tig
         yield SearchInput(placeholder="Search...", id="search-input")
         yield QuickNoteInput(placeholder="note: ", id="note-input")
         yield RenameInput(placeholder="rename: ", id="rename-input")
@@ -346,7 +368,13 @@ class OrchestratorApp(App):
         self._refresh_ws_table()
         self._load_sessions()
 
+        # Hide sessions pane items until a ws is selected
         self.query_one("#preview-sessions", OptionList).display = False
+        self.query_one("#main-no-sessions").display = False
+        self.query_one("#main-lower").display = False
+
+        # Mount tig after layout is computed
+        self.call_after_refresh(self._init_main_tig)
 
         # ── Staggered timers ──
         # Spread 30s polling timers across time to prevent burst every 30s.
@@ -389,6 +417,106 @@ class OrchestratorApp(App):
             self._session_bridge.stop()
         if self._session_watcher:
             self._session_watcher.stop()
+        self._stop_main_tig()
+        if self._main_tigrc_path:
+            try:
+                os.unlink(self._main_tigrc_path)
+            except OSError:
+                pass
+
+    # ── Main tig pane ──
+
+    def _detect_main_tig_cwd(self, ws) -> str | None:
+        """Return the working dir for tig if ws has a git repo, else None."""
+        import shutil
+        if not shutil.which("tig"):
+            return None
+        cwd = ws_working_dir(ws) if ws else None
+        if not cwd:
+            return None
+        try:
+            result = subprocess.run(
+                ["git", "-C", cwd, "rev-parse", "--git-dir"],
+                capture_output=True, timeout=2,
+            )
+            return cwd if result.returncode == 0 else None
+        except Exception:
+            return None
+
+    def _init_main_tig(self):
+        """Called once after first layout — mount tig for the initially selected ws."""
+        self._update_main_tig(self._selected_ws())
+
+    def _stop_main_tig(self):
+        """Stop any running tig terminal widgets in the main lower pane."""
+        try:
+            for tw in self.query("#main-lower TerminalWidget"):
+                try:
+                    tw.stop()
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+    def _update_main_tig(self, ws):
+        """Restart tig in the main lower pane for the given workstream."""
+        cwd = self._detect_main_tig_cwd(ws)
+        if cwd == self._main_tig_cwd:
+            return  # already showing this repo
+
+        self._main_tig_cwd = cwd
+
+        lower = self.query_one("#main-lower")
+
+        # Remove existing tig widgets
+        self._stop_main_tig()
+        for wrap in list(lower.query(".main-tig-wrap")):
+            wrap.remove()
+
+        if not cwd:
+            lower.display = False
+            return
+
+        if not self._main_tig_env:
+            tigrc = generate_tig_tigrc(subtle=True)
+            self._main_tigrc_path = tigrc
+            self._main_tig_env = {"TIGRC_USER": tigrc, "GIT_OPTIONAL_LOCKS": "0"}
+
+        lower.display = True
+
+        status_wrap = Vertical(id="main-tig-status-wrap", classes="main-tig-wrap")
+        log_wrap = Vertical(id="main-tig-log-wrap", classes="main-tig-wrap")
+        lower.mount(status_wrap, log_wrap)
+
+        status_tw = TerminalWidget(
+            command="tig status",
+            env=self._main_tig_env,
+            cwd=cwd,
+            passthrough_keys={"ctrl+j", "ctrl+k", "ctrl+h", "backspace"},
+            id="main-tig-status",
+        )
+        log_tw = TerminalWidget(
+            command="tig",
+            env=self._main_tig_env,
+            cwd=cwd,
+            passthrough_keys={"ctrl+j", "ctrl+k", "ctrl+h", "backspace"},
+            id="main-tig-log",
+        )
+        status_wrap.mount(status_tw)
+        log_wrap.mount(log_tw)
+        self.call_after_refresh(self._start_main_tig)
+
+    def _start_main_tig(self):
+        try:
+            for tw in self.query("#main-lower TerminalWidget"):
+                tw.start()
+        except Exception as e:
+            log.error("Failed to start main tig: %s", e)
+
+    def _debounce_tig_update(self):
+        if hasattr(self, '_tig_update_timer') and self._tig_update_timer:
+            self._tig_update_timer.stop()
+        self._tig_update_timer = self.set_timer(0.4, lambda: self._update_main_tig(self._selected_ws()))
 
     def _tick_throbber(self):
         """Advance the throbber frame and refresh preview if any sessions are thinking."""
@@ -679,6 +807,8 @@ class OrchestratorApp(App):
         panels = ["ws-table"]
         if self.state.preview_visible:
             panels.append("preview-sessions")
+        if self._main_tig_cwd:
+            panels += ["main-tig-status", "main-tig-log"]
         return panels
 
     def _current_panel_index(self) -> int:
@@ -711,7 +841,7 @@ class OrchestratorApp(App):
             pass
 
     def action_toggle_preview(self):
-        pane = self.query_one("#preview-pane")
+        pane = self.query_one("#main-sessions-pane")
         self.state.preview_visible = not self.state.preview_visible
         pane.display = self.state.preview_visible
 
@@ -855,8 +985,6 @@ class OrchestratorApp(App):
             screen.post_message(SessionsChanged())
 
     def _update_preview(self, force: bool = False):
-        if not self.state.preview_visible:
-            return
         ws = self._selected_ws()
         ws_id = ws.id if ws else None
         if not force and ws_id == self._preview_ws_id:
@@ -874,92 +1002,38 @@ class OrchestratorApp(App):
 
     def _render_ws_preview(self, ws: Workstream | None, archived: bool = False):
         try:
-            content = self.query_one("#preview-content", Static)
+            label = self.query_one("#main-sessions-label", Static)
             olist = self.query_one("#preview-sessions", OptionList)
+            no_sessions = self.query_one("#main-no-sessions", Static)
         except Exception:
             return
         if not ws:
-            content.update(f"[{C_DIM}]Select a workstream[/{C_DIM}]\n\n{self._nav_hints()}")
+            label.update(f"[bold {C_BLUE}]Sessions[/bold {C_BLUE}]")
             olist.display = False
+            no_sessions.display = False
             self.state.preview_sessions = []
             return
 
-        lines = []
-        lines.append(f"[bold {C_PURPLE}]{_rich_escape(ws.name)}[/bold {C_PURPLE}]")
-        lines.append(f"{_category_markup(ws.category)}")
-        if archived:
-            lines.append(f"[{C_DIM}]Archived[/{C_DIM}]")
-        lines.append("")
-
-        if ws.description:
-            lines.append(ws.description)
-            lines.append("")
-
         ws_sessions = self.state.sessions_for_ws(ws)
-        if ws_sessions:
-            total_tokens = sum(s.total_input_tokens + s.total_output_tokens for s in ws_sessions)
-            total_msgs = sum(s.message_count for s in ws_sessions)
-            _tk = f"{total_tokens / 1_000_000:.1f}M" if total_tokens > 1_000_000 else f"{total_tokens / 1_000:.0f}k" if total_tokens > 1_000 else str(total_tokens)
-            last_active = ws_sessions[0].age
 
-            lines.append(f"[bold {C_BLUE}]Activity[/bold {C_BLUE}]")
-            lines.append(
-                f"  [{C_CYAN}]{len(ws_sessions)}[/{C_CYAN}] sessions  "
-                f"[{C_DIM}]\u00b7[/{C_DIM}]  {total_msgs} messages  "
-                f"[{C_DIM}]\u00b7[/{C_DIM}]  {_token_color_markup(_tk, total_tokens)}"
-            )
-            lines.append(f"  [{C_DIM}]Last active[/{C_DIM}] {last_active}")
-            lines.append("")
-
-            archived_count = len(ws.archived_sessions)
-            if archived_count:
-                lines.append(f"[bold {C_BLUE}]Sessions[/bold {C_BLUE}]  [{C_DIM}]({archived_count} archived)[/{C_DIM}]")
-            else:
-                lines.append(f"[bold {C_BLUE}]Sessions[/bold {C_BLUE}]")
-        else:
-            lines.append(f"[{C_DIM}]No Claude sessions found[/{C_DIM}]")
-            dirs = ws_directories(ws)
-            if not dirs:
-                lines.append(f"[{C_DIM}]Link a directory to auto-discover sessions[/{C_DIM}]")
-            lines.append("")
-
-        dirs = ws_directories(ws)
-        if dirs:
-            lines.append(f"[bold {C_BLUE}]Context[/bold {C_BLUE}]")
-            for d in dirs:
-                short = d.replace(str(Path.home()), "~")
-                lines.append(f"  [{C_DIM}]{short}[/{C_DIM}]")
-            lines.append("")
-
-        if ws.notes:
-            lines.append(f"[bold {C_BLUE}]Notes[/bold {C_BLUE}]")
-            for line in ws.notes.split("\n")[:8]:
-                lines.append(f"  {line}")
-            if ws.notes.count("\n") > 8:
-                lines.append(f"  [{C_DIM}]...[/{C_DIM}]")
-            lines.append("")
-
-        lines.append(f"[{C_DIM}]Created {_relative_time(ws.created_at)} \u00b7 Updated {_relative_time(ws.updated_at)}[/{C_DIM}]")
-
-        lines.append("")
-        if archived:
-            lines.append(self._nav_hints())
-        else:
-            lines.append(self._hint_line([
-                ("r", "resume"), ("c", "new session"),
-                ("n", "note"), ("o", "open"),
-            ]))
-
-        content.update("\n".join(lines))
+        archived_count = len(ws.archived_sessions) if not archived else 0
+        archived_suffix = f"  [{C_DIM}]({archived_count} archived)[/{C_DIM}]" if archived_count else ""
+        label.update(
+            f"[bold {C_BLUE}]{_rich_escape(ws.name)}[/bold {C_BLUE}]"
+            f"  {_category_markup(ws.category)}"
+            f"{archived_suffix}"
+        )
 
         self.state.preview_sessions = ws_sessions
         self.state.last_seen_cache = self.state.get_last_seen()
         if ws_sessions:
             olist.display = True
+            no_sessions.display = False
             self._resume_throbber()
             self._refresh_preview_sessions()
         else:
             olist.display = False
+            no_sessions.display = True
 
     def _refresh_preview_sessions(self, throbber_tick: bool = False):
         olist = self.query_one("#preview-sessions", OptionList)
@@ -1024,6 +1098,7 @@ class OrchestratorApp(App):
     @on(OptionList.OptionHighlighted, "#ws-table")
     def on_ws_highlighted(self, event: OptionList.OptionHighlighted):
         self._debounce_preview()
+        self._debounce_tig_update()
 
     def _debounce_preview(self):
         """Debounce preview updates during rapid cursor movement."""
