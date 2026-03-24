@@ -518,7 +518,7 @@ def _render_ws_option(
             parts.append(_token_color_markup(tk, total_tokens))
         total_work_ms = sum(s.total_work_ms for s in ws_sessions)
         if total_work_ms > 0:
-            parts.append(f"[{meta_dim}]{_work_time_str(total_work_ms)}[/{meta_dim}]")
+            parts.append(f"[{meta_dim}]⚙{_work_time_str(total_work_ms)}[/{meta_dim}]")
 
     # Use best session activity time (matches sort order), fall back to updated_at
     if ws_sessions:
@@ -688,7 +688,7 @@ def _render_session_option(
         dur_str = f"{duration:<8}" if duration else ""
         dur_len = 8 if duration else 0
         work_time = s.work_time_display
-        work_str = f"{work_time:<8}" if work_time else ""
+        work_str = f"⚙{work_time:<7}" if work_time else ""
         work_len = 8 if work_time else 0
         model_len = 0 if model == "opus" else 8
         meta_left_len = 4 + model_len + 10 + 8 + dur_len + work_len
@@ -789,7 +789,7 @@ def _render_session_option(
     dur_str = f"{duration:<8}" if duration else ""
     dur_len = 8 if duration else 0
     work_time = s.work_time_display
-    work_str = f"{work_time:<8}" if work_time else ""
+    work_str = f"⚙{work_time:<7}" if work_time else ""
     work_len = 8 if work_time else 0
     model_len = 0 if model == "opus" else 8
     meta_left_len = 4 + model_len + 10 + 8 + dur_len + work_len
@@ -844,8 +844,9 @@ def _render_session_option(
             line_a_raw = text[:first_line_chars]
             remainder = text[first_line_chars:]
             line_a = _rich_escape(line_a_raw)
-            msg_color = C_FAINT if stale else C_DIM
-            lines.append(f"{INDENT}[{msg_color}]{prefix}{line_a}[/{msg_color}]")
+            msg_color = C_DIM if stale else C_MID
+            lbl_color = C_FAINT if stale else C_DIM
+            lines.append(f"{INDENT}[{lbl_color}]{prefix}[/{lbl_color}][{msg_color}]{line_a}[/{msg_color}]")
             if remainder:
                 line_b_raw = remainder[:line_chars]
                 line_b = _rich_escape(line_b_raw)
