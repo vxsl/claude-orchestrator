@@ -124,6 +124,7 @@ _vterm_set_utf8 = _sig("vterm_set_utf8", None, [c_void_p, c_int])
 
 # Constants
 _DAMAGE_ROW = 1
+_PROP_CURSORSHAPE = 7   # VTERM_PROP_CURSORSHAPE: 1=block, 2=underline, 3=bar
 _PROP_MOUSE = 8
 _CELL_SIZE = ctypes.sizeof(VTermScreenCell)
 
@@ -152,6 +153,7 @@ class VTermBackend:
         self.columns = cols
         self.cursor_y = 0
         self.cursor_x = 0
+        self.cursor_shape = 1  # 1=block, 2=underline, 3=bar (VTERM_PROP_CURSORSHAPE)
         self.mouse_tracking = False
 
         # Prevent GC of callback pointers
@@ -203,7 +205,9 @@ class VTermBackend:
         return 0
 
     def _on_settermprop(self, prop, val, user):
-        if prop == _PROP_MOUSE and val:
+        if prop == _PROP_CURSORSHAPE and val:
+            self.cursor_shape = ctypes.cast(val, POINTER(c_int))[0]
+        elif prop == _PROP_MOUSE and val:
             self.mouse_tracking = ctypes.cast(val, POINTER(c_int))[0] > 0
         return 0
 
@@ -285,7 +289,7 @@ class VTermBackend:
             _vterm_screen_get_cell(screen, pos, cell_ref)
 
             if x == cursor_x:
-                key = ("cursor",)
+                key = ("cursor", self.cursor_shape)
             else:
                 # Inline color conversion to avoid method call overhead
                 fg_color = self._color_to_str(cell.fg, ctmp, screen)

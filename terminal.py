@@ -108,6 +108,8 @@ _STRIP_CSI_EXT = re.compile(
     r"\x1b\[\??[\d;]*[=><][\d;]*[a-zA-Z]"
     r"|\x1b\[\??[\d;]* [a-zA-Z]"
 )
+# DECSCUSR: ESC [ Ps SP q — cursor shape (space is the intermediate byte)
+_DECSCUSR = re.compile(r"\x1b\[(\d*) q")
 
 
 class _SeqFilter:
@@ -308,6 +310,7 @@ class TerminalWidget(Widget, can_focus=True):
         self._nrow = 24
         self._mouse_tracking = False
         self._sync_output = False  # DEC private mode 2026 (synchronized output)
+        self._cursor_shape = 1  # DECSCUSR: 1/2=block, 3/4=underline, 5/6=bar
 
         # Scrollback scroll offset (0 = live screen, >0 = scrolled up)
         self._scroll_offset = 0
@@ -673,6 +676,9 @@ class TerminalWidget(Widget, can_focus=True):
                     self._sync_output = True
                 if "2026l" in params:
                     self._sync_output = False
+        for m in _DECSCUSR.finditer(data):
+            ps = int(m.group(1)) if m.group(1) else 0
+            self._cursor_shape = 1 if ps <= 2 else (2 if ps <= 4 else 3)
         data = self._seq_filter.feed(data)
         try:
             self._stream.feed(data)
@@ -835,8 +841,10 @@ class TerminalWidget(Widget, can_focus=True):
         cached = cls._style_cache.get(key)
         if cached is not None:
             return cached
-        if key == ("cursor",):
-            style = Style(reverse=True)
+        if isinstance(key, tuple) and key[0] == "cursor":
+            shape = key[1] if len(key) > 1 else 1
+            # shape: 1=block, 2=underline, 3=bar (libvterm) or DECSCUSR 5/6
+            style = Style(reverse=True) if shape == 1 else Style(underline=True)
         else:
             fg, bg, attrs = key
             style = Style(
@@ -903,7 +911,7 @@ class TerminalWidget(Widget, can_focus=True):
             cell = backend.get_cell(y, x)
 
             if x == cursor_x:
-                style = Style(reverse=True)
+                style = Style(reverse=True) if backend.cursor_shape == 1 else Style(underline=True)
             else:
                 attrs = cell.attrs
                 style = Style(
@@ -946,7 +954,7 @@ class TerminalWidget(Widget, can_focus=True):
             char: Char = line[x]
 
             if x == cursor_x and self.has_focus:
-                style = Style(reverse=True)
+                style = Style(reverse=True) if self._cursor_shape in (1, 2) else Style(underline=True)
             else:
                 style = _char_style(char)
 
