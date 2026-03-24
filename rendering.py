@@ -1087,9 +1087,17 @@ def _render_notified_session_option(
 
 # ─── Quiet session separator ──────────────────────────────────────
 
-QUIET_SEPARATOR_LABEL = f"[{C_DIM}]────────────────────────────────────────────────────────────[/{C_DIM}]"
-DEFERRED_SEPARATOR_LABEL = f"[{C_DEFER}]⏸ deferred ─────────────────────────────────────────────────[/{C_DEFER}]"
-THINKING_SEPARATOR_LABEL = f"[bold {C_BLUE}]◉[/bold {C_BLUE}] [{C_BLUE}]thinking ─────────────────────────────────────────────────[/{C_BLUE}]"
+def QUIET_SEPARATOR_LABEL(width: int = 60) -> str:
+    return f"[{C_DIM}]{'─' * width}[/{C_DIM}]"
+
+def DEFERRED_SEPARATOR_LABEL(width: int = 60) -> str:
+    prefix = "⏸ deferred "
+    return f"[{C_DEFER}]{prefix}{'─' * max(2, width - len(prefix))}[/{C_DEFER}]"
+
+def THINKING_SEPARATOR_LABEL(width: int = 60) -> str:
+    prefix = "◉ thinking "
+    dashes = max(2, width - len(prefix))
+    return f"[bold {C_BLUE}]◉[/bold {C_BLUE}] [{C_BLUE}]thinking {'─' * dashes}[/{C_BLUE}]"
 
 
 # ─── Todo rendering ────────────────────────────────────────────────

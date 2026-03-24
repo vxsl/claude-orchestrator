@@ -1771,7 +1771,7 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
             idx += 1
 
         if all_elevated and (quiet_active or quiet_deferred):
-            options.append(Option(QUIET_SEPARATOR_LABEL, id="__separator__", disabled=True))
+            options.append(Option(QUIET_SEPARATOR_LABEL(lw), id="__separator__", disabled=True))
             idx += 1
 
         earlier_sep_inserted = False
@@ -1791,7 +1791,7 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
             idx += 1
 
         if quiet_thinking:
-            options.append(Option(THINKING_SEPARATOR_LABEL, id="__sep_thinking__", disabled=True))
+            options.append(Option(THINKING_SEPARATOR_LABEL(lw), id="__sep_thinking__", disabled=True))
             idx += 1
             for s in quiet_thinking:
                 act = session_activity(s, self._last_seen_cache)
@@ -1802,7 +1802,7 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
                 idx += 1
 
         if quiet_deferred:
-            options.append(Option(DEFERRED_SEPARATOR_LABEL, id="__sep_deferred__", disabled=True))
+            options.append(Option(DEFERRED_SEPARATOR_LABEL(lw), id="__sep_deferred__", disabled=True))
             idx += 1
             for s in quiet_deferred:
                 act = session_activity(s, self._last_seen_cache)
