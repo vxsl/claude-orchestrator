@@ -761,7 +761,7 @@ def _render_session_option(
 
     # Line 2: only show model if not opus; stats dim, tokens colored
     # sid shown here only when a badge occupies line 1's right slot
-    model_color = C_FAINT if archived else C_BLUE
+    model_color = C_FAINT if archived else C_MID
     model_part = "" if model == "opus" else f"[{model_color}]{model:<8}[/{model_color}]"
     tokens_fmt = f"[{C_FAINT}]{tokens_plain}[/{C_FAINT}]" if archived else _colored_tokens(s)
     tok_pad = " " * max(1, 8 - len(tokens_plain))
@@ -883,7 +883,7 @@ def _render_content_search_result(
     line1 = f" \u2738 {title}{' ' * fill}[{C_YELLOW}]{hits_str}[/{C_YELLOW}]"
 
     # Line 2: only show model if not opus; stats dim, age mid, sid faint
-    model_part = "" if model == "opus" else f"[{C_BLUE}]{model:<8}[/{C_BLUE}]"
+    model_part = "" if model == "opus" else f"[{C_MID}]{model:<8}[/{C_MID}]"
     dur_str = f"{duration:<8}" if duration else ""
     dur_len = 8 if duration else 0
     model_len = 0 if model == "opus" else 8
@@ -1010,7 +1010,7 @@ def _render_notified_session_option(
         line1 = f" {icon} {title_fmt}{' ' * fill}[{C_FAINT}]{sid}[/{C_FAINT}]"
 
     # Line 2: sid shown here only when badge occupies line 1's right slot
-    model_part = "" if model == "opus" else f"[{C_BLUE}]{model:<8}[/{C_BLUE}]"
+    model_part = "" if model == "opus" else f"[{C_MID}]{model:<8}[/{C_MID}]"
     tokens_fmt = _colored_tokens(s)
     tok_pad = " " * max(1, 8 - len(tokens_plain))
     dur_str = f"{duration:<8}" if duration else ""
