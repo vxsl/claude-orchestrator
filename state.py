@@ -136,6 +136,7 @@ COMMAND_REGISTRY: list[CommandDef] = [
     CommandDef("ticket-create", ["jira-create", "tc"], "Create a new Jira ticket"),
     CommandDef("solve", [], "Run ticket-solve for a ticket", requires_ws=True),
     CommandDef("branches", ["branch", "br", "worktree", "wt"], "Browse branches & worktrees", requires_ws=True),
+    CommandDef("rr", [], "Launch rr.sh branch/worktree manager"),
     CommandDef("files", ["file", "edit"], "Open file picker", requires_ws=True),
     CommandDef("wip", [], "Quick WIP commit", requires_ws=True),
     CommandDef("restage", [], "Unstage last 2 WIP commits", requires_ws=True),

@@ -57,7 +57,7 @@ DEFAULT_KEYS: dict[str, tuple[str, str, bool, bool]] = {
     "ship": ("P", "", False, False),
     "ticket": ("T", "", False, False),
     "branches": ("B", "", False, False),
-    "rr": ("ctrl+r", "", False, False),
+    "rr": ("ctrl+g", "", False, False),
     # Command palette
     "command_palette": ("colon", ":", True, False),
     # Other
