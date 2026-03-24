@@ -326,7 +326,7 @@ class TodoScreen(_VimOptionListMixin, ModalScreen[None]):
         text-style: bold;
     }}
     #todo-active, #todo-archived {{
-        height: auto;
+        height: 1fr;
         margin: 0 1; padding: 0;
         border: none;
         background: {BG_BASE};
