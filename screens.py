@@ -3170,7 +3170,7 @@ class CurrentSessionsScreen(_VimOptionListMixin, ModalScreen[None]):
             yield OptionList(id="csd-sessions")
             yield Static(f"[{C_DIM}]No sessions active today[/{C_DIM}]", id="csd-no-sessions")
             yield Static(
-                f"[{C_DIM}]↑↓/jk nav  enter/l open ws  r resume  esc back[/{C_DIM}]",
+                f"[{C_DIM}]↑↓/jk nav  enter/l/r open  ^H/esc back[/{C_DIM}]",
                 id="csd-help",
             )
 
@@ -3301,23 +3301,14 @@ class CurrentSessionsScreen(_VimOptionListMixin, ModalScreen[None]):
             return None, None
 
     def action_select_session(self) -> None:
-        ws, _sid = self._get_selected()
-        if ws:
-            app = self.app
-            app.tabs.open_tab(ws.id, ws.name, "\u25cf")
-            app._apply_tab_switch()
+        ws, sid = self._get_selected()
+        if ws and sid:
+            self.app.launch_claude_session(ws, session_id=sid)
 
     def action_resume(self) -> None:
         ws, sid = self._get_selected()
         if ws and sid:
-            app = self.app
-            app.tabs.open_tab(ws.id, ws.name, "\u25cf")
-            app._apply_tab_switch()
-            app.call_after_refresh(
-                lambda w=ws, s=sid: app.call_after_refresh(
-                    lambda w=w, s=s: app.launch_claude_session(w, session_id=s)
-                )
-            )
+            self.app.launch_claude_session(ws, session_id=sid)
 
     def action_command_palette(self) -> None:
         self.app.action_command_palette()
