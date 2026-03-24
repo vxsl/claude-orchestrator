@@ -156,24 +156,26 @@ class OrchestratorApp(App):
         height: 1; padding: 0 2; background: {BG_CHROME}; color: {C_DIM}; dock: bottom;
     }}
     #main-body {{ height: 1fr; }}
-    #main-lists {{ height: 2fr; }}
-    #main-lower {{ height: 3fr; background: {BG_RAISED}; }}
-    .main-list-pane {{ height: 1fr; border: blank; }}
+    #main-lists {{ height: auto; max-height: 70%; }}
+    #main-lower {{ height: 1fr; background: {BG_RAISED}; }}
+    .main-list-pane {{ width: 1fr; border: blank; }}
     .main-list-pane.pane-focused {{ border: round {C_BLUE}; background: {BG_SURFACE}; }}
     .main-list-label {{
         height: 1; padding: 0 2;
         color: {C_BLUE}; text-style: bold;
     }}
-    #main-ws-pane {{ width: 3fr; }}
-    #main-sessions-pane {{ width: 2fr; min-width: 36; border-left: blank; }}
+    #main-ws-pane {{ width: 2fr; }}
+    #main-sessions-pane {{ width: 1fr; min-width: 36; }}
     #ws-table {{
-        height: 1fr; margin: 0; padding: 0;
+        height: auto; margin: 0 1; padding: 0;
         border: none; background: {BG_BASE};
     }}
+    #ws-table > .option-list--option-highlighted {{ background: #101010; }}
     #preview-sessions {{
-        height: 1fr; width: 100%; margin: 0; padding: 0;
+        height: auto; width: 100%; margin: 0 1; padding: 0;
         border: none; background: {BG_BASE};
     }}
+    #preview-sessions > .option-list--option-highlighted {{ background: #101010; }}
     #main-no-sessions {{ padding: 1 2; color: {C_DIM}; }}
     .main-tig-wrap {{ height: 1fr; border: blank; background: {BG_RAISED}; }}
     .main-tig-wrap.pane-focused {{ border: round {C_BLUE}; background: {BG_RAISED}; }}
@@ -356,7 +358,18 @@ class OrchestratorApp(App):
                     yield OptionList(id="preview-sessions")
                     yield Static(f"[{C_DIM}]No sessions[/{C_DIM}]", id="main-no-sessions")
             with Horizontal(id="main-lower"):
-                pass  # tig widgets mounted dynamically in on_mount / _update_main_tig
+                with Vertical(id="main-tig-status-wrap", classes="main-tig-wrap"):
+                    yield TerminalWidget(
+                        command="tig status",
+                        passthrough_keys={"ctrl+j", "ctrl+k", "ctrl+h", "backspace"},
+                        id="main-tig-status",
+                    )
+                with Vertical(id="main-tig-log-wrap", classes="main-tig-wrap"):
+                    yield TerminalWidget(
+                        command="tig",
+                        passthrough_keys={"ctrl+j", "ctrl+k", "ctrl+h", "backspace"},
+                        id="main-tig-log",
+                    )
         yield SearchInput(placeholder="Search...", id="search-input")
         yield QuickNoteInput(placeholder="note: ", id="note-input")
         yield RenameInput(placeholder="rename: ", id="rename-input")
@@ -371,9 +384,8 @@ class OrchestratorApp(App):
         # Hide sessions pane items until a ws is selected
         self.query_one("#preview-sessions", OptionList).display = False
         self.query_one("#main-no-sessions").display = False
-        self.query_one("#main-lower").display = False
 
-        # Mount tig after layout is computed
+        # Start tig after layout is computed so terminal size is correct
         self.call_after_refresh(self._init_main_tig)
 
         # ── Staggered timers ──
@@ -465,11 +477,9 @@ class OrchestratorApp(App):
             return  # already showing this repo
 
         self._main_tig_cwd = cwd
-        lower = self.query_one("#main-lower")
 
+        self._stop_main_tig()
         if not cwd:
-            self._stop_main_tig()
-            lower.display = False
             return
 
         if not self._main_tig_env:
@@ -477,35 +487,10 @@ class OrchestratorApp(App):
             self._main_tigrc_path = tigrc
             self._main_tig_env = {"TIGRC_USER": tigrc, "GIT_OPTIONAL_LOCKS": "0"}
 
-        lower.display = True
-
-        existing_wraps = list(lower.query(".main-tig-wrap"))
-        if existing_wraps:
-            # Restart tig in-place — avoids DOM remove+mount race (remove() is async)
-            self._stop_main_tig()
-            for tw in lower.query(TerminalWidget):
-                tw._cwd = cwd
-            self.call_after_refresh(self._start_main_tig)
-        else:
-            # First mount
-            status_wrap = Vertical(id="main-tig-status-wrap", classes="main-tig-wrap")
-            log_wrap = Vertical(id="main-tig-log-wrap", classes="main-tig-wrap")
-            lower.mount(status_wrap, log_wrap)
-            status_wrap.mount(TerminalWidget(
-                command="tig status",
-                env=self._main_tig_env,
-                cwd=cwd,
-                passthrough_keys={"ctrl+j", "ctrl+k", "ctrl+h", "backspace"},
-                id="main-tig-status",
-            ))
-            log_wrap.mount(TerminalWidget(
-                command="tig",
-                env=self._main_tig_env,
-                cwd=cwd,
-                passthrough_keys={"ctrl+j", "ctrl+k", "ctrl+h", "backspace"},
-                id="main-tig-log",
-            ))
-            self.call_after_refresh(self._start_main_tig)
+        for tw in self.query("#main-lower TerminalWidget"):
+            tw._cwd = cwd
+            tw._extra_env = self._main_tig_env
+        self.call_after_refresh(self._start_main_tig)
 
     def _start_main_tig(self):
         try:
