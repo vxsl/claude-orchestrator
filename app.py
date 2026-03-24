@@ -7,10 +7,21 @@ and external process actions in actions.py.
 
 from __future__ import annotations
 
+import logging
 import os
 import subprocess
 import time as _time
 from pathlib import Path
+
+_perf_log = logging.getLogger("orch.perf")
+_PERF_ENABLED = os.environ.get("ORCH_PERF_LOG", "")
+if _PERF_ENABLED:
+    _perf_handler = logging.FileHandler(
+        Path.home() / ".cache" / "claude-orchestrator" / "perf.log"
+    )
+    _perf_handler.setFormatter(logging.Formatter("%(asctime)s %(message)s", datefmt="%H:%M:%S"))
+    _perf_log.addHandler(_perf_handler)
+    _perf_log.setLevel(logging.WARNING)
 
 from textual import on, work
 from textual.app import App, ComposeResult
@@ -533,6 +544,8 @@ class OrchestratorApp(App):
         We just need to re-read from the DB (3ms) and refresh the UI.
         Rate-limited to avoid flooding the UI thread during heavy activity.
         """
+        if _PERF_ENABLED:
+            _perf_log.warning("_on_rust_engine_update: bridge callback fired")
         now = _time.monotonic()
         if now - getattr(self, '_last_rust_update', 0) < 1.0:
             # Schedule a trailing-edge update if not already pending
@@ -550,9 +563,14 @@ class OrchestratorApp(App):
         self._last_rust_update = _time.monotonic()
         self._do_refresh_from_db()
 
+    @staticmethod
+    def _session_fingerprint(sessions):
+        return {(s.session_id, s.is_live, s.last_message_role, s.last_activity) for s in sessions}
+
     @work(thread=True, exclusive=True, group="rust_engine")
     def _do_refresh_from_db(self):
         """Re-read sessions from SQLite and update the UI."""
+        _t0 = _time.monotonic() if _PERF_ENABLED else 0
         threads = discover_threads()
         apply_cached_names(threads)
 
@@ -561,8 +579,18 @@ class OrchestratorApp(App):
             sessions.extend(t.sessions)
         sessions.sort(key=lambda s: s.last_activity or "", reverse=True)
 
+        # Skip UI update if nothing actually changed
+        if self._session_fingerprint(self.state.sessions) == self._session_fingerprint(sessions):
+            if _PERF_ENABLED:
+                _perf_log.warning("_do_refresh_from_db: %.1fms (skipped, no changes)",
+                                  (_time.monotonic() - _t0) * 1000)
+            return
+
         from workstream_synthesizer import get_discovered_workstreams
         discovered = get_discovered_workstreams(threads)
+        if _PERF_ENABLED:
+            _perf_log.warning("_do_refresh_from_db: %.1fms (changed, updating UI)",
+                              (_time.monotonic() - _t0) * 1000)
         self.call_from_thread(self._apply_sessions, sessions, threads, discovered)
 
     def _on_liveness_file_change(self):
@@ -911,6 +939,7 @@ class OrchestratorApp(App):
 
     def _do_refresh_ws_table(self):
         """Actually rebuild the workstreams table (called via debounce timer)."""
+        _t0 = _time.monotonic() if _PERF_ENABLED else 0
         self._refresh_pending = False
         try:
             table = self.query_one("#ws-table", OptionList)
@@ -977,6 +1006,9 @@ class OrchestratorApp(App):
             self._update_all_bars()
             new_key = self._olist_cursor_key(table)
             self._update_preview(force=(new_key != old_key))
+        if _PERF_ENABLED:
+            _perf_log.warning("_do_refresh_ws_table: %.1fms (%d items)",
+                              (_time.monotonic() - _t0) * 1000, len(items))
 
     def _selected_ws(self) -> Workstream | None:
         try:
@@ -1018,9 +1050,7 @@ class OrchestratorApp(App):
         if untitled:
             title_sessions(untitled)
 
-        def _fingerprint(sl):
-            return {(s.session_id, s.is_live, s.last_message_role, s.last_activity) for s in sl}
-        if _fingerprint(self.state.sessions) == _fingerprint(sessions):
+        if self._session_fingerprint(self.state.sessions) == self._session_fingerprint(sessions):
             # Sessions unchanged but titles may have updated
             if untitled:
                 self.call_from_thread(self._notify_sessions_changed)
@@ -1079,8 +1109,7 @@ class OrchestratorApp(App):
         self.state.update_sessions(sessions, threads, discovered)
         if not self._detail_screen_active:
             self._preview_ws_id = None
-            with self.batch_update():
-                self._refresh_ws_table()
+            self._refresh_ws_table_debounced()
         for screen in self.screen_stack:
             screen.post_message(SessionsChanged())
 
