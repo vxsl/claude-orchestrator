@@ -463,6 +463,16 @@ from threads import Thread, ThreadActivity, session_activity, load_last_seen, ma
 from rendering import _best_activity, _all_sessions_seen, _is_today
 
 
+def _drop_zombie_sessions(sessions):
+    """Filter out sessions that have never received a message and are no longer live.
+
+    These are artefacts of pressing 'c' and going back without typing — they clutter
+    the session count without containing any real content.  Live sessions are kept
+    regardless of message_count so newly-spawned sessions are visible while running.
+    """
+    return [s for s in sessions if s.message_count > 0 or s.is_live]
+
+
 class AppState:
     """Central state container for the orchestrator.
 
@@ -963,10 +973,12 @@ class AppState:
                             sessions.append(s)
                             seen.add(s.session_id)
             sessions.sort(key=lambda s: s.last_activity or "", reverse=True)
+            sessions = _drop_zombie_sessions(sessions)
             self._sessions_for_ws_cache[cache_key] = sessions
             return sessions
 
         result = find_sessions_for_ws(ws, self.sessions)
+        result = _drop_zombie_sessions(result)
         self._sessions_for_ws_cache[cache_key] = result
         return result
 
