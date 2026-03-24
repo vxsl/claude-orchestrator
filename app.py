@@ -593,20 +593,56 @@ class OrchestratorApp(App):
 
     def _render_tab_bar(self) -> str:
         """Render the tab bar line as Rich markup."""
+        # Detect if a ClaudeSessionScreen is currently active (on top of the stack).
+        css_ws_id: str | None = None
+        css_sess_label: str | None = None
+        try:
+            from claude_session_screen import ClaudeSessionScreen as CSS
+            if isinstance(self.screen, CSS):
+                css_ws_id = self.screen._ws.id
+                sid = self.screen._session_id
+                sess = self.state.get_session(sid)
+                if sess and sess.title:
+                    raw = sess.title[:14] + "\u2026" if len(sess.title) > 14 else sess.title
+                else:
+                    raw = sid[:8]
+                css_sess_label = raw
+        except Exception:
+            pass
+
         parts = []
         for i, tab in enumerate(self.tabs.tabs):
             prefix = f"{tab.icon} " if tab.icon else ""
-            label = tab.label[:20] + "\u2026" if len(tab.label) > 20 else tab.label
             is_permanent = tab.ws_id is None
             is_active = i == self.tabs.active_idx
-            if is_active and is_permanent:
-                parts.append(f"[bold italic {C_MID} on {BG_BASE}] {prefix}{_rich_escape(label)} [/]")
+            has_session = (not is_permanent) and (tab.ws_id == css_ws_id) and css_sess_label
+
+            ws_label = tab.label[:16] + "\u2026" if (has_session and len(tab.label) > 16) else (
+                tab.label[:20] + "\u2026" if len(tab.label) > 20 else tab.label
+            )
+
+            if has_session:
+                sep = f"[{C_FAINT}] \u203a [/{C_FAINT}]"
+                if is_active:
+                    content = (
+                        f"[bold {C_BLUE} on {BG_BASE}] {prefix}{_rich_escape(ws_label)}[/bold {C_BLUE} on {BG_BASE}]"
+                        f"[on {BG_BASE}]{sep}[{C_MID}]{_rich_escape(css_sess_label)}[/{C_MID}] [/on {BG_BASE}]"
+                    )
+                else:
+                    content = (
+                        f"[{C_DIM} on {BG_RAISED}] {prefix}{_rich_escape(ws_label)}[/{C_DIM} on {BG_RAISED}]"
+                        f"[on {BG_RAISED}]{sep}[{C_FAINT}]{_rich_escape(css_sess_label)}[/{C_FAINT}] [/on {BG_RAISED}]"
+                    )
+            elif is_active and is_permanent:
+                content = f"[bold italic {C_MID} on {BG_BASE}] {prefix}{_rich_escape(ws_label)} [/]"
             elif is_active:
-                parts.append(f"[bold {C_BLUE} on {BG_BASE}] {prefix}{_rich_escape(label)} [/]")
+                content = f"[bold {C_BLUE} on {BG_BASE}] {prefix}{_rich_escape(ws_label)} [/]"
             elif is_permanent:
-                parts.append(f"[italic {C_FAINT} on {BG_RAISED}] {prefix}{_rich_escape(label)} [/]")
+                content = f"[italic {C_FAINT} on {BG_RAISED}] {prefix}{_rich_escape(ws_label)} [/]"
             else:
-                parts.append(f"[{C_DIM} on {BG_RAISED}] {prefix}{_rich_escape(label)} [/{C_DIM} on {BG_RAISED}]")
+                content = f"[{C_DIM} on {BG_RAISED}] {prefix}{_rich_escape(ws_label)} [/{C_DIM} on {BG_RAISED}]"
+
+            parts.append(content)
             if i < len(self.tabs.tabs) - 1:
                 parts.append(f"[{C_FAINT}]\u2502[/{C_FAINT}]")
         return "".join(parts)
@@ -1734,6 +1770,7 @@ class OrchestratorApp(App):
                 if ws.id and self._ws_pending_session.get(ws.id) == screen._session_id:
                     del self._ws_pending_session[ws.id]
             self._refresh_ws_table()
+            self._sync_tab_bar()
             if callback:
                 callback(result)
         self.push_screen(screen, callback=_on_dismiss)
