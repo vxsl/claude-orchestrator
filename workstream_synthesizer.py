@@ -230,15 +230,35 @@ def synthesize_workstreams(
 
     for i in range(0, len(unassigned), BATCH_SIZE):
         batch = unassigned[i:i + BATCH_SIZE]
-        prompt = _build_prompt(batch, manual_workstreams, all_threads=threads, assignments=assignments)
+
+        # Load discovered workstreams so Haiku sees them as existing context,
+        # preventing duplicate workstreams across batches and re-runs.
+        discovered = _load_discovered()
+        discovered_by_id = {ws["id"]: ws for ws in discovered}
+        discovered_as_ws = [
+            Workstream(
+                id=d["id"],
+                name=d.get("name", ""),
+                description=d.get("description", ""),
+                category=Category(d.get("category", "personal")),
+                thread_ids=list(
+                    set(d.get("thread_ids", []))
+                    | {tid for tid, wsid in assignments.items() if wsid == d["id"]}
+                ),
+            )
+            for d in discovered
+        ]
+
+        prompt = _build_prompt(
+            batch,
+            manual_workstreams + discovered_as_ws,
+            all_threads=threads,
+            assignments=assignments,
+        )
         actions = _call_llm(prompt)
 
         if not actions:
             continue
-
-        # Load existing discovered workstreams
-        discovered = _load_discovered()
-        discovered_by_id = {ws["id"]: ws for ws in discovered}
 
         for action in actions:
             act = action.get("action")
