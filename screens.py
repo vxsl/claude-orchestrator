@@ -1707,8 +1707,10 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
             no_sess.display = False
             old_sid = self._highlighted_session_id(olist)
             old_idx = olist.highlighted
+            old_scroll_y = olist.scroll_y
             self._build_session_list()
             self._restore_highlight_by_sid(olist, self._detail_sessions, old_sid, old_idx)
+            olist.scroll_y = old_scroll_y
         else:
             olist.display = False
             no_sess.display = True
@@ -1735,8 +1737,10 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
                 self._last_arch_fp = arch_fp
                 old_sid = self._highlighted_session_id(arch_olist)
                 old_arch_idx = arch_olist.highlighted
+                old_arch_scroll_y = arch_olist.scroll_y
                 self._build_archived_list()
                 self._restore_highlight_by_sid(arch_olist, self._archived_sessions, old_sid, old_arch_idx)
+                arch_olist.scroll_y = old_arch_scroll_y
         else:
             arch_olist.display = False
             no_arch.display = True
