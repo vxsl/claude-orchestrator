@@ -745,16 +745,19 @@ def _render_session_option(
     duration = s.duration_display
     age_str = s.age
 
-    # Title styling: committed = dim, idle = dim, thinking = cyan, active = bright
+    # Title styling: committed = green, idle = dim, thinking = blue, done = green, active = bright
     # Stale/archived sessions shift to faint
     if archived:
         title_fmt = f"[{C_DIM}]{title_esc}[/{C_DIM}]"
     elif committed:
-        title_fmt = f"[{s_dim}]{title_esc}[/{s_dim}]"
+        title_fmt = f"[{C_GREEN}]{title_esc}[/{C_GREEN}]"
     elif act == ThreadActivity.IDLE:
         title_fmt = f"[{s_dim}]{title_esc}[/{s_dim}]"
     elif act == ThreadActivity.THINKING:
         title_fmt = f"[bold {C_BLUE}]{title_esc}[/bold {C_BLUE}]"
+    elif act in (ThreadActivity.AWAITING_INPUT, ThreadActivity.RESPONSE_READY):
+        title_color = C_DIM if stale else C_GREEN
+        title_fmt = f"[{title_color}]{title_esc}[/{title_color}]"
     else:
         title_color = C_DIM if stale else C_LIGHT
         title_fmt = f"[{title_color}]{title_esc}[/{title_color}]"
@@ -778,7 +781,7 @@ def _render_session_option(
     tokens_fmt = f"[{C_FAINT}]{tokens_plain}[/{C_FAINT}]" if archived else _colored_tokens(s)
     tok_pad = " " * max(1, 8 - len(tokens_plain))
     work_time = s.work_time_display
-    work_str = f"{work_time} think  " if work_time else ""
+    work_str = f"[italic]{work_time} think[/italic]  " if work_time else ""
     work_len = len(work_str) if work_time else 0
     model_len = 0 if model == "opus" else 8
     meta_left_len = 4 + model_len + 10 + 8 + work_len
@@ -1027,8 +1030,9 @@ def _render_notified_session_option(
     duration = s.duration_display
     age_str = s.age
 
-    # Title always bright for notified sessions
-    title_fmt = f"[{C_LIGHT}]{title_esc}[/{C_LIGHT}]"
+    # Title green for done (your-turn) sessions, bright otherwise
+    your_turn = act in (ThreadActivity.AWAITING_INPUT, ThreadActivity.RESPONSE_READY)
+    title_fmt = f"[{C_GREEN}]{title_esc}[/{C_GREEN}]" if your_turn else f"[{C_LIGHT}]{title_esc}[/{C_LIGHT}]"
 
     # Line 1: badge if present, else sid fills the right slot
     prefix_w = 3
