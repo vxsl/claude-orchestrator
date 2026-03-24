@@ -52,7 +52,7 @@ from rendering import (
     _short_model, _short_project,
     _render_session_option, _session_title,
     _render_todo_option, _render_notification_option,
-    _render_notified_session_option, QUIET_SEPARATOR_LABEL, DEFERRED_SEPARATOR_LABEL, THINKING_SEPARATOR_LABEL,
+    _render_notified_session_option, QUIET_SEPARATOR_LABEL, SHELVED_SEPARATOR_LABEL, THINKING_SEPARATOR_LABEL,
     _render_content_search_result, tool_bar_legend,
     TODO_UNDONE_ICON, TODO_DONE_ICON,
     _rich_escape,
@@ -929,7 +929,7 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         self.store = store
         self._detail_sessions: list[ClaudeSession] = []
         self._archived_sessions: list[ClaudeSession] = []
-        self._deferred_set: set[str] = set(ws.deferred_sessions)
+        self._shelved_set: set[str] = set(ws.shelved_sessions)
         self._feed_notifications: list[Notification] = []
         self._session_notifications: dict[str, Notification] = {}  # session_id -> latest notif
         self._throbber_frame: int = 0
@@ -1326,8 +1326,8 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         notified.sort(key=lambda s: self._session_notifications[s.session_id].dt, reverse=True)
         elevated.sort(key=lambda s: s.last_activity or "", reverse=True)
         quiet.sort(key=lambda s: s.last_activity or "", reverse=True)
-        quiet_active = [s for s in quiet if s.session_id not in self._deferred_set]
-        quiet_deferred = [s for s in quiet if s.session_id in self._deferred_set]
+        quiet_active = [s for s in quiet if s.session_id not in self._shelved_set]
+        quiet_shelved = [s for s in quiet if s.session_id in self._shelved_set]
         quiet_thinking = [s for s in quiet_active if session_activity(s, self._last_seen_cache) == ThreadActivity.THINKING]
         quiet_thinking.sort(key=lambda s: s.started_at or "", reverse=True)
         quiet_other = [s for s in quiet_active if s not in quiet_thinking]
@@ -1336,14 +1336,14 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         # If the notified/elevated/quiet structure changed, the in-place index
         # mapping is invalid (separator may have moved or appeared/disappeared).
         # Fall back to a full rebuild to avoid stale/duplicate entries.
-        has_separator = bool(all_elevated and (quiet_active or quiet_deferred))
+        has_separator = bool(all_elevated and (quiet_active or quiet_shelved))
         has_thinking_sep = bool(quiet_thinking)
-        has_deferred_sep = bool(quiet_deferred)
+        has_shelved_sep = bool(quiet_shelved)
         expected_count = (
             len(self._detail_sessions)
             + (1 if has_separator else 0)
             + (1 if has_thinking_sep else 0)
-            + (1 if has_deferred_sep else 0)
+            + (1 if has_shelved_sep else 0)
         )
         olist = self.query_one("#detail-sessions", OptionList)
         if len(all_elevated) != self._notified_count or olist.option_count != expected_count:
@@ -1403,13 +1403,13 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
                             olist.replace_option_prompt_at_index(idx, prompt)
                         idx += 1
 
-                if has_deferred_sep:
-                    idx += 1  # skip deferred separator
-                    for s in quiet_deferred:
+                if has_shelved_sep:
+                    idx += 1  # skip shelved separator
+                    for s in quiet_shelved:
                         if idx < olist.option_count:
                             act = session_activity(s, self._last_seen_cache)
                             seen = _is_session_seen(s, self._last_seen_cache)
-                            prompt = _render_session_option(s, act, self._throbber_frame, ws_repo_path=self.ws.repo_path, seen=seen, line_width=lw, deferred=True)
+                            prompt = _render_session_option(s, act, self._throbber_frame, ws_repo_path=self.ws.repo_path, seen=seen, line_width=lw, shelved=True)
                             olist.replace_option_prompt_at_index(idx, prompt)
                         idx += 1
 
@@ -1457,17 +1457,17 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
                     del self.ws.archived_sessions[sid]
                 self.store.update(self.ws)
             # Auto-undefer: if a new user message arrived after deferral, wake the session
-            undeferred = set()
+            unshelved = set()
             for s in all_sessions:
-                if s.session_id in self.ws.deferred_sessions:
-                    deferred_at = self.ws.deferred_sessions[s.session_id]
+                if s.session_id in self.ws.shelved_sessions:
+                    shelved_at = self.ws.shelved_sessions[s.session_id]
                     last_msg = s.last_user_message_at or ""
-                    if last_msg and deferred_at and self._parse_ts(last_msg) > self._parse_ts(deferred_at):
-                        undeferred.add(s.session_id)
-            if undeferred:
-                log.debug("load_detail: auto-undeferring %s", undeferred)
-                for sid in undeferred:
-                    del self.ws.deferred_sessions[sid]
+                    if last_msg and shelved_at and self._parse_ts(last_msg) > self._parse_ts(shelved_at):
+                        unshelved.add(s.session_id)
+            if unshelved:
+                log.debug("load_detail: auto-unshelving %s", unshelved)
+                for sid in unshelved:
+                    del self.ws.shelved_sessions[sid]
                 self.store.update(self.ws)
             hidden = set(self.ws.archived_sessions)
             # Hide the pending new session (from "c") until it has actual messages
@@ -1478,14 +1478,14 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
                 and not (s.session_id == pending_sid and s.message_count == 0)
             ]
             self._all_archived = [s for s in all_sessions if s.session_id in hidden]
-            self._deferred_set = set(self.ws.deferred_sessions)
-            log.debug("load_detail: active=%d archived=%d deferred=%d",
-                      len(self._all_sessions), len(self._all_archived), len(self._deferred_set))
+            self._shelved_set = set(self.ws.shelved_sessions)
+            log.debug("load_detail: active=%d archived=%d shelved=%d",
+                      len(self._all_sessions), len(self._all_archived), len(self._shelved_set))
         else:
             from actions import find_sessions_for_ws
             self._all_sessions = find_sessions_for_ws(self.ws, getattr(app, 'sessions', []))
             self._all_archived = []
-            self._deferred_set = set(self.ws.deferred_sessions)
+            self._shelved_set = set(self.ws.shelved_sessions)
 
         # If search is active, just update backing data silently — don't
         # rebuild the results list mid-search (it resets scroll/highlight and
@@ -1632,10 +1632,10 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         elevated.sort(key=lambda s: s.last_activity or "", reverse=True)
         quiet.sort(key=lambda s: s.last_activity or "", reverse=True)
 
-        # Split quiet into other, thinking, and deferred sections
-        # Order: other (top) → thinking → deferred (bottom)
-        quiet_active = [s for s in quiet if s.session_id not in self._deferred_set]
-        quiet_deferred = [s for s in quiet if s.session_id in self._deferred_set]
+        # Split quiet into other, thinking, and shelved sections
+        # Order: other (top) → thinking → shelved (bottom)
+        quiet_active = [s for s in quiet if s.session_id not in self._shelved_set]
+        quiet_shelved = [s for s in quiet if s.session_id in self._shelved_set]
         quiet_thinking = [s for s in quiet_active if session_activity(s, self._last_seen_cache) == ThreadActivity.THINKING]
         quiet_thinking.sort(key=lambda s: s.started_at or "", reverse=True)
         quiet_other = [s for s in quiet_active if s not in quiet_thinking]
@@ -1673,7 +1673,7 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
             options.append(Option(prompt, id=s.session_id))
             idx += 1
 
-        if all_elevated and (quiet_active or quiet_deferred):
+        if all_elevated and (quiet_active or quiet_shelved):
             options.append(Option(QUIET_SEPARATOR_LABEL(lw), id="__separator__", disabled=True))
             idx += 1
 
@@ -1704,21 +1704,21 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
                 options.append(Option(prompt, id=s.session_id))
                 idx += 1
 
-        if quiet_deferred:
-            options.append(Option(DEFERRED_SEPARATOR_LABEL(lw), id="__sep_deferred__", disabled=True))
+        if quiet_shelved:
+            options.append(Option(SHELVED_SEPARATOR_LABEL(lw), id="__sep_shelved__", disabled=True))
             idx += 1
-            for s in quiet_deferred:
+            for s in quiet_shelved:
                 act = session_activity(s, self._last_seen_cache)
                 seen = _is_session_seen(s, self._last_seen_cache)
-                prompt = _render_session_option(s, act, self._throbber_frame, ws_repo_path=self.ws.repo_path, seen=seen, line_width=lw, deferred=True)
+                prompt = _render_session_option(s, act, self._throbber_frame, ws_repo_path=self.ws.repo_path, seen=seen, line_width=lw, shelved=True)
                 options.append(Option(prompt, id=s.session_id))
                 idx += 1
 
         olist.clear_options()
         olist.add_options(options)
         self._animating_sessions = animating
-        log.debug("build_session_list: %d notified + %d elevated + %d quiet (%d deferred), option_count=%d",
-                  len(notified), len(elevated), len(quiet), len(quiet_deferred), olist.option_count)
+        log.debug("build_session_list: %d notified + %d elevated + %d quiet (%d shelved), option_count=%d",
+                  len(notified), len(elevated), len(quiet), len(quiet_shelved), olist.option_count)
 
     _ARCHIVED_PAGE_SIZE = 30
 
@@ -2495,16 +2495,16 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         if not oid or oid.startswith("__"):
             return
         sid = oid
-        if sid in self.ws.deferred_sessions:
-            del self.ws.deferred_sessions[sid]
-            self._deferred_set.discard(sid)
+        if sid in self.ws.shelved_sessions:
+            del self.ws.shelved_sessions[sid]
+            self._shelved_set.discard(sid)
             self.store.update(self.ws)
-            self.app.notify("Undeferred", timeout=1)
+            self.app.notify("Unshelved", timeout=1)
         else:
-            self.ws.deferred_sessions[sid] = datetime.now(timezone.utc).isoformat()
-            self._deferred_set.add(sid)
+            self.ws.shelved_sessions[sid] = datetime.now(timezone.utc).isoformat()
+            self._shelved_set.add(sid)
             self.store.update(self.ws)
-            self.app.notify("Deferred", timeout=1)
+            self.app.notify("Shelved", timeout=1)
         self._refresh()
 
     def action_spawn(self):
@@ -3001,7 +3001,7 @@ class ConfirmScreen(ModalScreen[bool]):
 # ─── Current Sessions Screen ─────────────────────────────────────────
 
 class CurrentSessionsScreen(_VimOptionListMixin, ModalScreen[None]):
-    """Cross-workstream view: all non-deferred, non-archived sessions active today."""
+    """Cross-workstream view: all non-shelved, non-archived sessions active today."""
 
     BINDINGS = [
         Binding("escape", "dismiss", "Back", priority=True),
@@ -3101,9 +3101,9 @@ class CurrentSessionsScreen(_VimOptionListMixin, ModalScreen[None]):
         results = []
         for ws in app.state.store.active:
             sessions = app.state.sessions_for_ws(ws, include_archived_sessions=False)
-            deferred = set(ws.deferred_sessions)
+            shelved = set(ws.shelved_sessions)
             for s in sessions:
-                if s.session_id in deferred:
+                if s.session_id in shelved:
                     continue
                 if not _is_today(s.last_activity or ""):
                     continue

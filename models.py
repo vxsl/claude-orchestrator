@@ -75,7 +75,7 @@ class Workstream:
     thread_ids: list[str] = field(default_factory=list)
     archived_thread_ids: list[str] = field(default_factory=list)  # deprecated, kept for compat
     archived_sessions: dict[str, str] = field(default_factory=dict)  # session_id → archived_at ISO timestamp
-    deferred_sessions: dict[str, str] = field(default_factory=dict)  # session_id → deferred_at ISO timestamp
+    shelved_sessions: dict[str, str] = field(default_factory=dict)  # session_id → shelved_at ISO timestamp
     repo_path: str = ""  # e.g. "/home/kyle/dev/claude-orchestrator"
     created_at: str = field(default_factory=lambda: datetime.now().isoformat())
     updated_at: str = field(default_factory=lambda: datetime.now().isoformat())
@@ -168,7 +168,10 @@ class Workstream:
             if old and "archived_sessions" not in d:
                 d["archived_sessions"] = {sid: "" for sid in old}
         d.setdefault("archived_sessions", {})
-        d.setdefault("deferred_sessions", {})
+        # Migrate deferred_sessions → shelved_sessions
+        if "deferred_sessions" in d and "shelved_sessions" not in d:
+            d["shelved_sessions"] = d.pop("deferred_sessions")
+        d.setdefault("shelved_sessions", {})
         d.setdefault("last_user_activity", "")
         d.setdefault("repo_path", "")
         d.setdefault("todos", [])

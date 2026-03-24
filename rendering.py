@@ -629,7 +629,7 @@ def _file_touchpoints(files: list[str]) -> str:
 def _render_session_option(
     s: ClaudeSession, act: ThreadActivity, throbber_frame: int = 0,
     title_width: int = 48, ws_repo_path: str = "", seen: bool = False,
-    line_width: int = 0, deferred: bool = False, archived: bool = False,
+    line_width: int = 0, shelved: bool = False, archived: bool = False,
 ) -> str:
     """Render a session as a formatted multi-line OptionList entry.
 
@@ -646,10 +646,10 @@ def _render_session_option(
     else:
         LINE_WIDTH = title_width + 20  # right-alignment anchor
 
-    # ── Deferred: amber-tinted and de-emphasized — overrides stale/committed styling ──
-    if deferred:
+    # ── Shelved: amber-tinted and de-emphasized — overrides stale/committed styling ──
+    if shelved:
         icon = f"[{C_SHELF}]⏸[/{C_SHELF}]"
-        badge = f"[{C_SHELF}]deferred[/{C_SHELF}]"
+        badge = f"[{C_SHELF}]shelved[/{C_SHELF}]"
         badge_w = 8
         model = _short_model(s.model)
         title_raw = _session_title(s)[:title_width]
@@ -1105,8 +1105,8 @@ def _render_notified_session_option(
 def QUIET_SEPARATOR_LABEL(width: int = 60) -> str:
     return f"[{C_DIM}]{'─' * width}[/{C_DIM}]"
 
-def DEFERRED_SEPARATOR_LABEL(width: int = 60) -> str:
-    prefix = "⏸ deferred "
+def SHELVED_SEPARATOR_LABEL(width: int = 60) -> str:
+    prefix = "⏸ shelved "
     return f"[{C_SHELF}]{prefix}{'─' * max(2, width - len(prefix))}[/{C_SHELF}]"
 
 def THINKING_SEPARATOR_LABEL(width: int = 60) -> str:
