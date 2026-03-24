@@ -3006,7 +3006,7 @@ class CurrentSessionsScreen(_VimOptionListMixin, ModalScreen[None]):
         Binding("backspace,ctrl+h", "dismiss", "back"),
         Binding("enter,l", "select_session", show=False),
         Binding("r", "resume", "Resume"),
-        Binding("ctrl+space", "archive_session", "Archive", show=False),
+        Binding("ctrl+@", "archive_session", "Archive", show=False),
         Binding("colon", "command_palette", ":", show=False),
         Binding("question_mark", "help", "?", show=False),
     ] + _VimOptionListMixin.VIM_BINDINGS
