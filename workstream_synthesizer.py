@@ -106,8 +106,12 @@ def _thread_context(thread: Thread) -> str:
 def _build_prompt(
     unassigned: list[Thread],
     manual_workstreams: list[Workstream],
+    all_threads: list[Thread] | None = None,
+    assignments: dict | None = None,
 ) -> str:
     """Build the synthesis prompt."""
+
+    thread_map = {t.thread_id: t for t in (all_threads or [])}
 
     # Existing manual workstreams for context
     existing_lines = []
@@ -116,9 +120,21 @@ def _build_prompt(
         for link in ws.links:
             if link.kind in ("worktree", "file"):
                 dirs.append(os.path.expanduser(link.value))
-        dir_str = ", ".join(dirs) if dirs else "no dirs"
+
+        # Also include project paths of threads already assigned to this workstream
+        projects: set[str] = set()
+        for tid in (ws.thread_ids or []):
+            if tid in thread_map:
+                projects.add(thread_map[tid].project_path)
+        if assignments:
+            for tid, wsid in assignments.items():
+                if wsid == ws.id and tid in thread_map:
+                    projects.add(thread_map[tid].project_path)
+
+        location_parts = dirs + sorted(projects - set(dirs))
+        loc_str = ", ".join(location_parts) if location_parts else "no dirs"
         existing_lines.append(
-            f'WS:{ws.id} | "{ws.name}" | {ws.category.value} | dirs: {dir_str}'
+            f'WS:{ws.id} | "{ws.name}" | {ws.category.value} | dirs: {loc_str}'
         )
 
     # Unassigned threads
@@ -214,7 +230,7 @@ def synthesize_workstreams(
 
     for i in range(0, len(unassigned), BATCH_SIZE):
         batch = unassigned[i:i + BATCH_SIZE]
-        prompt = _build_prompt(batch, manual_workstreams)
+        prompt = _build_prompt(batch, manual_workstreams, all_threads=threads, assignments=assignments)
         actions = _call_llm(prompt)
 
         if not actions:

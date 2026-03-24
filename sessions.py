@@ -477,17 +477,17 @@ class ClaudeSession:
             delta = datetime.now().astimezone() - dt
             seconds = int(delta.total_seconds())
             if seconds < 0:
-                return "just now"
+                return "now"
             if seconds < 60:
-                return f"{seconds}s ago"
+                return f"{seconds}s"
             minutes = seconds // 60
             if minutes < 60:
-                return f"{minutes}m ago"
+                return f"{minutes}m"
             hours = minutes // 60
             if hours < 24:
-                return f"{hours}h ago"
+                return f"{hours}h"
             days = hours // 24
-            return f"{days}d ago"
+            return f"{days}d"
         except (ValueError, TypeError):
             return "unknown"
 
@@ -940,6 +940,13 @@ def discover_sessions(
     if CLAUDE_PROJECTS_DIR == _real_projects:
         db_sessions = _discover_sessions_from_db(limit, project_filter, min_messages)
         if db_sessions is not None:
+            # The DB's is_live field may be stale if the daemon isn't running.
+            # Always overlay with a fresh PID check so sessions transition
+            # correctly even without the daemon.
+            live_ids = get_live_session_ids()
+            for s in db_sessions:
+                s.is_live = (s.session_id in live_ids
+                             or any(sid in live_ids for sid in s.all_session_ids))
             return db_sessions
 
     # Slow path: Python JSONL parsing (fallback when daemon isn't running)

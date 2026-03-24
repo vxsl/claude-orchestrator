@@ -83,7 +83,15 @@ class SessionBridge:
             self._thread = None
 
     def _listen_loop(self, callback: Callable[[], None]):
-        """Background thread: select() on pipe fd, invoke callback on data."""
+        """Background thread: select() on pipe fd, invoke callback on data.
+
+        The Rust daemon opens the FIFO write-side, sends one byte, then
+        closes it — so the read side sees EOF after each notification.
+        We reopen the FIFO on EOF rather than exiting, so the bridge
+        survives across multiple notifications.
+        """
+        import time as _time
+
         fd = self._pipe_fd
         if fd is None:
             return
@@ -97,11 +105,22 @@ class SessionBridge:
                     try:
                         data = os.read(fd, 4096)
                     except OSError:
-                        break
+                        data = b""
                     if not data:
-                        # EOF — writer (Rust daemon) closed the pipe.
-                        # Break to avoid busy-spinning on a dead FIFO.
-                        break
+                        # EOF — the Rust daemon closed its write fd.
+                        # Reopen to catch the next notification rather than
+                        # exiting (the daemon opens/closes per-write).
+                        os.close(fd)
+                        fd = None
+                        _time.sleep(0.05)
+                        try:
+                            fd = os.open(
+                                self.pipe_path, os.O_RDONLY | os.O_NONBLOCK
+                            )
+                            self._pipe_fd = fd
+                        except OSError:
+                            break  # pipe gone, daemon died
+                        continue
                     callback()
             except (OSError, ValueError):
                 break

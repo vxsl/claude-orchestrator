@@ -408,9 +408,13 @@ def discover_threads(min_messages: int = 1) -> list[Thread]:
     # Normalize .claude/worktrees/agent-*/ paths to the parent project so
     # subagent sessions fold into the main workstream instead of spawning
     # orphan "worktree-agent-XXXX" workstreams.
+    # Skip sessions with the virtual /subagents path — these are Agent-tool
+    # subprocesses with no real project_path; they'd form orphan workstreams.
     by_project: dict[str, list[ClaudeSession]] = {}
     for s in sessions:
         path = s.project_path
+        if path == "/subagents":
+            continue
         # .claude/worktrees/agent-XXXX → parent project
         if "/.claude/worktrees/" in path:
             parent = path.split("/.claude/worktrees/")[0]
