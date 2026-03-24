@@ -709,7 +709,7 @@ def parse_session(jsonl_path: Path) -> Optional[ClaudeSession]:
                 if ts:
                     if first_ts is None:
                         first_ts = ts
-                    if not _is_cli_local_message(data):
+                    if not _is_cli_local_message(data) and not _is_interrupt_marker(data):
                         last_ts = ts
 
                 # Track last message role (user or assistant)
@@ -854,7 +854,7 @@ def refresh_session_tail(session: ClaudeSession, tail_bytes: int = 8192) -> bool
                 continue
 
             ts = data.get("timestamp")
-            if ts and not _is_cli_local_message(data):
+            if ts and not _is_cli_local_message(data) and not _is_interrupt_marker(data):
                 session.last_activity = ts
 
             msg_type = data.get("type", "")

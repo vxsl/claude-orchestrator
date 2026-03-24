@@ -419,7 +419,12 @@ pub fn parse_session(jsonl_path: &Path) -> Result<Session> {
                 if first_ts.is_none() {
                     first_ts = Some(ts.to_string());
                 }
-                if !is_cli_local_message(&data) {
+                if !is_cli_local_message(&data)
+                    && !data
+                        .get("message")
+                        .map(|m| is_interrupt_marker(m))
+                        .unwrap_or(false)
+                {
                     last_ts = Some(ts.to_string());
                 }
             }
@@ -608,7 +613,13 @@ pub fn refresh_session_tail(session: &mut Session, tail_bytes: u64) -> Result<bo
         };
 
         if let Some(ts) = data["timestamp"].as_str() {
-            if !ts.is_empty() && !is_cli_local_message(&data) {
+            if !ts.is_empty()
+                && !is_cli_local_message(&data)
+                && !data
+                    .get("message")
+                    .map(|m| is_interrupt_marker(m))
+                    .unwrap_or(false)
+            {
                 session.last_activity = ts.to_string();
             }
         }
