@@ -165,6 +165,7 @@ class SessionHeaderWidget(Static):
 
     def on_resize(self, event) -> None:
         self._width = event.size.width
+        self._refresh_async()
 
     def _format_elapsed(self) -> str:
         secs = int(time.time() - self._start_time)
