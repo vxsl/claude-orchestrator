@@ -39,7 +39,7 @@ from thread_namer import get_session_title
 log = logging.getLogger("orch.claude_session")
 
 # Keys that pass through the TerminalWidget to the screen for panel navigation
-_PASSTHROUGH_KEYS = {"ctrl+j", "ctrl+k", "ctrl+e", "ctrl+h", "ctrl+z", "ctrl+backslash", "ctrl+b", "ctrl+x", "ctrl+@", "question_mark"}
+_PASSTHROUGH_KEYS = {"ctrl+j", "ctrl+k", "ctrl+e", "ctrl+h", "ctrl+z", "ctrl+backslash", "ctrl+b", "ctrl+x", "ctrl+@"}
 
 ORCH_DIR = str(Path(__file__).parent)
 
@@ -377,7 +377,6 @@ class ClaudeSessionScreen(Screen):
     BINDINGS = [
         Binding("ctrl+e", "extract_todo", "Extract todo", priority=True),
         Binding("ctrl+backslash", "go_back", "C-\\ back", priority=True),
-        Binding("question_mark", "help", "?", show=False),
     ]
 
     DEFAULT_CSS = f"""
