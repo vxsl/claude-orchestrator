@@ -999,8 +999,8 @@ class OrchestratorApp(App):
 
     def _render_filter_bar(self) -> str:
         filters = {
-            "all": "1:All", "work": "2:Work", "personal": "3:Personal",
-            "active": "4:Active", "stale": "5:Stale", "archived": "6:Archived",
+            "active": "1:Active", "work": "2:Work", "personal": "3:Personal",
+            "all": "4:All", "stale": "5:Stale", "archived": "6:Archived",
         }
         parts = []
         for key, label in filters.items():
