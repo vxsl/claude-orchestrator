@@ -1236,28 +1236,43 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         olist.focus()
 
     def on_screen_resume(self):
-        """Lightweight refresh when returning to a cached screen."""
+        """Fast screen push — show cached content immediately, refresh after first frame."""
         if not self._mounted_once:
             return  # on_mount handles first activation
         # Refresh workstream data (may have changed while screen was suspended)
         self.ws = self.store.get(self.ws.id) or self.ws
+        # Fast synchronous work: update the title from current ws data and focus.
+        # The session list is already rendered from the last visit (at most 1s stale)
+        # so we skip _load_detail_sessions here and defer it to the next frame.
+        try:
+            self.query_one("#detail-title", Static).update(self._render_title() + "  " + self._render_meta())
+        except Exception:
+            pass
+        self.query_one("#detail-sessions", OptionList).focus()
+        # Restart periodic refresh
+        self._refresh_timer = self.set_interval(30, self._periodic_refresh)
+        # Defer the heavy refresh work to after the first frame renders.
+        # This makes Enter → screen-appears ~10ms instead of ~300ms.
+        self.call_after_refresh(self._resume_refresh)
+
+    def _resume_refresh(self):
+        """Heavy refresh deferred from on_screen_resume — runs after first frame."""
         with self.app.batch_update():
             self._last_seen_cache = load_last_seen()
             self._mark_all_seen()
             self._load_feed()
             self._load_detail_sessions()
-            # Sync-refresh live sessions so activity badges are correct immediately
-            # (avoids brief stale "your turn" flash when returning from session view)
+            # Sync-refresh live sessions so activity badges are correct
             self._sync_refresh_live()
-            self.query_one("#detail-title", Static).update(self._render_title() + "  " + self._render_meta())
+            try:
+                self.query_one("#detail-title", Static).update(self._render_title() + "  " + self._render_meta())
+            except Exception:
+                pass
             try:
                 self.query_one("#detail-body", Static).update(self._render_body())
             except Exception:
                 pass
             self._update_pane_labels()
-        self.query_one("#detail-sessions", OptionList).focus()
-        # Restart periodic refresh
-        self._refresh_timer = self.set_interval(30, self._periodic_refresh)
 
     def on_screen_suspend(self):
         """Pause timers when screen is covered or dismissed."""
