@@ -435,9 +435,6 @@ def _render_ws_option(
 
     # ── Line 1: icon + name + indicators + branch ──
     name_esc = _rich_escape(ws.name)
-    indicators = _ws_indicators(ws, tmux_check=tmux_check)
-    ind_markup = f"  [{meta_dim}]{indicators}[/{meta_dim}]" if indicators else ""
-
     branch_markup = ""
     if git_status and git_status.branch and not git_status.error:
         branch_name = _rich_escape(git_status.branch)
@@ -454,7 +451,7 @@ def _render_ws_option(
         name_markup = f"[bold {C_BLUE}]{name_esc}[/bold {C_BLUE}]"
     else:
         name_markup = f"[{name_bold}{name_color}]{name_esc}[/{name_bold}{name_color}]"
-    line1 = f" {icon} {name_markup}{ind_markup}{branch_markup}"
+    line1 = f" {icon} {name_markup}{branch_markup}"
 
     # ── Line 2: metadata chain separated by dim dots ──
     sep = f" [{C_FAINT}]·[/{C_FAINT}] "

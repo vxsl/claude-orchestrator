@@ -164,7 +164,7 @@ class OrchestratorApp(App):
         height: 1; padding: 0 2;
         color: {C_BLUE}; text-style: bold;
     }}
-    #main-ws-pane {{ width: 2fr; }}
+    #main-ws-pane {{ width: 2fr; border: round {C_BLUE}; background: {BG_SURFACE}; }}
     #main-sessions-pane {{ width: 1fr; min-width: 36; }}
     #ws-table {{
         height: auto; margin: 0 1; padding: 0;
