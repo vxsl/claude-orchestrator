@@ -144,7 +144,10 @@ class OrchestratorApp(App):
         background: {BG_BASE};
     }}
     #top-bar {{
-        height: auto; max-height: 4; padding: 0 2; background: {BG_RAISED}; dock: top;
+        height: auto; max-height: 3; padding: 0 2; background: {BG_RAISED}; dock: top;
+    }}
+    #filter-bar {{
+        height: 1; padding: 0 1; background: {BG_CHROME}; dock: top;
     }}
     #summary-bar {{
         height: 1; padding: 0 1; background: {BG_CHROME}; color: {C_DIM}; dock: bottom;
@@ -325,6 +328,7 @@ class OrchestratorApp(App):
 
     def compose(self) -> ComposeResult:
         yield Static("", id="top-bar")
+        yield Static("", id="filter-bar")
         with Horizontal(id="main-content"):
             yield OptionList(id="ws-table")
             with VerticalScroll(id="preview-pane"):
@@ -961,12 +965,15 @@ class OrchestratorApp(App):
             lines = [
                 self._render_tab_bar(),
                 self._render_status_bar(),
-                self._render_filter_bar(),
             ]
             top = "\n".join(lines)
             if top != getattr(self, '_last_top_bar', ''):
                 self._last_top_bar = top
                 self.query_one("#top-bar", Static).update(top)
+            filters = self._render_filter_bar()
+            if filters != getattr(self, '_last_filter_bar', ''):
+                self._last_filter_bar = filters
+                self.query_one("#filter-bar", Static).update(filters)
             summary = self._render_summary_bar()
             if summary != getattr(self, '_last_summary_bar', ''):
                 self._last_summary_bar = summary
@@ -1002,11 +1009,21 @@ class OrchestratorApp(App):
             ("active", "Active"), ("work", "Work"), ("personal", "Personal"),
             ("all", "All"), ("stale", "Stale"), ("archived", "Archived"),
         ]
+        # Per-filter accent colors (inactive tint, active bg)
+        _FILTER_COLORS = {
+            "active": (C_CYAN,   "#0a1e2a"),
+            "work":   (C_CYAN,   "#0a1e2a"),
+            "personal": (C_PURPLE, "#1a1028"),
+            "all":    (C_MID,    "#111820"),
+            "stale":  (C_DIM,    "#111820"),
+            "archived": (C_DIM,  "#111820"),
+        }
         parts = []
         for i, (key, label) in enumerate(filters):
             n = i + 1
+            accent, active_bg = _FILTER_COLORS.get(key, (C_DIM, BG_RAISED))
             if self.state.filter_mode == key:
-                parts.append(f"[bold {C_CYAN}] ◆ {label} [/bold {C_CYAN}]")
+                parts.append(f"[bold {accent} on {active_bg}] ◆ {label} [/bold {accent} on {active_bg}]")
             else:
                 parts.append(f"[{C_FAINT}] {n} {label} [/{C_FAINT}]")
             if i < len(filters) - 1:
