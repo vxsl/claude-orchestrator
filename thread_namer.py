@@ -399,11 +399,23 @@ def refresh_thread_titles(threads: list[Thread]) -> int:
 
 
 _session_cache_memo: tuple[float, dict[str, str]] = (0.0, {})
+_session_cache_checked_at: float = 0.0  # monotonic time of last stat() check
 
 
 def _load_session_cache() -> dict[str, str]:
-    """Load {session_id: title} cache.  Mtime-cached to avoid redundant reads."""
-    global _session_cache_memo
+    """Load {session_id: title} cache.  Mtime-cached to avoid redundant reads.
+
+    The stat() check is rate-limited to once per 500ms so render paths that
+    call get_session_title() for every session (65+ per table refresh) don't
+    issue dozens of syscalls per frame.
+    """
+    global _session_cache_memo, _session_cache_checked_at
+    import time as _time
+    now = _time.monotonic()
+    if now - _session_cache_checked_at < 0.5:
+        # Return in-memory memo without hitting the filesystem
+        return _session_cache_memo[1]
+    _session_cache_checked_at = now
     if not SESSION_TITLE_CACHE.exists():
         return {}
     try:
