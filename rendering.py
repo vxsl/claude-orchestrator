@@ -714,16 +714,10 @@ def _render_session_option(
     _active = act in (ThreadActivity.THINKING, ThreadActivity.AWAITING_INPUT)
     committed = bool(s.last_commit_sha) and not _active
 
-    # "your turn" activity: show session ID on line 1 instead of badge
-    your_turn = act in (ThreadActivity.AWAITING_INPUT, ThreadActivity.RESPONSE_READY)
     if committed:
         icon = f"[{C_RESOLVED}]✓[/{C_RESOLVED}]"
         badge = f"[{C_RESOLVED}]committed[/{C_RESOLVED}]"
         badge_w = 9
-    elif your_turn:
-        icon = _activity_icon(act, throbber_frame, seen=seen)
-        badge = ""
-        badge_w = 0
     else:
         icon = _activity_icon(act, throbber_frame, seen=seen)
         badge = _activity_badge(act, seen=seen)
@@ -751,21 +745,19 @@ def _render_session_option(
         title_fmt = f"[{title_color}]{title_esc}[/{title_color}]"
 
     # Line 1: " {icon} {title......}  {age}  {badge|sid}"
-    # title_pad ensures age always starts at the same column
+    # If no badge, sid fills the right slot; title_pad ensures age column is fixed.
     prefix_w = 3  # visible: space + icon + space
     age_col = f"{age_str:>4}"
     age_w = 2 + 4  # "  " + age_col
-    if your_turn:
-        fill = max(2, LINE_WIDTH - prefix_w - title_width - age_w - 8)
-        line1 = f" {icon} {title_fmt}{title_pad}  [{s_dim}]{age_col}[/{s_dim}]{' ' * fill}[{C_FAINT}]{sid}[/{C_FAINT}]"
-    elif badge:
+    if badge:
         fill = max(2, LINE_WIDTH - prefix_w - title_width - age_w - badge_w)
         line1 = f" {icon} {title_fmt}{title_pad}  [{s_dim}]{age_col}[/{s_dim}]{' ' * fill}{badge}"
     else:
-        line1 = f" {icon} {title_fmt}{title_pad}  [{s_dim}]{age_col}[/{s_dim}]"
+        fill = max(2, LINE_WIDTH - prefix_w - title_width - age_w - 8)
+        line1 = f" {icon} {title_fmt}{title_pad}  [{s_dim}]{age_col}[/{s_dim}]{' ' * fill}[{C_FAINT}]{sid}[/{C_FAINT}]"
 
-    # Line 2: only show model if not opus; stats dim, tokens colored, sid faint
-    # (sid omitted when shown on line 1 for your-turn sessions)
+    # Line 2: only show model if not opus; stats dim, tokens colored
+    # sid shown here only when a badge occupies line 1's right slot
     model_part = "" if model == "opus" else f"[{C_BLUE}]{model:<8}[/{C_BLUE}]"
     tokens_fmt = _colored_tokens(s)
     tok_pad = " " * max(1, 8 - len(tokens_plain))
@@ -775,21 +767,13 @@ def _render_session_option(
     meta_left_len = 4 + model_len + 10 + 8 + dur_len
     sid_gap = max(2, LINE_WIDTH - meta_left_len - 8)
 
-    if your_turn:
-        line2 = (
-            f"{INDENT}{model_part}[{s_dim}]{msgs_str:<10}[/{s_dim}]"
-            f"{tokens_fmt}"
-            f"[{s_dim}]{tok_pad}"
-            f"{dur_str}[/{s_dim}]"
-        )
-    else:
-        line2 = (
-            f"{INDENT}{model_part}[{s_dim}]{msgs_str:<10}[/{s_dim}]"
-            f"{tokens_fmt}"
-            f"[{s_dim}]{tok_pad}"
-            f"{dur_str}[/{s_dim}]"
-            f"{' ' * sid_gap}[{C_FAINT}]{sid}[/{C_FAINT}]"
-        )
+    line2_base = (
+        f"{INDENT}{model_part}[{s_dim}]{msgs_str:<10}[/{s_dim}]"
+        f"{tokens_fmt}"
+        f"[{s_dim}]{tok_pad}"
+        f"{dur_str}[/{s_dim}]"
+    )
+    line2 = line2_base + (f"{' ' * sid_gap}[{C_FAINT}]{sid}[/{C_FAINT}]" if badge else "")
 
     lines = [line1, line2]
 
@@ -998,14 +982,8 @@ def _render_notified_session_option(
         LINE_WIDTH = title_width + 20
 
     icon = _activity_icon(act, throbber_frame, seen=seen)
-    # "your turn" states: show session ID on line 1 instead of badge
-    your_turn = act in (ThreadActivity.AWAITING_INPUT, ThreadActivity.RESPONSE_READY)
-    if your_turn:
-        badge = ""
-        badge_w = 0
-    else:
-        badge = _activity_badge(act, seen=seen)
-        badge_w = _BADGE_WIDTHS.get(act, 0)
+    badge = _activity_badge(act, seen=seen)
+    badge_w = _BADGE_WIDTHS.get(act, 0)
     model = _short_model(s.model)
     title_raw = _session_title(s)[:title_width]
     title_esc = _rich_escape(title_raw)
@@ -1018,18 +996,16 @@ def _render_notified_session_option(
     # Title always bright for notified sessions
     title_fmt = f"[{C_LIGHT}]{title_esc}[/{C_LIGHT}]"
 
-    # Line 1: title + sid for your-turn, badge otherwise
+    # Line 1: badge if present, else sid fills the right slot
     prefix_w = 3
-    if your_turn:
-        fill = max(2, LINE_WIDTH - prefix_w - len(title_raw) - 8)
-        line1 = f" {icon} {title_fmt}{' ' * fill}[{C_FAINT}]{sid}[/{C_FAINT}]"
-    elif badge:
+    if badge:
         fill = max(2, LINE_WIDTH - prefix_w - len(title_raw) - badge_w)
         line1 = f" {icon} {title_fmt}{' ' * fill}{badge}"
     else:
-        line1 = f" {icon} {title_fmt}"
+        fill = max(2, LINE_WIDTH - prefix_w - len(title_raw) - 8)
+        line1 = f" {icon} {title_fmt}{' ' * fill}[{C_FAINT}]{sid}[/{C_FAINT}]"
 
-    # Line 2: metadata (sid omitted when shown on line 1 for your-turn sessions)
+    # Line 2: sid shown here only when badge occupies line 1's right slot
     model_part = "" if model == "opus" else f"[{C_BLUE}]{model:<8}[/{C_BLUE}]"
     tokens_fmt = _colored_tokens(s)
     tok_pad = " " * max(1, 8 - len(tokens_plain))
@@ -1038,23 +1014,14 @@ def _render_notified_session_option(
     model_len = 0 if model == "opus" else 8
     meta_left_len = 4 + model_len + 10 + 8 + dur_len + len(age_str)
     sid_gap = max(2, LINE_WIDTH - meta_left_len - 8)
-    if your_turn:
-        line2 = (
-            f"{INDENT}{model_part}[{C_DIM}]{msgs_str:<10}[/{C_DIM}]"
-            f"{tokens_fmt}"
-            f"[{C_DIM}]{tok_pad}"
-            f"{dur_str}[/{C_DIM}]"
-            f"[{C_MID}]{age_str}[/{C_MID}]"
-        )
-    else:
-        line2 = (
-            f"{INDENT}{model_part}[{C_DIM}]{msgs_str:<10}[/{C_DIM}]"
-            f"{tokens_fmt}"
-            f"[{C_DIM}]{tok_pad}"
-            f"{dur_str}[/{C_DIM}]"
-            f"[{C_MID}]{age_str}[/{C_MID}]"
-            f"{' ' * sid_gap}[{C_FAINT}]{sid}[/{C_FAINT}]"
-        )
+    line2_base = (
+        f"{INDENT}{model_part}[{C_DIM}]{msgs_str:<10}[/{C_DIM}]"
+        f"{tokens_fmt}"
+        f"[{C_DIM}]{tok_pad}"
+        f"{dur_str}[/{C_DIM}]"
+        f"[{C_MID}]{age_str}[/{C_MID}]"
+    )
+    line2 = line2_base + (f"{' ' * sid_gap}[{C_FAINT}]{sid}[/{C_FAINT}]" if badge else "")
 
     # Line 3: tool bar + file touchpoints (same as normal)
     bar = _tool_bar(s.tool_counts)
