@@ -780,7 +780,28 @@ def _render_session_option(
 
     lines = [line1, line2]
 
-    # Line 3: commit info (if resolved) or last message snippet
+    # Line 3: context bar + tool usage bar + file touchpoints + project path
+    # (file touchpoints and project label omitted for archived sessions to prevent wrapping)
+    ctx_bar = _context_bar_compact(s.context_tokens, s.context_window_size)
+    bar = _tool_bar(s.tool_counts)
+    files = "" if archived else _file_touchpoints(s.files_mutated)
+    proj_label = ""
+    if not archived and ws_repo_path and s.project_path and s.project_path.rstrip("/") != ws_repo_path.rstrip("/"):
+        proj_label = f"[{C_FAINT}]{Path(s.project_path).name}[/{C_FAINT}]"
+
+    left = "  ".join(p for p in (ctx_bar, bar, files) if p)
+    if not left:
+        left = f"[{C_FAINT}]{'─' * 6}[/{C_FAINT}]"
+    if proj_label:
+        left_plain = re.sub(r"\[/?[^\]]*\]", "", left)
+        proj_plain = re.sub(r"\[/?[^\]]*\]", "", proj_label)
+        gap = max(2, LINE_WIDTH - 4 - len(left_plain) - len(proj_plain))
+        line3 = f"{INDENT}{left}{' ' * gap}{proj_label}" if left else f"{INDENT}{' ' * (LINE_WIDTH - 4 - len(proj_plain))}{proj_label}"
+    else:
+        line3 = f"{INDENT}{left}"
+    lines.append(line3)
+
+    # Line 4: commit info (if resolved) or last message snippet
     if committed:
         sha_short = s.last_commit_sha[:7]
         max_msg = title_width + 4
