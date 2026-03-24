@@ -38,7 +38,7 @@ from thread_namer import get_session_title
 log = logging.getLogger("orch.claude_session")
 
 # Keys that pass through the TerminalWidget to the screen for panel navigation
-_PASSTHROUGH_KEYS = {"ctrl+j", "ctrl+k", "ctrl+e", "ctrl+h", "ctrl+z", "ctrl+backslash", "ctrl+alt+h", "ctrl+alt+l"}
+_PASSTHROUGH_KEYS = {"ctrl+j", "ctrl+k", "ctrl+e", "ctrl+h", "ctrl+z", "ctrl+backslash", "ctrl+b", "ctrl+x"}
 
 ORCH_DIR = str(Path(__file__).parent)
 

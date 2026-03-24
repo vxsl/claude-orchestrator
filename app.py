@@ -230,7 +230,15 @@ class OrchestratorApp(App):
         self._ws_pending_session: dict[str, str] = {}  # ws_id -> session_id for reuse on "c"
 
     def on_key(self, event) -> None:
-if event.key in ("ctrl+j", "ctrl+k"):
+        if event.key in ("ctrl+b", "ctrl+x"):
+            event.prevent_default()
+            event.stop()
+            if event.key == "ctrl+x":
+                self.action_next_tab()
+            else:
+                self.action_prev_tab()
+            return
+        if event.key in ("ctrl+j", "ctrl+k"):
             event.prevent_default()
             event.stop()
             screen = self.screen
