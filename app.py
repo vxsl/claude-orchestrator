@@ -2227,7 +2227,7 @@ class OrchestratorApp(App):
 
     def action_rr(self):
         """Launch rr.sh branch/worktree manager, suspending orch while it runs."""
-        from actions import run_dev_tool, dev_tools_available
+        from actions import run_dev_tool, dev_tools_available, ws_working_dir
         if not dev_tools_available():
             self.notify("dev-workflow-tools not found at ~/bin/dev-workflow-tools", severity="error", timeout=3)
             return
@@ -2235,8 +2235,13 @@ class OrchestratorApp(App):
         if not cmd:
             self.notify("rr.sh not found", severity="error", timeout=3)
             return
+        ws = self._context_ws()
+        cwd = ws_working_dir(ws) if ws else None
+        if not cwd:
+            repos = self.state.known_repos()
+            cwd = repos[0] if repos else None
         with self.suspend():
-            subprocess.run(cmd)
+            subprocess.run(cmd, cwd=cwd)
         self._poll_worktrees()
 
     def action_files(self):
