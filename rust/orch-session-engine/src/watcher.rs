@@ -141,9 +141,10 @@ pub fn run_daemon(db_path: &str, pipe_path: &str) -> Result<()> {
         if session_json_changed || last_liveness.elapsed() > Duration::from_secs(10) {
             let live_ids =
                 discovery::get_live_session_ids(&sessions_dir).unwrap_or_default();
-            update_all_liveness(&conn, &live_ids)?;
+            if update_all_liveness(&conn, &live_ids)? {
+                changed = true;
+            }
             last_liveness = Instant::now();
-            changed = true;
         }
 
         // Periodic full re-sync to catch missed events
@@ -194,7 +195,8 @@ fn process_event(event: &Event, jsonl_changed: &mut HashSet<PathBuf>, session_js
     }
 }
 
-fn update_all_liveness(conn: &rusqlite::Connection, live_ids: &HashSet<String>) -> Result<()> {
+/// Returns true if any liveness state actually changed.
+fn update_all_liveness(conn: &rusqlite::Connection, live_ids: &HashSet<String>) -> Result<bool> {
     // Get all session IDs and their all_session_ids from DB
     let mut stmt = conn.prepare("SELECT session_id, all_session_ids, is_live FROM sessions")?;
     let rows: Vec<(String, String, bool)> = stmt
@@ -207,6 +209,7 @@ fn update_all_liveness(conn: &rusqlite::Connection, live_ids: &HashSet<String>) 
         .filter_map(|r| r.ok())
         .collect();
 
+    let mut any_changed = false;
     for (session_id, all_ids_json, was_live) in &rows {
         let all_ids: Vec<String> = serde_json::from_str(all_ids_json).unwrap_or_default();
         let is_live =
@@ -217,9 +220,10 @@ fn update_all_liveness(conn: &rusqlite::Connection, live_ids: &HashSet<String>) 
                 "UPDATE sessions SET is_live = ? WHERE session_id = ?",
                 rusqlite::params![is_live as i32, session_id],
             )?;
+            any_changed = true;
         }
     }
-    Ok(())
+    Ok(any_changed)
 }
 
 fn setup_pipe(pipe_path: &str) -> Result<()> {

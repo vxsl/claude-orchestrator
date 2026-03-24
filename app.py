@@ -1859,7 +1859,10 @@ class OrchestratorApp(App):
 
     def action_filter(self, mode: str):
         self.state.set_filter(mode)
-        self._refresh_ws_table()
+        # Debounce: rapid 1-2-3-4-5 presses would each trigger a full clear+add
+        # rebuild (filter change → different ID set → no in-place update path).
+        # Debouncing coalesces rapid switches into a single terminal repaint.
+        self._refresh_ws_table_debounced()
 
     def action_sort(self, mode: str):
         self.state.set_sort(mode)
