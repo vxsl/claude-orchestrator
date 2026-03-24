@@ -1534,6 +1534,19 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
                 for sid in revived:
                     del self.ws.archived_sessions[sid]
                 self.store.update(self.ws)
+            # Auto-undefer: if a new user message arrived after deferral, wake the session
+            undeferred = set()
+            for s in all_sessions:
+                if s.session_id in self.ws.deferred_sessions:
+                    deferred_at = self.ws.deferred_sessions[s.session_id]
+                    last_msg = s.last_user_message_at or ""
+                    if last_msg and deferred_at and self._parse_ts(last_msg) > self._parse_ts(deferred_at):
+                        undeferred.add(s.session_id)
+            if undeferred:
+                log.debug("load_detail: auto-undeferring %s", undeferred)
+                for sid in undeferred:
+                    del self.ws.deferred_sessions[sid]
+                self.store.update(self.ws)
             hidden = set(self.ws.archived_sessions)
             # Hide the pending new session (from "c") until it has actual messages
             pending_sid = getattr(self.app, '_ws_pending_session', {}).get(self.ws.id)
