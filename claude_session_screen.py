@@ -159,8 +159,12 @@ class SessionHeaderWidget(Static):
         self._render_static()
         self._cached_session: ClaudeSession | None = None
         self._last_jsonl_size: int = 0
+        self._width: int = 80
         self._refresh_async()  # populate immediately, don't wait for first interval
         self.set_interval(5.0, self._refresh_async)
+
+    def on_resize(self, event) -> None:
+        self._width = event.size.width
 
     def _format_elapsed(self) -> str:
         secs = int(time.time() - self._start_time)
@@ -277,15 +281,22 @@ class SessionHeaderWidget(Static):
         l3 = "  ".join(l3_parts)
         if flist:
             l3 += f"  {flist}"
-        if last_msg:
-            prefix = "you: " if last_role == "user" else ""
-            clean = last_msg.replace("\n", " ").strip()
-            if len(prefix + clean) > 60:
-                clean = clean[:60 - len(prefix) - 1] + "…"
-            l3 += f"  [{C_DIM}]│[/]  [{C_FAINT}]{_esc(prefix + clean)}[/]"
         line3 = l3
 
-        self.app.call_from_thread(self.update, f"{line1}\n{line2}\n{line3}")
+        all_lines = [line1, line2, line3]
+        if last_msg:
+            w = max(20, self._width - 4)  # content width (subtract padding)
+            clean = last_msg.replace("\n", " ").strip()
+            line_a = clean[:w]
+            remainder = clean[w:]
+            all_lines.append(f"[white on black]{_esc(line_a)}[/white on black]")
+            if remainder:
+                line_b = remainder[:w]
+                if len(remainder) > w:
+                    line_b += "…"
+                all_lines.append(f"[white on black]{_esc(line_b)}[/white on black]")
+
+        self.app.call_from_thread(self.update, "\n".join(all_lines))
 
 
 # ── Footer Widget ────────────────────────────────────────────────────
