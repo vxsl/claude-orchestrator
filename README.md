@@ -2,7 +2,7 @@
 
 A terminal-native workstation for agentic coding. Every git worktree is a workstream. Every workstream is a tab. Every thought becomes a running Claude session.
 
-Built with Python and [Textual](https://textual.textualize.io/) with embedded libvterm terminals, mellow GitHub Dark palette, and vim-first keybindings.
+Built with Python and [Textual](https://textual.textualize.io/) with embedded libvterm terminals, a Rust session engine, mellow GitHub Dark palette, and vim-first keybindings.
 
 ## Philosophy
 
@@ -25,8 +25,8 @@ The app uses a tabbed interface — each opened workstream gets its own persiste
 
 | Key | Action |
 |-----|--------|
-| `Ctrl+Tab` / `Ctrl+Shift+Tab` | Cycle through open tabs |
-| `Enter` / `Ctrl+L` | Open workstream in new tab |
+| `Ctrl+B` / `Ctrl+X` | Next / prev tab |
+| `Enter` / `l` | Open workstream in new tab |
 | `x` | Close current tab |
 | `Ctrl+H` / `Backspace` | Back / dismiss |
 
@@ -35,9 +35,14 @@ The **Home tab** (always present) shows the workstream list with:
 - Git branch name (yellow if dirty, +N/-N for ahead/behind)
 - Jira ticket key + status, MR badge, ticket-solve status (when enriched)
 - Session count, token usage, and relative timestamps
-- Preview pane with sessions, notes, and context
+- Tig sidebar showing git activity
+- Filter presets: Active (default), Work, Personal, All, Stale, Archived
+
+A permanent **Sessions tab** shows all active sessions across workstreams.
 
 ## Keybindings
+
+Press `?` from any view for **context-sensitive help** — shows what you're looking at and the keybindings for that view. Type to filter.
 
 ### Navigation
 
@@ -48,7 +53,7 @@ The **Home tab** (always present) shows the workstream list with:
 | `g` / `G` | Jump to top / bottom |
 | `Ctrl+J` / `Ctrl+K` | Cycle panels |
 | `/` | Search |
-| `?` | Searchable help (fuzzy-filter all keybindings) |
+| `?` | Context-sensitive help |
 
 ### Workstream Actions
 
@@ -61,7 +66,7 @@ The **Home tab** (always present) shows the workstream list with:
 | `n` | Quick todo |
 | `e` | Full todo list |
 | `E` | Rename |
-| `L` | Add link |
+| `W` | Add link |
 | `o` | Open links |
 | `u` | Archive / unarchive |
 | `d` | Delete |
@@ -79,7 +84,7 @@ The **Home tab** (always present) shows the workstream list with:
 
 | Key | Action |
 |-----|--------|
-| `1`–`6` | Filter: All / Work / Personal / Active / Stale / Archived |
+| `1`–`6` | Filter: Active / Work / Personal / All / Stale / Archived |
 | `F1`–`F5` | Sort: Activity / Updated / Created / Category / Name |
 
 ## Command Palette
@@ -102,17 +107,39 @@ Commands that need a selected workstream are dimmed when none is selected.
 
 When you launch or resume a Claude session, you get a full embedded terminal with:
 
-- **3-line header** — live stats (title, model, elapsed, messages, tokens, tool usage)
-- **Main terminal** — libvterm PTY with full scrollback and mouse support
+- **Header** — live stats (title, model, think time, messages, tokens, context bar, last prompt)
+- **Main terminal** — libvterm PTY with full scrollback via tmux-backed persistence
 - **Sidebar** — tig status + tig log for git context
 - **Footer** — session ID, cwd, git branch, keybinding hints
 
 | Key | Action |
 |-----|--------|
-| `Ctrl+E` | Extract todo from conversation |
+| `Ctrl+H` | Detach and go back (session keeps running in background) |
+| `Ctrl+\` | Detach and go back (alternate) |
 | `Ctrl+J/K` | Cycle between terminal and tig panels |
-| `Ctrl+H` | Detach (process survives, reattach later) |
-| `Ctrl+D` | Exit session |
+| `Ctrl+Z` | Zoom current panel full-screen |
+| `Ctrl+E` | Extract todo from conversation |
+| `Ctrl+Space` | Archive session and go back |
+| `?` | Help |
+
+Sessions are persistent — they survive detaching, closing orch, and restarts. The session process runs in a tmux backend and can be reattached at any time.
+
+### Session Lifecycle
+
+Sessions progress through states automatically:
+- **thinking** — Claude is actively working (animated throbber, tinted background)
+- **your turn** — Claude is waiting for input
+- **committed** — session ended with a git commit (work landed)
+- **archived** — filed away, always recoverable
+
+### Session Intelligence
+
+- **Context bar** — shows how full the context window is per session
+- **Think time** — tracks and displays total Claude work time
+- **Auto-discovery** — sessions grouped into threads by project, branch, and time
+- **AI-powered titles** — threads get descriptive names from content
+- **Notifications** — desktop alerts when sessions need attention
+- **"Earlier" dividers** — today's sessions separated from older ones
 
 ## Worktree Auto-Discovery
 
@@ -133,7 +160,7 @@ Skips `main`, `master`, `develop`, `dev`, `staging`, `production` branches.
 
 Link a directory to a workstream (worktree or file link), and orch automatically finds all Claude sessions in that directory by scanning `~/.claude/projects/`. No manual session linking needed.
 
-Sessions show live activity: **thinking** (pulsing cyan), **your turn** (yellow badge), or idle.
+Sessions show live activity: **thinking** (animated cyan throbber), **your turn** (yellow), or idle.
 
 ## Dev-Workflow Tools
 
@@ -151,21 +178,34 @@ These appear where contextually relevant — ticket actions from the home view, 
 ## Architecture
 
 ```
-app.py              — Textual shell: tabs, compose, event routing
-├── widgets.py      — FuzzyPicker, ModalForm, TabBar, InlineInput
-├── state.py        — AppState + TabManager + command registry (pure Python, no Textual)
-├── screens.py      — Modal screens (Detail, Todo, pickers, forms)
-├── rendering.py    — Color palette, Rich markup, display formatting
-├── actions.py      — Git status, Jira/MR/ticket-solve caches, worktree discovery, dev-tool integration
-├── config.py       — Keybinding configuration with user overrides
-├── models.py       — Workstream, Store, Status, Category, Link
-├── sessions.py     — Claude session discovery from JSONL
-├── terminal.py     — libvterm/pyte terminal emulation
-├── claude_session_screen.py — Embedded Claude terminal with live stats
-├── brain.py        — Stream-of-consciousness parser
-├── threads.py      — Thread clustering and activity detection
-└── tests/          — 630+ tests (state, models, actions, widgets, app)
+app.py                    — Textual shell: tabs, compose, event routing
+├── widgets.py            — FuzzyPicker, ModalForm, TabBar, InlineInput
+├── state.py              — AppState + TabManager + command registry (pure Python, no Textual)
+├── screens.py            — Modal screens (Detail, Todo, Help, pickers, forms)
+├── rendering.py          — Color palette, Rich markup, display formatting
+├── actions.py            — Git status, Jira/MR/ticket-solve caches, worktree discovery
+├── config.py             — Keybinding configuration with user overrides
+├── models.py             — Workstream, Store, Category, Link, TodoItem
+├── sessions.py           — Claude session discovery from JSONL + Rust engine bridge
+├── terminal.py           — libvterm terminal emulation widget
+├── vterm_backend.py      — libvterm FFI backend for terminal rendering
+├── claude_session_screen.py — Embedded Claude terminal with live stats + tig sidebar
+├── brain.py              — Stream-of-consciousness parser
+├── threads.py            — Thread clustering and activity detection
+├── thread_namer.py       — AI-powered thread titling (Haiku)
+├── workstream_synthesizer.py — AI-powered thread-to-workstream grouping
+├── description_refresher.py  — Periodic workstream description re-evaluation
+├── notifications.py      — Desktop notification system
+├── watcher.py            — File/session watcher for live updates
+├── session_bridge.py     — Bridge to Rust session engine
+├── cli.py                — CLI interface (orch command)
+├── orch.py               — Entry point / launcher
+└── tests/                — 630+ tests (state, models, actions, widgets, app)
 ```
+
+### Rust Session Engine
+
+A Rust binary (`rust/orch-session-engine/`) provides fast JSONL parsing and SQLite caching for session data. Gives ~19x warm speedup over pure Python parsing. Falls back to Python if not built.
 
 ### Design Principles
 
@@ -179,13 +219,15 @@ app.py              — Textual shell: tabs, compose, event routing
 - **Python 3.12+**
 - **Textual** — TUI framework
 - **libvterm** (optional) — system library for terminal emulation. Falls back to pyte.
+- **Rust** (optional) — for the session engine. Falls back to Python.
 - **dev-workflow-tools** (optional) — `~/bin/dev-workflow-tools` for Jira/GitLab integration
 
 ## Data
 
-- **Store:** `~/.claude/data.json`
+- **Store:** `data.json` (in project directory)
 - **Backups:** automatic, keeps last 20
 - **Sessions:** `~/.claude/projects/<project>/<session>.jsonl`
+- **Session cache:** SQLite via Rust engine (auto-managed)
 - **Jira cache:** `~/.cache/jira-fzf/tickets.json` (read-only, from dev-workflow-tools)
 - **MR cache:** `~/.cache/jira-fzf/mr_cache.json` (read-only, from dev-workflow-tools)
 - **Ticket-solve:** `~/.cache/ticket-solve/<TICKET>.json` (read-only, from ticket-solve)
