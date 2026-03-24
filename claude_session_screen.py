@@ -303,8 +303,9 @@ class SessionHeaderWidget(Static):
                     text = clean[:available - 1] + "…"
                 else:
                     text = clean
-                pad = " " * max(0, available - len(text))
-                style = "bold italic" if i == len(msgs) - 1 else "italic"
+                is_last = i == len(msgs) - 1
+                pad = " " * max(0, available - len(text) + (0 if is_last else 1))
+                style = "bold italic" if is_last else "italic"
                 all_lines.append(
                     f"[{C_DIM} on black]{_esc(prefix)}[/{C_DIM} on black]"
                     f"[{style} {color} on black]{_esc(text)}{pad}[/{style} {color} on black]"
