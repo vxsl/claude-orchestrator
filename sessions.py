@@ -246,7 +246,7 @@ def _extract_full_text(data: dict) -> str:
         return ""
     content = msg.get("content", "")
     if isinstance(content, str):
-        return content
+        return _strip_xml_wrappers(content)
     if isinstance(content, list):
         parts: list[str] = []
         for block in content:
@@ -256,7 +256,7 @@ def _extract_full_text(data: dict) -> str:
             if btype == "text":
                 t = block.get("text", "")
                 if t and "[Request interrupted" not in t:
-                    parts.append(t)
+                    parts.append(_strip_xml_wrappers(t))
             elif btype == "thinking":
                 t = block.get("thinking", "")
                 if t:
@@ -392,6 +392,19 @@ def _is_interrupt_marker(data: dict) -> bool:
     return False
 
 
+_XML_WRAPPER_RE = re.compile(r"</?[a-z][-a-z]*>")
+
+
+def _strip_xml_wrappers(text: str) -> str:
+    """Strip internal Claude Code XML wrapper tags from message text.
+
+    Slash commands produce messages wrapped in tags like
+    ``<local-command-stdout>…</local-command-stdout>`` which are internal
+    plumbing and should not be shown to the user.
+    """
+    return _XML_WRAPPER_RE.sub("", text).strip()
+
+
 def _extract_message_text(data: dict) -> str:
     """Extract a short text snippet from a user or assistant JSONL entry."""
     msg = data.get("message", {})
@@ -411,6 +424,7 @@ def _extract_message_text(data: dict) -> str:
                     break
     else:
         return ""
+    text = _strip_xml_wrappers(text)
     # Collapse to single line, truncate
     return " ".join(text.split())[:200]
 
@@ -713,8 +727,11 @@ def parse_session(jsonl_path: Path) -> Optional[ClaudeSession]:
                     if msg_type == "user" and _is_human_turn(data):
                         session.last_commit_sha = ""
                         session.last_commit_summary = ""
+                    # CLI-local messages (slash commands, caveats) are
+                    # bookkeeping — don't let them overwrite the real last message.
+                    is_local = msg_type == "user" and _is_cli_local_message(data)
                     snippet = _extract_message_text(data)
-                    if snippet:
+                    if snippet and not is_local:
                         session.last_message_role = msg_type
                         session.last_message_text = snippet
                         if msg_type == "user" and _is_human_turn(data):
@@ -855,8 +872,9 @@ def refresh_session_tail(session: ClaudeSession, tail_bytes: int = 8192) -> bool
                 if msg_type == "user" and _is_human_turn(data):
                     session.last_commit_sha = ""
                     session.last_commit_summary = ""
+                is_local = msg_type == "user" and _is_cli_local_message(data)
                 snippet = _extract_message_text(data)
-                if snippet:
+                if snippet and not is_local:
                     session.last_message_role = msg_type
                     session.last_message_text = snippet
                     if msg_type == "user" and _is_human_turn(data):

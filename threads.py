@@ -17,6 +17,7 @@ from sessions import (
     ClaudeSession,
     discover_sessions,
     CLAUDE_PROJECTS_DIR,
+    _strip_xml_wrappers,
 )
 
 
@@ -298,13 +299,13 @@ def _extract_first_message(session: ClaudeSession) -> str:
                     if data.get("type") == "user" and "message" in data:
                         content = data["message"].get("content", "")
                         if isinstance(content, str):
-                            return content[:200]
+                            return _strip_xml_wrappers(content)[:200]
                         elif isinstance(content, list):
                             for block in content:
                                 if isinstance(block, dict) and block.get("type") == "text":
                                     text = block.get("text", "")
                                     if text and "[Request interrupted" not in text:
-                                        return text[:200]
+                                        return _strip_xml_wrappers(text)[:200]
                 except json.JSONDecodeError:
                     continue
     except OSError:
