@@ -26,7 +26,7 @@ from textual.widgets import Static
 
 from models import Link, Store, Workstream
 from rendering import (
-    BG_RAISED, BG_BASE, BG_SURFACE,
+    BG_RAISED, BG_BASE, BG_CHROME, BG_SURFACE,
     C_BLUE, C_CYAN, C_DIM, C_FAINT, C_MID, C_ORANGE,
     C_PURPLE, C_YELLOW,
     CATEGORY_THEME,
@@ -38,9 +38,38 @@ from thread_namer import get_session_title
 log = logging.getLogger("orch.claude_session")
 
 # Keys that pass through the TerminalWidget to the screen for panel navigation
-_PASSTHROUGH_KEYS = {"ctrl+j", "ctrl+k", "ctrl+e", "ctrl+h", "ctrl+z", "ctrl+backslash"}
+_PASSTHROUGH_KEYS = {"ctrl+j", "ctrl+k", "ctrl+e", "ctrl+h", "ctrl+z", "ctrl+backslash", "ctrl+shift+h", "ctrl+shift+l"}
 
 ORCH_DIR = str(Path(__file__).parent)
+
+
+# ── Git helpers ───────────────────────────────────────────────────────
+
+def _git_status_snapshot() -> str:
+    """Return a compact git status + recent log for the cwd, for system prompt injection."""
+    try:
+        branch = subprocess.run(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+            capture_output=True, text=True, timeout=5,
+        ).stdout.strip() or "unknown"
+        status = subprocess.run(
+            ["git", "status", "--short"],
+            capture_output=True, text=True, timeout=5,
+        ).stdout.strip()
+        log = subprocess.run(
+            ["git", "log", "--oneline", "-5"],
+            capture_output=True, text=True, timeout=5,
+        ).stdout.strip()
+        parts = [f"Current branch: {branch}"]
+        if status:
+            parts.append(f"Status:\n{status}")
+        else:
+            parts.append("Status: clean")
+        if log:
+            parts.append(f"Recent commits:\n{log}")
+        return "\n".join(parts)
+    except Exception:
+        return "(git status unavailable)"
 
 
 # ── Session helpers ───────────────────────────────────────────────────
@@ -95,7 +124,7 @@ class SessionHeaderWidget(Static):
     DEFAULT_CSS = f"""
     SessionHeaderWidget {{
         height: auto;
-        padding: 1 3;
+        padding: 0 2;
         background: {BG_RAISED};
     }}
     """
@@ -260,7 +289,7 @@ class SessionFooterWidget(Static):
     SessionFooterWidget {{
         height: 1;
         padding: 0 2;
-        background: {BG_RAISED};
+        background: {BG_CHROME};
         color: {C_DIM};
         dock: bottom;
     }}
@@ -321,9 +350,14 @@ class ClaudeSessionScreen(Screen):
         align: center middle;
         background: {BG_BASE};
     }}
+    #detail-tab-bar {{
+        height: 1;
+        padding: 0 1;
+        background: {BG_CHROME};
+    }}
     #cs-outer {{
         width: 100%;
-        height: 100%;
+        height: 1fr;
         padding: 0;
         background: {BG_BASE};
     }}
@@ -332,14 +366,27 @@ class ClaudeSessionScreen(Screen):
     }}
     #cs-sidebar {{
         width: 36;
+        background: {BG_RAISED};
     }}
-    #cs-terminal, #cs-tig-status, #cs-tig-log {{
+    #cs-terminal {{
         height: 1fr;
         border: blank;
     }}
-    #cs-terminal.pane-focused, #cs-tig-status.pane-focused, #cs-tig-log.pane-focused {{
+    #cs-terminal.pane-focused {{
         border: round {C_BLUE};
         background: {BG_SURFACE};
+    }}
+    .cs-tig-wrap {{
+        height: 1fr;
+        border: blank;
+        background: {BG_RAISED};
+    }}
+    .cs-tig-wrap.pane-focused {{
+        border: round {C_BLUE};
+        background: {BG_RAISED};
+    }}
+    #cs-tig-status, #cs-tig-log {{
+        height: 1fr;
     }}
     .panel-hidden {{
         display: none;
@@ -374,9 +421,10 @@ class ClaudeSessionScreen(Screen):
         self._initial_title = self._resolve_initial_title()
         self._claude_command = self._build_claude_command()
         self._env = self._build_env()
-        self._tig_env = {"TIGRC_USER": self._tigrc_path}
+        self._tig_env = {"TIGRC_USER": self._tigrc_path, "GIT_OPTIONAL_LOCKS": "0"}
         self._git_branch = self._detect_git_branch()
         self._jsonl = self._jsonl_path()
+        self._sidebar_enabled = not os.environ.get("ORCH_NO_SIDEBAR")
 
         log.debug("ClaudeSessionScreen.__init__: sid=%s cwd=%s new=%s reattach_tmux=%s",
                   self._session_id[:8], self._cwd, self._is_new, reattach_tmux)
@@ -418,6 +466,19 @@ class ClaudeSessionScreen(Screen):
                 '`orch distill crystallize --text "..." --context "..."` directly. '
                 '$ORCH_WS_ID is set automatically.'
             )
+
+        # Commit reminder — agents frequently forget to commit, leaving all work unstaged
+        parts.append(
+            '\ngitStatus: This is the git status at the start of the conversation. '
+            'Note that this status is a snapshot in time, and will not update during the conversation.\n'
+            + _git_status_snapshot()
+        )
+        parts.append(
+            '\nIMPORTANT — commit your work: Commit early and often. '
+            'Make a git commit as soon as you have a coherent working change, even mid-task. '
+            'When you finish or pause, always commit before stopping. '
+            'Do not leave work uncommitted — other agents share this repo and uncommitted changes are invisible to them.'
+        )
 
         return "\n".join(parts)
 
@@ -474,26 +535,8 @@ class ClaudeSessionScreen(Screen):
     # ── Tigrc generation ──────────────────────────────────────────
 
     def _generate_tigrc(self) -> str:
-        user_tigrc = os.environ.get("TIGRC_USER", str(Path.home() / ".tigrc"))
-        content = ""
-        if os.path.isfile(user_tigrc):
-            try:
-                content = Path(user_tigrc).read_text()
-            except Exception:
-                pass
-
-        content += """
-# orch-sidebar overrides — compact for 36-column pane
-set refresh-mode = periodic
-set refresh-interval = 3
-set main-view = line-number:no id:no date:custom,format="%m/%d" author:no commit-title:yes,refs,overflow=no
-set line-graphics = ascii
-set status-view-show-untracked-dirs = no
-"""
-        fd, path = tempfile.mkstemp(suffix=".tigrc", prefix="orch-")
-        os.write(fd, content.encode())
-        os.close(fd)
-        return path
+        from actions import generate_tig_tigrc
+        return generate_tig_tigrc(subtle=True)
 
     # ── Initial title resolution ──────────────────────────────────
 
@@ -517,6 +560,7 @@ set status-view-show-untracked-dirs = no
 
     def compose(self) -> ComposeResult:
         log.debug("ClaudeSessionScreen.compose: starting")
+        yield Static("", id="detail-tab-bar")
         with Horizontal(id="cs-outer"):
             with Vertical(id="cs-main-col"):
                 yield SessionHeaderWidget(
@@ -534,27 +578,30 @@ set status-view-show-untracked-dirs = no
                     passthrough_keys=_PASSTHROUGH_KEYS,
                     id="cs-terminal",
                 )
-                yield SessionFooterWidget(
-                    session_id=self._session_id,
-                    cwd=self._cwd,
-                    ws_name=self._ws.name,
-                    git_branch=self._git_branch,
-                )
-            with Vertical(id="cs-sidebar"):
-                yield TerminalWidget(
-                    command="tig status",
-                    env=self._tig_env,
-                    cwd=self._cwd,
-                    passthrough_keys=_PASSTHROUGH_KEYS,
-                    id="cs-tig-status",
-                )
-                yield TerminalWidget(
-                    command="tig",
-                    env=self._tig_env,
-                    cwd=self._cwd,
-                    passthrough_keys=_PASSTHROUGH_KEYS,
-                    id="cs-tig-log",
-                )
+            if self._sidebar_enabled:
+                with Vertical(id="cs-sidebar"):
+                    with Vertical(id="cs-tig-status-wrap", classes="cs-tig-wrap"):
+                        yield TerminalWidget(
+                            command="tig status",
+                            env=self._tig_env,
+                            cwd=self._cwd,
+                            passthrough_keys=_PASSTHROUGH_KEYS,
+                            id="cs-tig-status",
+                        )
+                    with Vertical(id="cs-tig-log-wrap", classes="cs-tig-wrap"):
+                        yield TerminalWidget(
+                            command="tig",
+                            env=self._tig_env,
+                            cwd=self._cwd,
+                            passthrough_keys=_PASSTHROUGH_KEYS,
+                            id="cs-tig-log",
+                        )
+        yield SessionFooterWidget(
+            session_id=self._session_id,
+            cwd=self._cwd,
+            ws_name=self._ws.name,
+            git_branch=self._git_branch,
+        )
         log.debug("ClaudeSessionScreen.compose: done")
 
     def on_mount(self) -> None:
@@ -567,13 +614,14 @@ set status-view-show-untracked-dirs = no
         else:
             claude_tw.start_persistent(self._session_id)
             log.debug("  started cs-terminal via tmux")
-        for tw in self.query(TerminalWidget):
-            if tw.id != "cs-terminal":
-                try:
-                    tw.start()
-                    log.debug("  started %s", tw.id)
-                except Exception as e:
-                    log.error("  FAILED to start %s: %s", tw.id, e)
+        if self._sidebar_enabled:
+            for tw in self.query(TerminalWidget):
+                if tw.id != "cs-terminal":
+                    try:
+                        tw.start()
+                        log.debug("  started %s", tw.id)
+                    except Exception as e:
+                        log.error("  FAILED to start %s: %s", tw.id, e)
         claude_tw.focus()
         self._update_pane_focus()
         log.debug("ClaudeSessionScreen.on_mount: done")
@@ -639,13 +687,23 @@ set status-view-show-untracked-dirs = no
 
     # ── Panel navigation ──────────────────────────────────────────
 
-    _PANEL_IDS = ["cs-terminal", "cs-tig-status", "cs-tig-log"]
+    @property
+    def _panel_ids(self) -> list[str]:
+        if self._sidebar_enabled:
+            return ["cs-terminal", "cs-tig-status", "cs-tig-log"]
+        return ["cs-terminal"]
+
+    _TIG_WRAP_IDS = {
+        "cs-tig-status": "cs-tig-status-wrap",
+        "cs-tig-log": "cs-tig-log-wrap",
+    }
 
     def _update_pane_focus(self) -> None:
         """Toggle pane-focused class to match _active_panel."""
-        for pid in self._PANEL_IDS:
+        for pid in self._panel_ids:
+            border_id = self._TIG_WRAP_IDS.get(pid, pid)
             try:
-                w = self.query_one(f"#{pid}")
+                w = self.query_one(f"#{border_id}")
                 if pid == self._active_panel:
                     w.add_class("pane-focused")
                 else:
@@ -655,10 +713,10 @@ set status-view-show-untracked-dirs = no
 
     def action_next_panel(self) -> None:
         try:
-            idx = self._PANEL_IDS.index(self._active_panel)
+            idx = self._panel_ids.index(self._active_panel)
         except ValueError:
             idx = 0
-        next_id = self._PANEL_IDS[(idx + 1) % len(self._PANEL_IDS)]
+        next_id = self._panel_ids[(idx + 1) % len(self._panel_ids)]
         self._active_panel = next_id
         self._update_pane_focus()
         try:
@@ -668,10 +726,10 @@ set status-view-show-untracked-dirs = no
 
     def action_prev_panel(self) -> None:
         try:
-            idx = self._PANEL_IDS.index(self._active_panel)
+            idx = self._panel_ids.index(self._active_panel)
         except ValueError:
             idx = 0
-        prev_id = self._PANEL_IDS[(idx - 1) % len(self._PANEL_IDS)]
+        prev_id = self._panel_ids[(idx - 1) % len(self._panel_ids)]
         self._active_panel = prev_id
         self._update_pane_focus()
         try:
@@ -693,11 +751,14 @@ set status-view-show-untracked-dirs = no
             self._zoomed_panel = self._active_panel
             if self._active_panel == "cs-terminal":
                 # Hide sidebar, keep header/footer
-                self.query_one("#cs-sidebar").add_class("panel-hidden")
+                try:
+                    self.query_one("#cs-sidebar").add_class("panel-hidden")
+                except Exception:
+                    pass
             elif self._active_panel in ("cs-tig-status", "cs-tig-log"):
                 # Hide main column, hide the other sidebar panel
                 self.query_one("#cs-main-col").add_class("panel-hidden")
-                other = "cs-tig-log" if self._active_panel == "cs-tig-status" else "cs-tig-status"
+                other = "cs-tig-log-wrap" if self._active_panel == "cs-tig-status" else "cs-tig-status-wrap"
                 self.query_one(f"#{other}").add_class("panel-hidden")
 
     # ── C-e: extract todo ─────────────────────────────────────────
