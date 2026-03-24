@@ -20,25 +20,6 @@ def _rich_escape(text: str) -> str:
     return text.replace("[", r"\[")
 
 
-_MARKUP_STRIP_RE = re.compile(r"\[/?[^\]]*\]")
-
-
-def _pad_thinking_bg(markup: str, width: int) -> str:
-    """Wrap markup in a full-width dark-blue background for thinking rows.
-
-    Pads each line with spaces so the background color fills the whole row
-    rather than stopping at the last character.
-    """
-    lines = markup.split("\n")
-    padded = []
-    for line in lines:
-        # Strip markup tags and unescape \[ to measure visual width
-        visual = _MARKUP_STRIP_RE.sub("", line).replace(r"\[", "[")
-        pad = max(0, width - len(visual)) if width > 0 else 0
-        padded.append(f"[on {BG_THINKING}]{line}{' ' * pad}[/]")
-    return "\n".join(padded)
-
-
 from models import (
     Category, TodoItem, Workstream,
     _relative_time,
@@ -70,7 +51,6 @@ BG_BASE = "#000000"      # true black — matches terminal
 BG_SURFACE = "#060606"   # barely lifted — focused panels
 BG_RAISED = "#0d1117"    # bars, headers, inputs
 BG_CHROME = "#060809"    # tab bar and footer — darker chrome, between black and panels
-BG_THINKING = "#102342"  # dark navy blue — active thinking rows
 
 
 # ─── Staleness helpers ──────────────────────────────────────────────
@@ -466,7 +446,11 @@ def _render_ws_option(
         if git_status.behind:
             branch_markup += f"[{C_RED}]-{git_status.behind}[/{C_RED}]"
 
-    line1 = f" {icon} [{name_bold}{name_color}]{name_esc}[/{name_bold}{name_color}]{ind_markup}{branch_markup}"
+    if best == ThreadActivity.THINKING:
+        name_markup = f"[bold {C_CYAN}]{name_esc}[/bold {C_CYAN}]"
+    else:
+        name_markup = f"[{name_bold}{name_color}]{name_esc}[/{name_bold}{name_color}]"
+    line1 = f" {icon} {name_markup}{ind_markup}{branch_markup}"
 
     # ── Line 2: metadata chain separated by dim dots ──
     sep = f" [{C_FAINT}]·[/{C_FAINT}] "
@@ -555,10 +539,7 @@ def _render_ws_option(
 
     # Trailing blank line for visual separation
     lines.append("")
-    result = "\n".join(lines)
-    if best == ThreadActivity.THINKING:
-        result = _pad_thinking_bg(result, line_width)
-    return result
+    return "\n".join(lines)
 
 
 # ─── Session Option Rendering ────────────────────────────────────────
@@ -757,12 +738,14 @@ def _render_session_option(
     duration = s.duration_display
     age_str = s.age
 
-    # Title styling: committed = dim, idle = dim, active = bright
+    # Title styling: committed = dim, idle = dim, thinking = cyan, active = bright
     # Stale sessions shift bright → dim (two notches)
     if committed:
         title_fmt = f"[{s_dim}]{title_esc}[/{s_dim}]"
     elif act == ThreadActivity.IDLE:
         title_fmt = f"[{s_dim}]{title_esc}[/{s_dim}]"
+    elif act == ThreadActivity.THINKING:
+        title_fmt = f"[bold {C_CYAN}]{title_esc}[/bold {C_CYAN}]"
     else:
         title_color = C_DIM if stale else C_LIGHT
         title_fmt = f"[{title_color}]{title_esc}[/{title_color}]"
@@ -849,10 +832,7 @@ def _render_session_option(
         msg_color = s_mid if is_user else (C_FAINT if stale else "#3b4048")
         lines.append(f"{INDENT}{prefix}[italic {msg_color}]{snippet}[/italic {msg_color}]")
 
-    result = "\n".join(lines)
-    if act == ThreadActivity.THINKING:
-        result = _pad_thinking_bg(result, LINE_WIDTH)
-    return result
+    return "\n".join(lines)
 
 
 # ─── Content search result rendering ─────────────────────────────
