@@ -1333,7 +1333,8 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         arch_label = self.query_one("#detail-archived-label", Static)
         n_active = len(self._detail_sessions)
         n_archived = len(self._archived_sessions)
-        n_notified = len(self._session_notifications)
+        active_sids = {s.session_id for s in self._detail_sessions}
+        n_notified = sum(1 for sid in self._session_notifications if sid in active_sids)
 
         legend = tool_bar_legend()
         notif_badge = f" [{C_GREEN}]({n_notified} new)[/{C_GREEN}]" if n_notified else ""
