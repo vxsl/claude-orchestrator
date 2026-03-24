@@ -1444,18 +1444,28 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
             log.debug("load_detail: ws=%s all=%d archived_map=%s",
                       self.ws.name, len(all_sessions),
                       {k: v for k, v in archived.items()})
-            # No auto-revival: if a session is archived it stays archived until
-            # the user manually unarchives it (pressing 'a' on it in the archived pane).
-            # Auto-revival was removed because last_activity and last_user_message_at
-            # are both updated by tool_result "user" messages on live sessions,
-            # making any timestamp-based heuristic unreliable.
-            # Auto-undefer: if a new user message arrived after deferral, wake the session
+            # Auto-revival: if the human typed a new message after archiving, resurface.
+            # Uses last_human_turn_at (real text prompts only) not last_activity or
+            # last_user_message_at, which are both updated by tool_result messages.
+            revived = set()
+            for s in all_sessions:
+                if s.session_id in archived:
+                    archived_at = archived[s.session_id]
+                    last_human = s.last_human_turn_at or ""
+                    if last_human and archived_at and self._parse_ts(last_human) > self._parse_ts(archived_at):
+                        revived.add(s.session_id)
+            if revived:
+                log.debug("load_detail: reviving %s", revived)
+                for sid in revived:
+                    del self.ws.archived_sessions[sid]
+                self.store.update(self.ws)
+            # Auto-unshelf: if the human typed a new message after shelving, wake the session
             unshelved = set()
             for s in all_sessions:
                 if s.session_id in self.ws.shelved_sessions:
                     shelved_at = self.ws.shelved_sessions[s.session_id]
-                    last_msg = s.last_user_message_at or ""
-                    if last_msg and shelved_at and self._parse_ts(last_msg) > self._parse_ts(shelved_at):
+                    last_human = s.last_human_turn_at or ""
+                    if last_human and shelved_at and self._parse_ts(last_human) > self._parse_ts(shelved_at):
                         unshelved.add(s.session_id)
             if unshelved:
                 log.debug("load_detail: auto-unshelving %s", unshelved)

@@ -382,7 +382,8 @@ class ClaudeSession:
     jsonl_path: str = ""
     is_live: bool = False
     last_message_role: str = ""  # "user" or "assistant" — last message type in JSONL
-    last_user_message_at: str = ""  # timestamp of last user message
+    last_user_message_at: str = ""  # timestamp of last user message (includes tool_results)
+    last_human_turn_at: str = ""   # timestamp of last real human-typed message (excludes tool_results)
     last_stop_reason: str = ""   # "end_turn", "tool_use", etc. — from last assistant message
     turn_complete: bool = False  # True when system:turn_duration logged after last user/assistant
     all_session_ids: list[str] = field(default_factory=list)  # All sessionIds found in JSONL (for resume matching)
@@ -638,6 +639,8 @@ def parse_session(jsonl_path: Path) -> Optional[ClaudeSession]:
                         session.last_tool_name = ""
                         if ts:
                             session.last_user_message_at = ts
+                            if _is_human_turn(data):
+                                session.last_human_turn_at = ts
                     # User replied → commit is no longer the last word
                     if msg_type == "user" and _is_human_turn(data):
                         session.last_commit_sha = ""
@@ -772,6 +775,8 @@ def refresh_session_tail(session: ClaudeSession, tail_bytes: int = 8192) -> bool
                     session.last_tool_name = ""
                     if ts:
                         session.last_user_message_at = ts
+                        if _is_human_turn(data):
+                            session.last_human_turn_at = ts
                 # User replied → commit is no longer the last word
                 if msg_type == "user" and _is_human_turn(data):
                     session.last_commit_sha = ""
