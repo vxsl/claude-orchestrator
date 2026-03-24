@@ -1007,7 +1007,7 @@ class OrchestratorApp(App):
             if self.state.filter_mode == key:
                 parts.append(f"[bold {C_CYAN}] {label} [/bold {C_CYAN}]")
             else:
-                parts.append(f"[{C_DIM}]{label}[/{C_DIM}]")
+                parts.append(f"[{C_FAINT}]{label}[/{C_FAINT}]")
 
         sort_labels = {
             "activity": "Activity", "updated": "Updated", "created": "Created",
