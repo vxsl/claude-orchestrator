@@ -60,6 +60,7 @@ from rendering import (
 from actions import (
     ws_directories, ws_working_dir, open_file_picker, open_link, generate_tig_tigrc,
 )
+from workstream_synthesizer import dismiss_workstream as _dismiss_workstream
 from terminal import TerminalWidget
 from notifications import Notification, dismiss_notification, dismiss_all_for_dirs
 from state import fuzzy_match, content_search, SessionSearchResult
@@ -954,6 +955,7 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         Binding("D", "dismiss_all_notifications", "Dismiss all", show=False),
         Binding("X", "trash_session", "Trash", show=False),
         Binding("T", "view_trash", "Trash view", show=False),
+        Binding("ctrl+x", "dismiss_discovered", "Dismiss suggestion", show=False),
         Binding("/", "search", "Search", show=False, priority=True),
         # Delegate to app — OptionList type-ahead consumes these before
         # they reach app-level bindings in a ModalScreen.
@@ -2665,6 +2667,30 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         self.store.update(self.ws)
         self.app.notify(f"Archived: {self.ws.name}", timeout=2)
         self.dismiss()
+
+    def action_dismiss_discovered(self):
+        """^X — dismiss an AI-suggested (discovered) workstream. No-op on manual workstreams."""
+        # Only applies to discovered (not yet pinned) workstreams
+        if self.app.state.store.get(self.ws.id) is not None:
+            self.app.notify("Only auto-suggested workstreams can be dismissed", timeout=2)
+            return
+
+        def on_confirm(confirmed: bool):
+            if not confirmed:
+                return
+            _dismiss_workstream(self.ws.id)
+            # Remove from in-memory discovered list so the UI updates immediately
+            self.app.state.discovered_ws = [
+                w for w in self.app.state.discovered_ws if w.id != self.ws.id
+            ]
+            self.app.notify(f"Dismissed: {self.ws.name}", timeout=2)
+            self.dismiss()
+            self.app._refresh_ws_table()
+
+        self.app.push_screen(
+            ConfirmScreen(f"Dismiss [bold]{_rich_escape(self.ws.name)}[/bold]?\n[dim]Threads will be reassigned on next sync[/dim]"),
+            callback=on_confirm,
+        )
 
     def action_archive_session(self):
         olist = self._focused_olist()
