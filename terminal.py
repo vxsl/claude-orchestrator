@@ -615,9 +615,23 @@ class TerminalWidget(Widget, can_focus=True):
         def _on_output():
             try:
                 raw = self._p_out.read(65536)
-                queue.put_nowait(raw)
+                if not raw:
+                    # EOF — child process exited.  Remove the reader
+                    # immediately so the event loop stops busy-spinning
+                    # on a perpetually-readable fd.
+                    try:
+                        loop.remove_reader(self._p_out)
+                    except Exception:
+                        pass
+                    queue.put_nowait(None)
+                else:
+                    queue.put_nowait(raw)
                 event.set()
             except Exception:
+                try:
+                    loop.remove_reader(self._p_out)
+                except Exception:
+                    pass
                 queue.put_nowait(None)
                 event.set()
 

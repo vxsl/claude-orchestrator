@@ -95,8 +95,12 @@ class SessionBridge:
                 if ready:
                     # Drain any pending bytes
                     try:
-                        os.read(fd, 4096)
+                        data = os.read(fd, 4096)
                     except OSError:
+                        break
+                    if not data:
+                        # EOF — writer (Rust daemon) closed the pipe.
+                        # Break to avoid busy-spinning on a dead FIFO.
                         break
                     callback()
             except (OSError, ValueError):
