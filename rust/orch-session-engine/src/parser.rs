@@ -197,6 +197,20 @@ fn is_human_turn(msg: &Value) -> bool {
     false
 }
 
+/// True if this JSONL entry is CLI-local bookkeeping (not sent to API).
+/// Slash commands (/effort, /model), their stdout, and caveat wrappers are
+/// written to the JSONL for history but never sent to Claude.
+fn is_cli_local_message(data: &Value) -> bool {
+    if data["isMeta"].as_bool() == Some(true) {
+        return true;
+    }
+    if let Some(s) = data["message"]["content"].as_str() {
+        let trimmed = s.trim_start();
+        return trimmed.starts_with("<command-name>") || trimmed.starts_with("<local-command-");
+    }
+    false
+}
+
 /// True if this user message is a "[Request interrupted…]" marker.
 fn is_interrupt_marker(msg: &Value) -> bool {
     let content = &msg["content"];
@@ -409,13 +423,10 @@ pub fn parse_session(jsonl_path: &Path) -> Result<Session> {
 
         // Track last message role
         if msg_type == "user" || msg_type == "assistant" {
-            // Meta/external user messages (slash commands, local-command output)
+            // CLI-local user messages (slash commands, local-command output)
             // don't trigger Claude to think — preserve turn_complete so the
             // session isn't misread as THINKING.
-            let is_meta_user = msg_type == "user"
-                && (data["isMeta"].as_bool() == Some(true)
-                    || data["userType"].as_str() == Some("external"));
-            if !is_meta_user {
+            if !(msg_type == "user" && is_cli_local_message(&data)) {
                 session.turn_complete = false;
             }
 

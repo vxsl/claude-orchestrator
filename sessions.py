@@ -361,6 +361,23 @@ def _is_human_turn(data: dict) -> bool:
     return False
 
 
+def _is_cli_local_message(data: dict) -> bool:
+    """True if this user message is CLI-local bookkeeping (not sent to API).
+
+    Slash commands (/effort, /model), their stdout, and caveat wrappers are
+    written to the JSONL for history but never sent to Claude.  They should
+    not reset turn_complete.
+    """
+    if data.get("isMeta"):
+        return True
+    msg = data.get("message", {})
+    content = msg.get("content", "")
+    if isinstance(content, str):
+        s = content.lstrip()
+        return s.startswith("<command-name>") or s.startswith("<local-command-")
+    return False
+
+
 def _is_interrupt_marker(data: dict) -> bool:
     """Return True if this user message is a '[Request interrupted…]' marker."""
     msg = data.get("message", {})
@@ -678,13 +695,10 @@ def parse_session(jsonl_path: Path) -> Optional[ClaudeSession]:
 
                 # Track last message role (user or assistant)
                 if msg_type in ("user", "assistant"):
-                    # Meta/external user messages (slash commands, local-command
+                    # CLI-local user messages (slash commands, local-command
                     # output) don't trigger Claude to think — preserve
                     # turn_complete so the session isn't misread as THINKING.
-                    _is_meta_user = (msg_type == "user" and
-                                     (data.get("isMeta") or
-                                      data.get("userType") == "external"))
-                    if not _is_meta_user:
+                    if not (msg_type == "user" and _is_cli_local_message(data)):
                         session.turn_complete = False
                     if msg_type == "user":
                         # Reset stale assistant-turn state so session_activity
@@ -828,10 +842,7 @@ def refresh_session_tail(session: ClaudeSession, tail_bytes: int = 8192) -> bool
                 _pending_commit = False
 
             if msg_type in ("user", "assistant"):
-                _is_meta_user = (msg_type == "user" and
-                                 (data.get("isMeta") or
-                                  data.get("userType") == "external"))
-                if not _is_meta_user:
+                if not (msg_type == "user" and _is_cli_local_message(data)):
                     session.turn_complete = False
                 if msg_type == "user":
                     session.last_stop_reason = ""
