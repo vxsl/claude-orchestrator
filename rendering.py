@@ -19,6 +19,28 @@ def _rich_escape(text: str) -> str:
     """
     return text.replace("[", r"\[")
 
+
+_MARKUP_STRIP_RE = re.compile(r"\[/?[^\]]*\]")
+
+
+def _pad_thinking_bg(markup: str, width: int) -> str:
+    """Wrap markup in a full-width dark-blue background for thinking rows.
+
+    Pads each line with spaces so the background color fills the whole row
+    rather than stopping at the last character.
+    """
+    if width <= 0:
+        return f"[on {BG_THINKING}]{markup}[/on {BG_THINKING}]"
+    lines = markup.split("\n")
+    padded = []
+    for line in lines:
+        # Strip markup tags and unescape \[ to measure visual width
+        visual = _MARKUP_STRIP_RE.sub("", line).replace(r"\[", "[")
+        pad = max(0, width - len(visual))
+        padded.append(line + " " * pad)
+    return f"[on {BG_THINKING}]" + "\n".join(padded) + f"[/on {BG_THINKING}]"
+
+
 from models import (
     Category, TodoItem, Workstream,
     _relative_time,
@@ -50,7 +72,7 @@ BG_BASE = "#000000"      # true black — matches terminal
 BG_SURFACE = "#060606"   # barely lifted — focused panels
 BG_RAISED = "#0d1117"    # bars, headers, inputs
 BG_CHROME = "#060809"    # tab bar and footer — darker chrome, between black and panels
-BG_THINKING = "#081c1f"  # dark cyan tint — active thinking rows
+BG_THINKING = "#0d1829"  # dark blue tint — active thinking rows
 
 
 # ─── Staleness helpers ──────────────────────────────────────────────
@@ -536,7 +558,7 @@ def _render_ws_option(
     lines.append("")
     result = "\n".join(lines)
     if best == ThreadActivity.THINKING:
-        result = f"[on {BG_THINKING}]{result}[/on {BG_THINKING}]"
+        result = _pad_thinking_bg(result, line_width)
     return result
 
 
@@ -812,7 +834,7 @@ def _render_session_option(
 
     result = "\n".join(lines)
     if act == ThreadActivity.THINKING:
-        result = f"[on {BG_THINKING}]{result}[/on {BG_THINKING}]"
+        result = _pad_thinking_bg(result, LINE_WIDTH)
     return result
 
 
