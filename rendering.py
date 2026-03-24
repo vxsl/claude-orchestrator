@@ -29,16 +29,14 @@ def _pad_thinking_bg(markup: str, width: int) -> str:
     Pads each line with spaces so the background color fills the whole row
     rather than stopping at the last character.
     """
-    if width <= 0:
-        return f"[on {BG_THINKING}]{markup}[/on {BG_THINKING}]"
     lines = markup.split("\n")
     padded = []
     for line in lines:
         # Strip markup tags and unescape \[ to measure visual width
         visual = _MARKUP_STRIP_RE.sub("", line).replace(r"\[", "[")
-        pad = max(0, width - len(visual))
-        padded.append(line + " " * pad)
-    return f"[on {BG_THINKING}]" + "\n".join(padded) + f"[/on {BG_THINKING}]"
+        pad = max(0, width - len(visual)) if width > 0 else 0
+        padded.append(f"[on {BG_THINKING}]{line}{' ' * pad}[/]")
+    return "\n".join(padded)
 
 
 from models import (
