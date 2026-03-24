@@ -39,7 +39,7 @@ from thread_namer import get_session_title
 log = logging.getLogger("orch.claude_session")
 
 # Keys that pass through the TerminalWidget to the screen for panel navigation
-_PASSTHROUGH_KEYS = {"ctrl+j", "ctrl+k", "ctrl+e", "ctrl+h", "ctrl+z", "ctrl+backslash", "ctrl+b", "ctrl+x"}
+_PASSTHROUGH_KEYS = {"ctrl+j", "ctrl+k", "ctrl+e", "ctrl+h", "ctrl+z", "ctrl+backslash", "ctrl+b", "ctrl+x", "ctrl+@"}
 
 ORCH_DIR = str(Path(__file__).parent)
 
@@ -683,12 +683,27 @@ class ClaudeSessionScreen(Screen):
             event.prevent_default()
             self.action_zoom_panel()
             return
+        # ctrl+space (terminal sends \x00 → Textual: ctrl+@): archive + go back
+        if event.key == "ctrl+@" or event.character == "\x00":
+            event.stop()
+            event.prevent_default()
+            self._archive_and_go_back()
+            return
         # Textual reports ctrl+h as key="backspace" character="\x08";
         # distinguish from physical backspace (character="\x7f").
         if event.key == "backspace" and event.character == "\x08":
             event.stop()
             event.prevent_default()
             self.action_go_back()
+
+    def _archive_and_go_back(self) -> None:
+        """Ctrl+Space: archive this session, then detach and go back."""
+        from datetime import datetime, timezone
+        ws = self._store.get(self._ws.id) or self._ws
+        if self._session_id not in ws.archived_sessions:
+            ws.archived_sessions[self._session_id] = datetime.now(timezone.utc).isoformat()
+            self._store.update(ws)
+        self.action_go_back()
 
     def action_go_back(self) -> None:
         """Detach from the session — process keeps running in tmux."""
