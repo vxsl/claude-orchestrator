@@ -1353,11 +1353,7 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         from actions import refresh_liveness
         from sessions import refresh_session_tail
         refresh_liveness(self._detail_sessions)
-        refresh_liveness(self._archived_sessions)
         for s in self._detail_sessions:
-            if s.is_live:
-                refresh_session_tail(s)
-        for s in self._archived_sessions:
             if s.is_live:
                 refresh_session_tail(s)
         # Build fingerprint to check if anything changed
