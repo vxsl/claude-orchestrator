@@ -1,369 +1,287 @@
-#!/usr/bin/env bash
-# orch-header — 3-line status bar for Claude sessions launched from orch
-#
-# Line 1: thread title (prominent, bold)     model  ⏱ elapsed  sid
-# Line 2: ORCH  workstream  status  category  │  msgs  tokens  duration  age
-# Line 3: tool bar  files mutated  │  last message snippet
-set -euo pipefail
+#!/usr/bin/env python3
+"""orch-header — persistent 3-line status bar for Claude sessions.
 
-# ─── Parse arguments ────────────────────────────────────────────
-WS_NAME="" WS_STATUS="" WS_CATEGORY="" WS_DESC="" SESSION_ID="" JSONL_PATH=""
-INITIAL_TITLE=""
+Runs as a single long-lived Python process (no subprocess-per-tick).
+Refreshes every 1s; re-parses the JSONL only when its mtime changes.
+"""
 
-while [[ $# -gt 0 ]]; do
-    case "$1" in
-        --ws-name)     WS_NAME="$2"; shift 2;;
-        --ws-status)   WS_STATUS="$2"; shift 2;;
-        --ws-category) WS_CATEGORY="$2"; shift 2;;
-        --ws-desc)     WS_DESC="$2"; shift 2;;
-        --session-id)  SESSION_ID="$2"; shift 2;;
-        --jsonl)       JSONL_PATH="$2"; shift 2;;
-        --title)       INITIAL_TITLE="$2"; shift 2;;
-        *)             shift;;
-    esac
-done
+import sys
+import os
+import time
+import signal
+import argparse
+from pathlib import Path
 
-ORCH_DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
-START_TIME=$(date +%s)
-
-# Hide cursor in this pane
-printf '\033[?25l'
-trap 'printf "\033[?25h"' EXIT
-
-format_elapsed() {
-    local secs=$1
-    if (( secs < 60 )); then
-        printf '%ds' "$secs"
-    elif (( secs < 3600 )); then
-        printf '%dm%02ds' $((secs / 60)) $((secs % 60))
-    else
-        printf '%dh%02dm' $((secs / 3600)) $(((secs % 3600) / 60))
-    fi
-}
-
-# ─── Fast initial render (bash-only, no Python startup cost) ────
-_initial_render() {
-    local cols
-    cols=$(tput cols 2>/dev/null || echo 120)
-    local title="${INITIAL_TITLE:-$WS_NAME}"
-    local sid_short="${SESSION_ID:0:8}"
-
-    # ANSI — same palette as the Python block below
-    local BG=$'\033[48;5;234m'
-    local RST=$'\033[0m'
-    local BLD=$'\033[1m'
-    local W=$'\033[38;5;252m'
-    local D=$'\033[38;5;244m'
-    local F=$'\033[38;5;239m'
-    local B=$'\033[38;5;109m'
-    local P=$'\033[38;5;141m'
-    local CY=$'\033[38;5;81m'
-    local G=$'\033[38;5;114m'
-    local R=$'\033[38;5;167m'
-    local EL=$'\033[K'$RST
-
-    local sc="$D"
-    case "$WS_STATUS" in
-        in-progress)    sc="$CY" ;;
-        queued)         sc="$D"  ;;
-        awaiting-review) sc="$P" ;;
-        done)           sc="$G"  ;;
-        blocked)        sc="$R"  ;;
-    esac
-
-    local cc="$D"
-    case "$WS_CATEGORY" in
-        work)     cc="$CY" ;;
-        personal) cc="$P"  ;;
-        meta)     cc="$D"  ;;
-    esac
-
-    # Truncate title if needed
-    local r1_plain="⏱ 0s  ${sid_short}"
-    local title_max=$(( cols - ${#r1_plain} - 6 ))
-    if (( ${#title} > title_max && title_max > 20 )); then
-        title="${title:0:$((title_max - 1))}…"
-    fi
-    local gap=$(( cols - ${#title} - ${#r1_plain} - 4 ))
-    (( gap < 2 )) && gap=2
-
-    local line1="${BG} ${BLD}${W}${title}${RST}${BG}$(printf '%*s' $gap '')${D}⏱ 0s  ${F}${sid_short} ${EL}"
-    local line2="${BG} ${B}ORCH${RST}${BG}  ${P}${WS_NAME}${RST}${BG}  ${sc}${WS_STATUS}${RST}${BG}  ${cc}${WS_CATEGORY} ${EL}"
-    local line3="${BG}$(printf '%*s' $cols '') ${EL}"
-
-    printf '\033[H\033[2K%s\n\033[2K%s\n\033[2K%s' "$line1" "$line2" "$line3"
-}
-_initial_render
-
-# ─── Render loop ────────────────────────────────────────────────
-while true; do
-    ELAPSED=$(format_elapsed $(($(date +%s) - START_TIME)))
-    COLS=$(tput cols 2>/dev/null || echo 120)
-
-    # Single Python call renders all 3 lines with ANSI escapes
-    OUTPUT=$(python3 -c "
-import sys, os
-sys.path.insert(0, '$ORCH_DIR')
-
-# ── ANSI palette ──
-# BG is the dark background used across all lines.
-# X (\"reset to base\") clears bold/italic but keeps BG — use instead of \\033[0m
-# to avoid patchy background.  Only use RST at the very end of a line.
+# ── ANSI palette ──────────────────────────────────────────────────────────────
 BG  = '\033[48;5;234m'
 X   = '\033[22;23;24m' + BG   # clear bold/italic/underline, reapply bg
-B   = '\033[38;5;109m'   # blue
-P   = '\033[38;5;141m'   # purple
-CY  = '\033[38;5;81m'    # cyan
-G   = '\033[38;5;114m'   # green
-Y   = '\033[38;5;221m'   # yellow
-R   = '\033[38;5;167m'   # red
-O   = '\033[38;5;215m'   # orange
-D   = '\033[38;5;244m'   # dim
-F   = '\033[38;5;239m'   # faint
-M   = '\033[38;5;248m'   # mid
-W   = '\033[38;5;252m'   # white
+B   = '\033[38;5;109m'
+P   = '\033[38;5;141m'
+CY  = '\033[38;5;81m'
+G   = '\033[38;5;114m'
+Y   = '\033[38;5;221m'
+R   = '\033[38;5;167m'
+O   = '\033[38;5;215m'
+D   = '\033[38;5;244m'
+F   = '\033[38;5;239m'
+M   = '\033[38;5;248m'
+W   = '\033[38;5;252m'
 RST = '\033[0m'
 BLD = '\033[1m'
+EL  = '\033[K' + RST
 
-COLS = int('$COLS')
-WS_NAME    = '''$WS_NAME'''
-WS_STATUS  = '''$WS_STATUS'''
-WS_CATEGORY = '''$WS_CATEGORY'''
-SESSION_ID = '''$SESSION_ID'''
-ELAPSED    = '''$ELAPSED'''
-INITIAL_TITLE = '''$INITIAL_TITLE'''
-JSONL_PATH = '''$JSONL_PATH'''
-
-# ── Status / category colors ──
 STATUS_COLORS = {
     'in-progress': CY, 'queued': D, 'awaiting-review': P,
     'done': G, 'blocked': R,
 }
 CAT_COLORS = {'work': CY, 'personal': P, 'meta': D}
 
-sc = STATUS_COLORS.get(WS_STATUS, D)
-cc = CAT_COLORS.get(WS_CATEGORY, D)
 
-# ── Parse session data ──
-title = ''
-model = ''
-msgs = 0
-asst_msgs = 0
-tokens_str = '—'
-duration = ''
-age = ''
-files = []
-tool_counts = {}
-last_msg = ''
-last_role = ''
-ctx_tokens = 0
-ctx_window = 200_000
-sid_short = SESSION_ID[:8]
+def format_elapsed(secs):
+    secs = int(secs)
+    if secs < 60:
+        return f'{secs}s'
+    elif secs < 3600:
+        return f'{secs // 60}m{secs % 60:02d}s'
+    else:
+        return f'{secs // 3600}h{(secs % 3600) // 60:02d}m'
 
-from pathlib import Path
-if JSONL_PATH and Path(JSONL_PATH).exists():
-    try:
-        from sessions import parse_session
-        s = parse_session(Path(JSONL_PATH))
-        if s:
-            model = s.model_short
-            msgs = s.message_count
-            asst_msgs = s.assistant_message_count
-            tokens_str = s.tokens_display
-            duration = s.duration_display
-            age = s.age
-            files = s.files_mutated or []
-            tool_counts = s.tool_counts or {}
-            last_msg = s.last_user_message_text or s.last_message_text or ''
-            last_role = 'user' if s.last_user_message_text else (s.last_message_role or '')
-            ctx_tokens = s.context_tokens
-            ctx_window = s.context_window_size
 
-            # Resolve title
-            from thread_namer import get_session_title
-            title = get_session_title(s)
-            if not title:
-                from threads import _extract_first_message
-                fm = _extract_first_message(s)
-                if fm:
-                    line = fm.split(chr(10))[0].strip()
-                    if line.startswith('#'):
-                        line = line.lstrip('# ')
-                    title = line
-    except Exception:
-        pass
-
-if not title:
-    title = INITIAL_TITLE or WS_NAME
-
-# ── Tool bar (ANSI version) ──
 def tool_bar(tc, width=8):
     cats = [('mutate', O), ('bash', W), ('read', D), ('agent', P)]
     total = sum(tc.values())
     if total == 0:
-        return f'{F}{\"─\" * width}{X}'
+        return f'{F}{"─" * width}{X}'
     parts = []
     used = 0
     for cat, color in cats:
         n = tc.get(cat, 0)
-        if n == 0:
+        if not n:
             continue
-        chars = max(1, round(n / total * width))
-        chars = min(chars, width - used)
+        chars = min(max(1, round(n / total * width)), width - used)
         if chars > 0:
-            parts.append(f'{color}{\"▬\" * chars}{X}')
+            parts.append(f'{color}{"▬" * chars}{X}')
             used += chars
     if used < width:
-        parts.append(f'{F}{\"─\" * (width - used)}{X}')
+        parts.append(f'{F}{"─" * (width - used)}{X}')
     return ''.join(parts)
 
-# ── File list ──
+
 def file_list(fs):
     if not fs:
         return ''
     if len(fs) <= 4:
-        return f'{D}{\" \".join(fs)}{X}'
-    shown = ' '.join(fs[:3])
-    return f'{D}{shown} +{len(fs) - 3}{X}'
+        return f'{D}{" ".join(fs)}{X}'
+    return f'{D}{" ".join(fs[:3])} +{len(fs) - 3}{X}'
 
-# ── Context bar (ANSI version) ──
+
 def context_bar(ctx_tokens, window_size=200_000, width=6):
     if ctx_tokens <= 0:
-        return ''
+        return '', 0
     pct = min(100.0, ctx_tokens / window_size * 100)
     filled = max(0, min(width, round(pct / 100 * width)))
     empty = width - filled
-    if pct >= 90:
-        color = R
-    elif pct >= 75:
-        color = O
-    elif pct >= 50:
-        color = Y
-    else:
-        color = G
-    return f'{color}{"▬" * filled}{X}{F}{"─" * empty}{X} {color}{pct:.0f}%{X}'
+    color = R if pct >= 90 else (O if pct >= 75 else (Y if pct >= 50 else G))
+    pct_str = f'{pct:.0f}%'
+    bar = f'{color}{"▬" * filled}{X}{F}{"─" * empty}{X} {color}{pct_str}{X}'
+    plain_len = width + 1 + len(pct_str)
+    return bar, plain_len
 
-# ── Build lines ──
-def pad_between(left_len, right_len, total):
-    return max(2, total - left_len - right_len)
 
-# Line 1: title (bold) + right: model elapsed sid
-r1_parts = []
-if model and model != '—':
-    r1_parts.append(f'{CY}{model}{X}')
-r1_parts.append(f'{D}⏱ {ELAPSED}{X}')
-r1_parts.append(f'{F}{sid_short}{X}')
-r1_text = '  '.join(r1_parts)
-
-# Compute right side plain length for padding
-r1_plain_len = len(model + '  ' if model and model != '—' else '') + len(f'⏱ {ELAPSED}') + 2 + 8
-title_max = COLS - r1_plain_len - 4  # 4 for margins
-if len(title) > title_max and title_max > 20:
-    display_title = title[:title_max - 1] + '…'
-else:
-    display_title = title
-title_plain_len = len(display_title)
-gap1 = pad_between(title_plain_len + 1, r1_plain_len + 1, COLS)
-line1 = f'{BG} {BLD}{W}{display_title}{X}{\" \" * gap1}{r1_text} '
-
-# Line 2: ORCH ws status category │ msgs tokens duration age
-l2 = f'{BG} {B}ORCH{X}  {P}{WS_NAME}{X}  {sc}{WS_STATUS}{X}  {cc}{WS_CATEGORY}{X}'
-l2_plain = len(f' ORCH  {WS_NAME}  {WS_STATUS}  {WS_CATEGORY}')
-
-r2_parts = []
-if msgs > 0:
-    msg_str = f'{msgs}↑{asst_msgs}↓'
-    r2_parts.append(f'{D}{msg_str}{X}')
-    # Color tokens by magnitude
-    total_tok = 0
+def get_cols():
     try:
-        if tokens_str.endswith('M'):
-            total_tok = float(tokens_str[:-1]) * 1_000_000
-        elif tokens_str.endswith('k'):
-            total_tok = float(tokens_str[:-1]) * 1_000
-        else:
-            total_tok = float(tokens_str) if tokens_str != '—' else 0
-    except ValueError:
+        return os.get_terminal_size().columns
+    except OSError:
+        return 120
+
+
+def render(args, start_time, session_cache):
+    cols = get_cols()
+    elapsed = format_elapsed(time.time() - start_time)
+
+    # ── Parse session (cached by mtime) ──────────────────────────────────────
+    title = ''
+    model = ''
+    msgs = asst_msgs = 0
+    tokens_str = '—'
+    duration = age = ''
+    files = []
+    tool_counts = {}
+    last_msg = last_role = ''
+    ctx_tokens = 0
+    ctx_window = 200_000
+    sid_short = (args.session_id or '')[:8]
+
+    jsonl_path = Path(args.jsonl) if args.jsonl else None
+    if jsonl_path and jsonl_path.exists():
+        try:
+            mtime = jsonl_path.stat().st_mtime
+            if mtime != session_cache.get('mtime'):
+                from sessions import parse_session
+                s = parse_session(jsonl_path)
+                session_cache['mtime'] = mtime
+                session_cache['session'] = s
+            s = session_cache.get('session')
+            if s:
+                model       = s.model_short
+                msgs        = s.message_count
+                asst_msgs   = s.assistant_message_count
+                tokens_str  = s.tokens_display
+                duration    = s.duration_display
+                age         = s.age
+                files       = s.files_mutated or []
+                tool_counts = s.tool_counts or {}
+                last_msg    = s.last_user_message_text or s.last_message_text or ''
+                last_role   = 'user' if s.last_user_message_text else (s.last_message_role or '')
+                ctx_tokens  = s.context_tokens
+                ctx_window  = s.context_window_size
+
+                if 'title' not in session_cache:
+                    from thread_namer import get_session_title
+                    t = get_session_title(s)
+                    if not t:
+                        from threads import _extract_first_message
+                        fm = _extract_first_message(s)
+                        if fm:
+                            line = fm.split('\n')[0].strip().lstrip('# ')
+                            t = line
+                    session_cache['title'] = t or ''
+                title = session_cache.get('title', '')
+        except Exception:
+            pass
+
+    if not title:
+        title = args.title or args.ws_name or ''
+
+    sc = STATUS_COLORS.get(args.ws_status, D)
+    cc = CAT_COLORS.get(args.ws_category, D)
+
+    # ── Line 1: title  model  ⏱ elapsed  sid ─────────────────────────────────
+    r1_parts = []
+    if model and model != '—':
+        r1_parts.append(f'{CY}{model}{X}')
+    r1_parts.append(f'{D}⏱ {elapsed}{X}')
+    r1_parts.append(f'{F}{sid_short}{X}')
+    r1_text = '  '.join(r1_parts)
+    r1_plain = (len(model) + 2 if model and model != '—' else 0) + len(f'⏱ {elapsed}') + 2 + 8
+
+    title_max = cols - r1_plain - 4
+    display_title = (title[:title_max - 1] + '…') if len(title) > title_max > 20 else title
+    gap1 = max(2, cols - len(display_title) - 1 - r1_plain - 1)
+    line1 = f'{BG} {BLD}{W}{display_title}{X}{" " * gap1}{r1_text} '
+
+    # ── Line 2: ORCH  ws  status  category  │  msgs tokens duration age ───────
+    l2 = f'{BG} {B}ORCH{X}  {P}{args.ws_name}{X}  {sc}{args.ws_status}{X}  {cc}{args.ws_category}{X}'
+    r2_parts = []
+    if msgs > 0:
+        r2_parts.append(f'{D}{msgs}↑{asst_msgs}↓{X}')
+        try:
+            tok = (float(tokens_str[:-1]) * 1_000_000 if tokens_str.endswith('M')
+                   else float(tokens_str[:-1]) * 1_000 if tokens_str.endswith('k')
+                   else float(tokens_str) if tokens_str != '—' else 0)
+        except ValueError:
+            tok = 0
+        tc_color = O if tok >= 500_000 else (Y if tok >= 100_000 else D)
+        r2_parts.append(f'{tc_color}{tokens_str}{X}')
+        if duration:
+            r2_parts.append(f'{D}{duration}{X}')
+        if age:
+            r2_parts.append(f'{M}{age}{X}')
+    if r2_parts:
+        l2 += f'  {D}│{X}  ' + '  '.join(r2_parts)
+    line2 = f'{l2} '
+
+    # ── Line 3: context bar  tool bar  files  │  last message snippet ─────────
+    cbar, cbar_plain = context_bar(ctx_tokens, ctx_window)
+    bar = tool_bar(tool_counts)
+    flist = file_list(files)
+
+    l3 = f'{BG} '
+    l3_plain = 1
+    if cbar:
+        l3 += f'{cbar}  '
+        l3_plain += cbar_plain + 2
+    l3 += bar
+    l3_plain += 8
+    if flist:
+        l3 += f'  {flist}'
+        fl_plain = (sum(len(f) for f in files[:3]) + 2 + len(str(len(files) - 3)) + 1
+                    if len(files) > 4
+                    else sum(len(f) for f in files[:4]) + min(len(files), 4) - 1)
+        l3_plain += 2 + fl_plain
+
+    if last_msg:
+        prefix = 'you: ' if last_role == 'user' else ''
+        clean = last_msg.replace('\n', ' ').strip()
+        max_snip = cols - l3_plain - 8
+        if max_snip > 20:
+            if len(prefix + clean) > max_snip:
+                clean = clean[:max_snip - len(prefix) - 1] + '…'
+            snippet = f'{M}{prefix}{X}{F}{clean}{X}' if prefix else f'{F}{clean}{X}'
+            l3 += f'  {D}│{X}  {snippet}'
+    l3 += ' '
+    line3 = l3
+
+    sys.stdout.write(
+        f'\033[H\033[2K{line1}{EL}\n'
+        f'\033[2K{line2}{EL}\n'
+        f'\033[2K{line3}{EL}'
+    )
+    sys.stdout.flush()
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--ws-name',     default='')
+    parser.add_argument('--ws-status',   default='')
+    parser.add_argument('--ws-category', default='')
+    parser.add_argument('--ws-desc',     default='')
+    parser.add_argument('--session-id',  default='')
+    parser.add_argument('--jsonl',       default='')
+    parser.add_argument('--title',       default='')
+    args = parser.parse_args()
+
+    orch_dir = Path(__file__).resolve().parent
+    sys.path.insert(0, str(orch_dir))
+
+    start_time = time.time()
+    session_cache: dict = {}
+    needs_render = [True]
+
+    # Hide cursor
+    sys.stdout.write('\033[?25l')
+    sys.stdout.flush()
+
+    def cleanup(*_):
+        sys.stdout.write('\033[?25h\033[0m\n')
+        sys.stdout.flush()
+        sys.exit(0)
+
+    def on_resize(*_):
+        needs_render[0] = True
+
+    signal.signal(signal.SIGTERM, cleanup)
+    signal.signal(signal.SIGINT, cleanup)
+    signal.signal(signal.SIGWINCH, on_resize)
+
+    try:
+        while True:
+            try:
+                render(args, start_time, session_cache)
+            except Exception:
+                pass
+            needs_render[0] = False
+            # Sleep in 0.1s chunks so resize re-renders immediately
+            for _ in range(10):   # 1s total
+                time.sleep(0.1)
+                if needs_render[0]:
+                    break
+    except (KeyboardInterrupt, SystemExit):
         pass
-    if total_tok >= 500_000:
-        tc_color = O
-    elif total_tok >= 100_000:
-        tc_color = Y
-    else:
-        tc_color = D
-    r2_parts.append(f'{tc_color}{tokens_str}{X}')
-    if duration:
-        r2_parts.append(f'{D}{duration}{X}')
-    if age:
-        r2_parts.append(f'{M}{age}{X}')
+    finally:
+        sys.stdout.write('\033[?25h\033[0m\n')
+        sys.stdout.flush()
 
-r2_text = '  '.join(r2_parts) if r2_parts else ''
-if r2_text:
-    l2 += f'  {D}│{X}  {r2_text}'
 
-line2 = f'{l2} '
-
-# Line 3: context bar + tool bar + files │ last message snippet
-cbar = context_bar(ctx_tokens, ctx_window)
-bar = tool_bar(tool_counts)
-flist = file_list(files)
-l3_left = f'{BG} '
-l3_plain_left = 1
-if cbar:
-    # context bar is: 6 chars bar + space + up to 4 chars pct (e.g. "100%")
-    pct_str = f'{min(100.0, ctx_tokens / ctx_window * 100):.0f}%'
-    l3_left += f'{cbar}  '
-    l3_plain_left += 6 + 1 + len(pct_str) + 2  # bar + space + pct + gap
-l3_left += bar
-l3_plain_left += 8  # tool bar width
-if flist:
-    l3_left += f'  {flist}'
-    fl_plain = sum(len(f) for f in files[:4]) + min(len(files), 4) - 1
-    if len(files) > 4:
-        fl_plain = sum(len(f) for f in files[:3]) + 2 + len(str(len(files) - 3)) + 1
-    l3_plain_left += 2 + fl_plain
-
-# Last message snippet on the right
-snippet = ''
-if last_msg:
-    prefix = 'you: ' if last_role == 'user' else ''
-    clean = last_msg.replace(chr(10), ' ').strip()
-    max_snip = COLS - l3_plain_left - 8  # 8 for margins/separator
-    if max_snip > 20:
-        if len(prefix + clean) > max_snip:
-            clean = clean[:max_snip - len(prefix) - 1] + '…'
-        snippet = f'{M}{prefix}{X}{F}{clean}{X}' if prefix else f'{F}{clean}{X}'
-
-if snippet:
-    l3 = f'{l3_left}  {D}│{X}  {snippet} '
-else:
-    l3 = f'{l3_left} '
-
-line3 = l3
-
-# Pad each line to full terminal width so BG fills completely.
-# We use \\033[K (erase to end of line) with BG active — this fills
-# the remainder of the line with the background color.
-# \\033[K erases to EOL using current BG color (already set in each line)
-EL = '\033[K' + RST
-print(f'{line1}{EL}')
-print(f'{line2}{EL}')
-print(f'{line3}{EL}')
-" 2>/dev/null) || true
-
-    # Render 3 lines (move to top, clear each line)
-    if [[ -n "$OUTPUT" ]]; then
-        printf '\033[H\033[2K%s\n\033[2K%s\n\033[2K%s' \
-            "$(echo "$OUTPUT" | sed -n '1p')" \
-            "$(echo "$OUTPUT" | sed -n '2p')" \
-            "$(echo "$OUTPUT" | sed -n '3p')"
-    else
-        # Fallback: minimal display when Python fails
-        printf '\033[H\033[2K\033[48;5;234m \033[1;38;5;252m%s\033[22m%*s\033[0m\n\033[2K\033[48;5;234m \033[38;5;109mORCH\033[22m  \033[38;5;141m%s\033[22m%*s\033[0m\n\033[2K\033[48;5;234m%*s\033[0m' \
-            "${INITIAL_TITLE:-$WS_NAME}" $((COLS - ${#WS_NAME} - 2)) "" \
-            "$WS_NAME" $((COLS - ${#WS_NAME} - 8)) "" \
-            "$COLS" ""
-    fi
-
-    sleep 5
-done
+if __name__ == '__main__':
+    main()
