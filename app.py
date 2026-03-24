@@ -589,7 +589,7 @@ class OrchestratorApp(App):
             if is_active and is_permanent:
                 parts.append(f"[bold italic {C_MID} on {BG_BASE}] {prefix}{_rich_escape(label)} [/]")
             elif is_active:
-                parts.append(f"[bold {C_BLUE} on {BG_BASE}] {prefix}{_rich_escape(label)} [/]")
+                parts.append(f"[bold {C_MID} on {BG_BASE}] {prefix}{_rich_escape(label)} [/]")
             elif is_permanent:
                 parts.append(f"[italic {C_FAINT} on {BG_RAISED}] {prefix}{_rich_escape(label)} [/]")
             else:
@@ -1435,7 +1435,7 @@ class OrchestratorApp(App):
 
         Used by thought-to-thread flows (brain dump launch, ticket pick, etc.)
         """
-        self.tabs.open_tab(ws.id, ws.name, "\u25cf")
+        self.tabs.open_tab(ws.id, ws.name, "\u00b7")
         self._sync_tab_bar()
         self._detail_screen_active = True
         screen_name = f"detail:{ws.id}"
