@@ -30,6 +30,7 @@ from rendering import (
     C_BLUE, C_CYAN, C_DIM, C_FAINT, C_MID, C_ORANGE,
     C_PURPLE, C_YELLOW,
     CATEGORY_THEME,
+    _context_bar_compact,
 )
 from sessions import ClaudeSession, parse_session
 from terminal import TerminalWidget
@@ -200,6 +201,8 @@ class SessionHeaderWidget(Static):
         age = ""
         files: list[str] = []
         tool_counts: dict[str, int] = {}
+        context_tokens: int = 0
+        context_window_size: int = 200_000
         last_msg = ""
         last_role = ""
 
@@ -235,6 +238,8 @@ class SessionHeaderWidget(Static):
                     age = s.age
                     files = s.files_mutated or []
                     tool_counts = s.tool_counts or {}
+                    context_tokens = s.context_tokens
+                    context_window_size = s.context_window_size
                     last_msg = s.last_user_message_text or s.last_message_text or ""
                     last_role = "user" if s.last_user_message_text else (s.last_message_role or "")
                     title = get_session_title(s) or ""
@@ -265,9 +270,11 @@ class SessionHeaderWidget(Static):
             l2 += f"  [{C_DIM}]│[/]  " + "  ".join(r2_parts)
         line2 = l2
 
+        ctx_bar = _context_bar_compact(context_tokens, context_window_size)
         bar = _tool_bar_markup(tool_counts)
         flist = _file_list_markup(files)
-        l3 = bar
+        l3_parts = [p for p in (ctx_bar, bar) if p]
+        l3 = "  ".join(l3_parts)
         if flist:
             l3 += f"  {flist}"
         if last_msg:
