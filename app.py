@@ -2092,6 +2092,8 @@ class OrchestratorApp(App):
             self._do_solve(result.get("ticket", ""))
         elif action == "worktree":
             self.action_branches()
+        elif action == "rr":
+            self.action_rr()
         elif action == "trash":
             self.action_view_trash()
 
@@ -2222,6 +2224,20 @@ class OrchestratorApp(App):
         screen._get_items = lambda: items
         screen._on_selected = lambda item_id: (screen.dismiss(item_id),)
         self.push_screen(screen, callback=on_branch)
+
+    def action_rr(self):
+        """Launch rr.sh branch/worktree manager, suspending orch while it runs."""
+        from actions import run_dev_tool, dev_tools_available
+        if not dev_tools_available():
+            self.notify("dev-workflow-tools not found at ~/bin/dev-workflow-tools", severity="error", timeout=3)
+            return
+        cmd = run_dev_tool("rr.sh")
+        if not cmd:
+            self.notify("rr.sh not found", severity="error", timeout=3)
+            return
+        with self.suspend():
+            subprocess.run(cmd)
+        self._poll_worktrees()
 
     def action_files(self):
         """Open file picker for the selected workstream's directory."""

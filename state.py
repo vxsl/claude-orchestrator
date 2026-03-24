@@ -1402,6 +1402,8 @@ class AppState:
             return {"action": "branches"}
         elif cmd in ("worktree", "wt"):
             return {"action": "worktree", "arg": arg}
+        elif cmd == "rr":
+            return {"action": "rr"}
 
         # File picker
         elif cmd in ("files", "file", "edit"):
