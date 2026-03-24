@@ -10,6 +10,8 @@ import re
 from datetime import datetime, timezone
 from pathlib import Path
 
+from rich.text import Text
+
 def _rich_escape(text: str) -> str:
     """Escape ALL [ characters for Rich markup.
 
@@ -386,7 +388,7 @@ def _render_ws_option(
     tmux_check=None,
     line_width: int = 0,
     git_status=None,
-) -> str:
+) -> Text:
     """Render a workstream as a formatted 3-line OptionList entry.
 
     Layout:
@@ -530,7 +532,7 @@ def _render_ws_option(
 
     # Trailing blank line for visual separation
     lines.append("")
-    return "\n".join(lines)
+    return Text.from_markup("\n".join(lines))
 
 
 # ─── Session Option Rendering ────────────────────────────────────────
