@@ -269,7 +269,10 @@ class _VimOptionListMixin:
         self._olist().action_page_down()
 
     def action_half_page_up(self):
-        self._olist().action_page_up()
+        ol = self._olist()
+        ol.action_page_up()
+        if ol.highlighted is None and ol.option_count > 0:
+            ol.action_first()
 
     def action_jump_top(self):
         self._olist().action_first()
