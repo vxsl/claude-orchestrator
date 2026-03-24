@@ -708,10 +708,9 @@ def _render_session_option(
         s_dim = C_FAINT if stale else C_DIM     # tertiary text
 
     # Resolved state: session's last action was a git commit
-    # But active states (thinking, awaiting input) take priority — the session
-    # has moved on from the commit.
-    _active = act in (ThreadActivity.THINKING, ThreadActivity.AWAITING_INPUT)
-    committed = bool(s.last_commit_sha) and not _active
+    # THINKING suppresses it (Claude mid-turn, may do more after the commit).
+    # AWAITING_INPUT does NOT suppress it — turn is done, commit is the last act.
+    committed = bool(s.last_commit_sha) and act != ThreadActivity.THINKING
 
     if archived:
         icon = f"[{C_DIM}]·[/{C_DIM}]"
