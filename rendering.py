@@ -70,7 +70,7 @@ BG_BASE = "#000000"      # true black — matches terminal
 BG_SURFACE = "#060606"   # barely lifted — focused panels
 BG_RAISED = "#0d1117"    # bars, headers, inputs
 BG_CHROME = "#060809"    # tab bar and footer — darker chrome, between black and panels
-BG_THINKING = "#1a3a6e"  # dark navy blue — active thinking rows
+BG_THINKING = "#102342"  # dark navy blue — active thinking rows
 
 
 # ─── Staleness helpers ──────────────────────────────────────────────
@@ -323,7 +323,7 @@ def _activity_icon(activity: ThreadActivity, throbber_frame: int = 0, seen: bool
     """Return a Rich-markup activity indicator."""
     if activity == ThreadActivity.THINKING:
         char = THROBBER_FRAMES[throbber_frame % len(THROBBER_FRAMES)]
-        return f"[bold {C_CYAN}]{char}[/bold {C_CYAN}]"
+        return f"[bold {C_BLUE}]{char}[/bold {C_BLUE}]"
     if activity in (ThreadActivity.AWAITING_INPUT, ThreadActivity.RESPONSE_READY):
         color = C_DIM if seen else C_YELLOW
         return f"[{color}]●[/{color}]"
