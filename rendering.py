@@ -359,19 +359,28 @@ def _parse_iso(ts: str):
 def _is_session_seen(session, last_seen: dict[str, str] | None = None) -> bool:
     """True if user has viewed this session since its last meaningful change.
 
-    Uses last_user_message_at (stable) instead of last_activity, which
-    gets bumped by heartbeat/system messages on every tail refresh.
+    Uses last_activity as the anchor (excludes CLI-local messages).
+    Falls back to last_user_message_at when last_activity is empty.
+
+    Special case — interrupts: when the user interrupts a session (before
+    or after Claude responds), both last_user_message_at and last_activity
+    are set to T_interrupt, so last_user_message_at >= last_activity is
+    True.  This short-circuits the timestamp check and marks the session
+    as seen: the user caused this state, so they're already aware of it.
     """
     if not last_seen:
         return False
     seen_ts = last_seen.get(session.session_id)
     if not seen_ts:
         return False
-    # Use last_activity as the anchor: it captures when Claude last
-    # responded (turn_duration / stop_hook_summary) without being bumped
-    # by CLI-local messages (those are excluded from last_activity in the
-    # parser).  Falls back to last_user_message_at (e.g. interrupt markers).
-    anchor = session.last_activity or getattr(session, 'last_user_message_at', '') or ''
+    # If user's most recent action is at least as recent as Claude's last
+    # activity, the user caused the current state (e.g. interrupted) and
+    # has implicitly "seen" it — don't flash green at them.
+    user_ts = getattr(session, 'last_user_message_at', '') or ''
+    activity_ts = session.last_activity or ''
+    if user_ts and activity_ts and user_ts >= activity_ts:
+        return True
+    anchor = activity_ts or user_ts
     if not anchor:
         return False
     seen_dt = _parse_iso(seen_ts)
