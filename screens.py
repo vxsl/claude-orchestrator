@@ -1343,9 +1343,6 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         for s in self._detail_sessions:
             if s.is_live:
                 refresh_session_tail(s)
-        for s in self._archived_sessions:
-            if s.is_live:
-                refresh_session_tail(s)
 
     def _periodic_refresh(self):
         """Single merged timer: liveness check + feed poll."""
@@ -1659,21 +1656,6 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
             log.debug("load_detail: ws=%s all=%d archived_map=%s",
                       self.ws.name, len(all_sessions),
                       {k: v for k, v in archived.items()})
-            # Auto-revival: if the human typed a new message after archiving, resurface.
-            # Uses last_human_turn_at (real text prompts only) not last_activity or
-            # last_user_message_at, which are both updated by tool_result messages.
-            revived = set()
-            for s in all_sessions:
-                if s.session_id in archived:
-                    archived_at = archived[s.session_id]
-                    last_human = s.last_human_turn_at or ""
-                    if last_human and archived_at and self._parse_ts(last_human) > self._parse_ts(archived_at):
-                        revived.add(s.session_id)
-            if revived:
-                log.debug("load_detail: reviving %s", revived)
-                for sid in revived:
-                    del self.ws.archived_sessions[sid]
-                self.store.update(self.ws)
             # Auto-unshelf: if the human typed a new message after shelving, wake the session
             unshelved = set()
             for s in all_sessions:
