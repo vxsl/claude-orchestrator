@@ -411,7 +411,7 @@ def _render_ws_option(
     best = _best_activity(ws_sessions, last_seen)
     all_seen = _all_sessions_seen(ws_sessions, last_seen)
     if best == ThreadActivity.THINKING:
-        icon = f"[bold {C_CYAN}]◉[/bold {C_CYAN}]"
+        icon = f"[bold {C_BLUE}]◉[/bold {C_BLUE}]"
     elif best in (ThreadActivity.AWAITING_INPUT, ThreadActivity.RESPONSE_READY):
         color = C_DIM if all_seen else C_GREEN
         icon = f"[{color}]●[/{color}]"
@@ -762,7 +762,7 @@ def _render_session_option(
     # Line 2: only show model if not opus; stats dim, tokens colored
     # sid shown here only when a badge occupies line 1's right slot
     model_part = "" if model == "opus" else f"[{C_BLUE}]{model:<8}[/{C_BLUE}]"
-    tokens_fmt = _colored_tokens(s)
+    tokens_fmt = f"[{C_FAINT}]{tokens_plain}[/{C_FAINT}]" if archived else _colored_tokens(s)
     tok_pad = " " * max(1, 8 - len(tokens_plain))
     dur_str = f"{duration:<8}" if duration else ""
     dur_len = 8 if duration else 0

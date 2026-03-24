@@ -916,6 +916,9 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         width: 1fr;
         border: blank;
     }}
+    #detail-sessions-pane {{
+        width: 2fr;
+    }}
     .detail-list-pane.pane-focused {{
         border: round {C_BLUE};
         background: {BG_SURFACE};
