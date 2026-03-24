@@ -575,7 +575,7 @@ _BAR_CATS = [
 
 _BAR_LEGEND_LABELS = [
     ("code", C_ORANGE),
-    ("bash", C_MID),
+    ("bash", "#8fa0b0"),
     ("read", C_DIM),
     ("agent", C_RESOLVED),
 ]
