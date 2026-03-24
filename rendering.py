@@ -800,12 +800,13 @@ def _render_session_option(
             commit_msg += "…"
         lines.append(f"{INDENT}[{C_RESOLVED}]{sha_short}[/{C_RESOLVED}] [{s_dim}]{commit_msg}[/{s_dim}]")
     elif s.last_message_text:
-        max_snippet = title_width + 12
+        is_user = s.last_message_role == "user"
+        prefix = f"[{s_mid}]you:[/{s_mid}] " if is_user else ""
+        prefix_len = 5 if is_user else 0  # len("you: ")
+        max_snippet = title_width + 12 - prefix_len
         snippet = _rich_escape(s.last_message_text[:max_snippet])
         if len(s.last_message_text) > max_snippet:
             snippet += "…"
-        is_user = s.last_message_role == "user"
-        prefix = f"[{s_mid}]you:[/{s_mid}] " if is_user else ""
         msg_color = s_mid if is_user else (C_FAINT if stale else "#3b4048")
         lines.append(f"{INDENT}{prefix}[italic {msg_color}]{snippet}[/italic {msg_color}]")
 
@@ -1065,13 +1066,14 @@ def _render_notified_session_option(
         # No notification — show tail snippet in green
         snippet_color = C_DIM if seen else C_GREEN
         if s.last_message_text:
-            max_snippet = title_width + 12
+            is_user = s.last_message_role == "user"
+            prefix = f"[{C_MID}]you:[/{C_MID}] " if is_user else ""
+            prefix_len = 5 if is_user else 0  # len("you: ")
+            max_snippet = title_width + 12 - prefix_len
             snippet_raw = s.last_message_text[:max_snippet]
             if len(s.last_message_text) > max_snippet:
                 snippet_raw += "…"
             snippet_esc = _rich_escape(snippet_raw)
-            is_user = s.last_message_role == "user"
-            prefix = f"[{C_MID}]you:[/{C_MID}] " if is_user else ""
             msg_color = C_MID if is_user else snippet_color
             line4 = f"{INDENT}{prefix}[italic {msg_color}]{snippet_esc}[/italic {msg_color}]"
         else:
