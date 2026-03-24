@@ -1535,7 +1535,13 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
                     del self.ws.archived_sessions[sid]
                 self.store.update(self.ws)
             hidden = set(self.ws.archived_sessions)
-            self._all_sessions = [s for s in all_sessions if s.session_id not in hidden]
+            # Hide the pending new session (from "c") until it has actual messages
+            pending_sid = getattr(self.app, '_ws_pending_session', {}).get(self.ws.id)
+            self._all_sessions = [
+                s for s in all_sessions
+                if s.session_id not in hidden
+                and not (s.session_id == pending_sid and s.message_count == 0)
+            ]
             self._all_archived = [s for s in all_sessions if s.session_id in hidden]
             self._deferred_set = set(self.ws.deferred_sessions)
             log.debug("load_detail: active=%d archived=%d deferred=%d",

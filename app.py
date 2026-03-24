@@ -1570,6 +1570,9 @@ class OrchestratorApp(App):
                         if s:
                             s.is_live = True
                             self._inject_session(s)
+                            # Session has messages — it's a real thread now, next "c" should be fresh
+                            if s.message_count and ws.id and self._ws_pending_session.get(ws.id) == screen._session_id:
+                                del self._ws_pending_session[ws.id]
                     except Exception:
                         pass
             elif isinstance(result, ClaudeSession):
