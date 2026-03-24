@@ -3,13 +3,20 @@
 from __future__ import annotations
 
 import json
+import logging
+import os
 import shutil
+import traceback
 import uuid
 from dataclasses import dataclass, field, asdict
 from datetime import datetime, timedelta
 from enum import Enum
 from pathlib import Path
 from typing import Optional
+
+log = logging.getLogger("orch.store")
+# Set ORCH_STORE_TRACE=1 to log every save with call stack when archived count drops
+_TRACE = os.environ.get("ORCH_STORE_TRACE", "")
 
 
 class Category(str, Enum):
@@ -235,13 +242,45 @@ class Store:
         else:
             self.workstreams = []
         self._known_todo_ids = {t.id for ws in self.workstreams for t in ws.todos}
+        if _TRACE:
+            for ws in self.workstreams:
+                if ws.archived_sessions:
+                    log.warning(
+                        "LOAD: ws=%s archived=%d\n%s",
+                        ws.name, len(ws.archived_sessions), "".join(traceback.format_stack()),
+                    )
 
     def save(self):
         self.path.parent.mkdir(parents=True, exist_ok=True)
         # Merge in externally-added todos (e.g. from CLI crystallize) before writing,
         # so the in-memory state doesn't clobber them.
+        if _TRACE:
+            # Capture counts BEFORE merge so we can see what came in vs what goes out
+            _pre_mem = {ws.id: (ws.name, len(ws.archived_sessions)) for ws in self.workstreams}
+            _disk_counts: dict[str, int] = {}
+            try:
+                _disk_raw = json.loads(self.path.read_text()) if self.path.exists() else {}
+                for _wd in _disk_raw.get("workstreams", []):
+                    _disk_counts[_wd.get("id", "")] = len(_wd.get("archived_sessions", {}))
+            except Exception:
+                pass
         self._merge_external_todos()
         data = {"workstreams": [w.to_dict() for w in self.workstreams]}
+        if _TRACE:
+            for ws in self.workstreams:
+                name, pre_mem = _pre_mem.get(ws.id, (ws.name, 0))
+                disk_n = _disk_counts.get(ws.id, 0)
+                post = len(ws.archived_sessions)
+                if post < disk_n:
+                    log.warning(
+                        "SAVE LOSES archived vs disk: ws=%s mem_before=%d disk=%d writing=%d\n%s",
+                        name, pre_mem, disk_n, post, "".join(traceback.format_stack()),
+                    )
+                elif post != pre_mem:
+                    log.warning(
+                        "SAVE CHANGES archived: ws=%s mem_before=%d disk=%d writing=%d",
+                        name, pre_mem, disk_n, post,
+                    )
         self.path.write_text(json.dumps(data, indent=2) + "\n")
         # Update known IDs so next save knows about everything we just wrote
         self._known_todo_ids = {t.id for ws in self.workstreams for t in ws.todos}
@@ -279,14 +318,21 @@ class Store:
                     td.setdefault("origin", "manual")
                     ws.todos.append(TodoItem(**td))
                     self._known_todo_ids.add(tid)
-            # Merge session state dicts — add any disk entries not in memory.
-            # Never remove entries that ARE in memory (those were set by us).
-            for field in ("archived_sessions", "shelved_sessions", "deleted_sessions"):
-                mem_dict = getattr(ws, field, {})
-                disk_dict = disk_wd.get(field, {})
-                for sid, ts in disk_dict.items():
-                    if sid not in mem_dict:
-                        mem_dict[sid] = ts
+            # NOTE: session state dicts (archived_sessions, shelved_sessions,
+            # deleted_sessions) are intentionally NOT merged from disk here.
+            #
+            # Merging them caused two bugs:
+            # 1. Re-archiving after unarchive: unarchive removes sid from mem, but
+            #    the next save reads the old disk state and adds it back.
+            # 2. Stale-snapshot clobber: a background writer holding an old ws
+            #    snapshot (e.g. description_refresher) could call store.update() with
+            #    fewer archived sessions; the merge then "restored" them from disk but
+            #    was racy (disk read between main-thread writes).
+            #
+            # The external-writer scenario these were defending against (CLI adding
+            # sessions to archived_sessions) does not actually occur in the CLI today,
+            # so the safety net is unused.  If needed in future, use explicit merge
+            # with a "known removed" exclusion set rather than blind additive merge.
 
     def backup(self) -> Path:
         """Create a timestamped backup of the data file."""
