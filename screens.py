@@ -1050,6 +1050,10 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         self._mounted_once = True
         if self._sessions_loading():
             self._loading_timer = self.set_interval(0.12, self._tick_loading)
+        # Rebuild after layout is computed so _session_line_width returns the real width.
+        # On first mount the OptionList size is 0, causing half-width rendering until
+        # the next timer tick. call_after_refresh defers until Textual has laid out the DOM.
+        self.call_after_refresh(self._build_session_list)
 
     def on_screen_resume(self):
         """Lightweight refresh when returning to a cached screen."""
