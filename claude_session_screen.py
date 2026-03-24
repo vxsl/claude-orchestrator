@@ -210,6 +210,7 @@ class SessionHeaderWidget(Static):
         context_window_size: int = 200_000
         last_msg = ""
         last_role = ""
+        last_user_messages: list[str] = []
 
         jp = Path(self._jsonl_path)
         if jp.exists():
@@ -247,6 +248,7 @@ class SessionHeaderWidget(Static):
                     context_window_size = s.context_window_size
                     last_msg = s.last_user_message_text or s.last_message_text or ""
                     last_role = "user" if s.last_user_message_text else (s.last_message_role or "")
+                    last_user_messages = s.last_user_messages or ([] if not last_msg else [last_msg])
                     title = get_session_title(s) or ""
             except Exception:
                 pass
@@ -285,24 +287,37 @@ class SessionHeaderWidget(Static):
         line3 = l3
 
         all_lines = [line1, line2, line3]
-        if last_msg:
+        if last_user_messages:
+            # Most-recent first; yellow dims with age: bright → mid → faint
+            msg_colors = [C_YELLOW, "#8a6914", "#4a3a0a"]
             prefix = "you said: "
             w = max(20, self._width - 4)  # content width (subtract padding)
-            clean = last_msg.replace("\n", " ").strip()
-            first_line_chars = max(1, w - len(prefix))
-            line_a_text = clean[:first_line_chars]
-            remainder = clean[first_line_chars:]
-            pad_a = " " * max(0, w - len(prefix) - len(line_a_text))
-            all_lines.append(
-                f"[{C_DIM} on black]{_esc(prefix)}[/{C_DIM} on black]"
-                f"[bold italic {C_YELLOW} on black]{_esc(line_a_text)}{pad_a}[/bold italic {C_YELLOW} on black]"
-            )
-            if remainder:
-                line_b = remainder[:w]
-                if len(remainder) > w:
-                    line_b += "…"
-                pad_b = " " * max(0, w - len(line_b))
-                all_lines.append(f"[bold italic {C_YELLOW} on black]{_esc(line_b)}{pad_b}[/bold italic {C_YELLOW} on black]")
+            for i, msg in enumerate(last_user_messages[:3]):
+                color = msg_colors[i]
+                clean = msg.replace("\n", " ").strip()
+                if i == 0:
+                    # First (most recent): show prefix + up to two lines
+                    first_line_chars = max(1, w - len(prefix))
+                    line_a_text = clean[:first_line_chars]
+                    remainder = clean[first_line_chars:]
+                    pad_a = " " * max(0, w - len(prefix) - len(line_a_text))
+                    all_lines.append(
+                        f"[{C_DIM} on black]{_esc(prefix)}[/{C_DIM} on black]"
+                        f"[bold italic {color} on black]{_esc(line_a_text)}{pad_a}[/bold italic {color} on black]"
+                    )
+                    if remainder:
+                        line_b = remainder[:w]
+                        if len(remainder) > w:
+                            line_b += "…"
+                        pad_b = " " * max(0, w - len(line_b))
+                        all_lines.append(f"[bold italic {color} on black]{_esc(line_b)}{pad_b}[/bold italic {color} on black]")
+                else:
+                    # Older messages: single truncated line, no prefix
+                    text = clean[:w]
+                    if len(clean) > w:
+                        text += "…"
+                    pad = " " * max(0, w - len(text))
+                    all_lines.append(f"[italic {color} on black]{_esc(text)}{pad}[/italic {color} on black]")
 
         self.app.call_from_thread(self.update, "\n".join(all_lines))
 

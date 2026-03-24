@@ -389,6 +389,7 @@ class ClaudeSession:
     all_session_ids: list[str] = field(default_factory=list)  # All sessionIds found in JSONL (for resume matching)
     last_message_text: str = ""  # Snippet of last user or assistant message
     last_user_message_text: str = ""  # Snippet of last human (non-interrupt) user message
+    last_user_messages: list[str] = field(default_factory=list)  # Last 3 human turns, most-recent first
     last_tool_name: str = ""     # Name of last tool_use in assistant message
     last_commit_sha: str = ""    # SHA from last git commit (if session ended with one)
     last_commit_summary: str = ""  # Commit message from last git commit
@@ -664,6 +665,9 @@ def parse_session(jsonl_path: Path) -> Optional[ClaudeSession]:
                         session.last_message_text = snippet
                         if msg_type == "user" and _is_human_turn(data):
                             session.last_user_message_text = snippet
+                            if not session.last_user_messages or session.last_user_messages[0] != snippet:
+                                session.last_user_messages.insert(0, snippet)
+                                session.last_user_messages = session.last_user_messages[:3]
                     # Interrupted turns: the "[Request interrupted" user
                     # message means Claude is back at the prompt.
                     if msg_type == "user" and _is_interrupt_marker(data):
@@ -802,6 +806,9 @@ def refresh_session_tail(session: ClaudeSession, tail_bytes: int = 8192) -> bool
                     session.last_message_text = snippet
                     if msg_type == "user" and _is_human_turn(data):
                         session.last_user_message_text = snippet
+                        if not session.last_user_messages or session.last_user_messages[0] != snippet:
+                            session.last_user_messages.insert(0, snippet)
+                            session.last_user_messages = session.last_user_messages[:3]
                 if msg_type == "user" and _is_interrupt_marker(data):
                     session.turn_complete = True
             if msg_type == "assistant" and "message" in data:
