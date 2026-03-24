@@ -397,6 +397,7 @@ class ClaudeSession:
     git_branch: str = ""         # Git branch from first few lines (for thread clustering)
     first_message: str = ""      # First user message snippet (for thread naming)
     context_tokens: int = 0      # Last API call's context window fill (input + cache_read + cache_creation)
+    total_work_ms: int = 0       # Sum of turn_duration durationMs (total time Claude spent working)
 
     @property
     def duration_display(self) -> str:
@@ -459,6 +460,20 @@ class ClaudeSession:
         if total > 1_000:
             return f"{total / 1_000:.1f}k"
         return str(total)
+
+    @property
+    def work_time_display(self) -> str:
+        """Total clock time Claude spent working (sum of turn_duration durationMs)."""
+        s = self.total_work_ms // 1000
+        if s == 0:
+            return ""
+        if s < 60:
+            return f"{s}s"
+        m = s // 60
+        if m < 60:
+            return f"{m}m{s % 60:02d}s"
+        h = m // 60
+        return f"{h}h{m % 60:02d}m"
 
     @property
     def display_name(self) -> str:
@@ -660,8 +675,10 @@ def parse_session(jsonl_path: Path) -> Optional[ClaudeSession]:
                 # but idle-only entries (last-prompt, custom-title,
                 # file-history-snapshot) also prove the turn ended —
                 # covers interrupted turns where turn_duration is never written.
-                if (msg_type == "system" and data.get("subtype") in (
-                        "turn_duration", "stop_hook_summary")
+                if msg_type == "system" and data.get("subtype") == "turn_duration":
+                    session.turn_complete = True
+                    session.total_work_ms += data.get("durationMs", 0)
+                elif (msg_type == "system" and data.get("subtype") == "stop_hook_summary"
                         or msg_type in ("last-prompt", "custom-title",
                                         "file-history-snapshot")):
                     session.turn_complete = True
