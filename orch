@@ -14,6 +14,7 @@ if [ -n "$TMUX" ]; then
 fi
 
 export TEXTUAL_COLOR_SYSTEM=truecolor
+export TEXTUAL_ESCAPE_DELAY=0.02
 ORCH_CRASH_LOG=$(mktemp /tmp/orch-crash-XXXXXX.log)
 export ORCH_CRASH_LOG
 python3 "$SCRIPT_DIR/orch.py" "$@"
