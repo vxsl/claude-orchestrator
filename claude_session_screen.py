@@ -202,7 +202,7 @@ class SessionHeaderWidget(Static):
         msgs = 0
         asst_msgs = 0
         tokens_str = "—"
-        duration = ""
+        work_time = ""
         age = ""
         files: list[str] = []
         tool_counts: dict[str, int] = {}
@@ -240,7 +240,7 @@ class SessionHeaderWidget(Static):
                     msgs = s.message_count
                     asst_msgs = s.assistant_message_count
                     tokens_str = s.tokens_display
-                    duration = s.duration_display
+                    work_time = s.work_time_display
                     age = s.age
                     files = s.files_mutated or []
                     tool_counts = s.tool_counts or {}
@@ -270,8 +270,8 @@ class SessionHeaderWidget(Static):
             tok_val = _parse_tokens(tokens_str)
             tc = C_ORANGE if tok_val >= 500_000 else C_YELLOW if tok_val >= 100_000 else C_DIM
             r2_parts.append(f"[{tc}]{tokens_str}[/]")
-            if duration:
-                r2_parts.append(f"[{C_DIM}]{duration}[/]")
+            if work_time:
+                r2_parts.append(f"[{C_DIM}][italic]{work_time} think[/italic][/]")
             if age:
                 r2_parts.append(f"[{C_MID}]{age}[/]")
             l2 += f"  [{C_DIM}]│[/]  " + "  ".join(r2_parts)
