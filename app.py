@@ -147,7 +147,7 @@ class OrchestratorApp(App):
         background: {BG_BASE};
     }}
     #top-bar {{
-        height: auto; max-height: 3; padding: 0 2; background: {BG_RAISED}; dock: top;
+        height: auto; max-height: 4; padding: 0 2; background: {BG_RAISED}; dock: top;
     }}
     #filter-bar {{
         height: 1; padding: 0 1; background: {BG_CHROME}; dock: top;
@@ -1116,27 +1116,56 @@ class OrchestratorApp(App):
             pass
 
     def _render_status_bar(self) -> str:
-        total = len(self.state.store.active)
-        live_sessions = sum(1 for s in self.state.sessions if s.is_live)
+        SEP = f"  [{C_FAINT}]·[/{C_FAINT}]  "
+        ws = self.state.store.active
+
+        # ── Line 1: workstream landscape ──
+        by_cat = {}
+        for w in ws:
+            by_cat[w.category] = by_cat.get(w.category, 0) + 1
+        cat_parts = []
+        if by_cat.get(Category.WORK):
+            cat_parts.append(f"[{C_CYAN}]{by_cat[Category.WORK]} work[/{C_CYAN}]")
+        if by_cat.get(Category.PERSONAL):
+            cat_parts.append(f"[{C_PURPLE}]{by_cat[Category.PERSONAL]} personal[/{C_PURPLE}]")
+        if by_cat.get(Category.META):
+            cat_parts.append(f"[{C_DIM}]{by_cat[Category.META]} meta[/{C_DIM}]")
         stale = len(self.state.store.stale())
-
-        parts = [
+        line1_parts = [
             f"[bold {C_BLUE}] ORCH [/bold {C_BLUE}]",
-            f"[bold]{total}[/bold] streams",
+            f"[bold]{len(ws)}[/bold] streams",
         ]
-        if live_sessions:
-            parts.append(f"[{C_CYAN}]{live_sessions} live[/{C_CYAN}]")
+        if cat_parts:
+            line1_parts.append("  ".join(cat_parts))
         if stale:
-            parts.append(f"[{C_DIM}]{stale} stale[/{C_DIM}]")
+            line1_parts.append(f"[{C_DIM}]{stale} stale[/{C_DIM}]")
+        line1 = SEP.join(line1_parts)
 
-        if self.state.sessions:
-            total_tokens = sum(s.total_input_tokens + s.total_output_tokens for s in self.state.sessions)
+        # ── Line 2: session activity ──
+        sessions = self.state.sessions
+        thinking = sum(
+            1 for s in sessions
+            if session_activity(s, self.state.last_seen_cache) == ThreadActivity.THINKING
+        )
+        your_turn = sum(
+            1 for s in sessions
+            if session_activity(s, self.state.last_seen_cache) in (
+                ThreadActivity.AWAITING_INPUT, ThreadActivity.RESPONSE_READY
+            )
+        )
+        line2_parts = [f"[{C_DIM}] [/{C_DIM}][bold]{len(sessions)}[/bold] sessions"]
+        if thinking:
+            line2_parts.append(f"[{C_BLUE}]{thinking} thinking[/{C_BLUE}]")
+        if your_turn:
+            line2_parts.append(f"[{C_GREEN}]{your_turn} your turn[/{C_GREEN}]")
+        if sessions:
+            total_tokens = sum(s.total_input_tokens + s.total_output_tokens for s in sessions)
             if total_tokens > 0:
                 _tk = f"{total_tokens / 1_000_000:.1f}M" if total_tokens > 1_000_000 else f"{total_tokens / 1_000:.0f}k" if total_tokens > 1_000 else str(total_tokens)
-                parts.append(f"[{C_DIM}]\u2502[/{C_DIM}]")
-                parts.append(f"{_token_color_markup(_tk, total_tokens)}")
+                line2_parts.append(_token_color_markup(_tk, total_tokens))
+        line2 = SEP.join(line2_parts)
 
-        return "  ".join(parts)
+        return f"{line1}\n{line2}"
 
     def _render_filter_bar(self) -> str:
         filters = [
