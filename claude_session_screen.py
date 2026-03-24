@@ -288,36 +288,26 @@ class SessionHeaderWidget(Static):
 
         all_lines = [line1, line2, line3]
         if last_user_messages:
-            # Most-recent first; yellow dims with age: bright → mid → faint
-            msg_colors = [C_YELLOW, "#8a6914", "#4a3a0a"]
+            # last_user_messages is most-recent-first; display oldest→newest (bottom = most recent)
+            # Colors dim from oldest (darkest) to newest (brightest)
+            msg_colors = ["#7a5218", "#b07a25", C_YELLOW]  # dim amber → mid gold → bright yellow
             prefix = "you said: "
             w = max(20, self._width - 4)  # content width (subtract padding)
-            for i, msg in enumerate(last_user_messages[:3]):
-                color = msg_colors[i]
+            msgs = list(reversed(last_user_messages[:3]))  # oldest first
+            color_offset = 3 - len(msgs)
+            for i, msg in enumerate(msgs):
+                color = msg_colors[color_offset + i]
                 clean = msg.replace("\n", " ").strip()
-                if i == 0:
-                    # First (most recent): show prefix + up to two lines
-                    first_line_chars = max(1, w - len(prefix))
-                    line_a_text = clean[:first_line_chars]
-                    remainder = clean[first_line_chars:]
-                    pad_a = " " * max(0, w - len(prefix) - len(line_a_text))
-                    all_lines.append(
-                        f"[{C_DIM} on black]{_esc(prefix)}[/{C_DIM} on black]"
-                        f"[bold italic {color} on black]{_esc(line_a_text)}{pad_a}[/bold italic {color} on black]"
-                    )
-                    if remainder:
-                        line_b = remainder[:w]
-                        if len(remainder) > w:
-                            line_b += "…"
-                        pad_b = " " * max(0, w - len(line_b))
-                        all_lines.append(f"[bold italic {color} on black]{_esc(line_b)}{pad_b}[/bold italic {color} on black]")
-                else:
-                    # Older messages: single truncated line, no prefix
-                    text = clean[:w]
-                    if len(clean) > w:
-                        text += "…"
-                    pad = " " * max(0, w - len(text))
-                    all_lines.append(f"[italic {color} on black]{_esc(text)}{pad}[/italic {color} on black]")
+                max_text = max(1, w - len(prefix))
+                text = clean[:max_text]
+                if len(clean) > max_text:
+                    text += "…"
+                pad = " " * max(0, w - len(prefix) - len(text))
+                style = "bold italic" if i == len(msgs) - 1 else "italic"
+                all_lines.append(
+                    f"[{C_DIM} on black]{_esc(prefix)}[/{C_DIM} on black]"
+                    f"[{style} {color} on black]{_esc(text)}{pad}[/{style} {color} on black]"
+                )
 
         self.app.call_from_thread(self.update, "\n".join(all_lines))
 
