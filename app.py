@@ -156,7 +156,7 @@ class OrchestratorApp(App):
         height: 1; padding: 0 2; background: {BG_CHROME}; color: {C_DIM}; dock: bottom;
     }}
     #main-body {{ height: 1fr; }}
-    #main-lists {{ height: auto; max-height: 70%; }}
+    #main-lists {{ height: auto; max-height: 75%; }}
     #main-lower {{ height: 1fr; background: {BG_RAISED}; }}
     .main-list-pane {{ width: 1fr; border: blank; }}
     .main-list-pane.pane-focused {{ border: round {C_BLUE}; background: {BG_SURFACE}; }}
