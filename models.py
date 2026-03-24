@@ -247,12 +247,13 @@ class Store:
         self._known_todo_ids = {t.id for ws in self.workstreams for t in ws.todos}
 
     def _merge_external_todos(self):
-        """Merge todos added externally (by CLI) into in-memory workstreams.
+        """Merge externally-added entries into in-memory workstreams before saving.
 
-        Only merges todos that are on disk but NOT in memory AND were NOT known
-        at load time (i.e. they were added by another process after we loaded).
-        Todos that were known at load but removed from memory (deleted by us)
-        are not resurrected.
+        Handles todos, archived_sessions, shelved_sessions, and deleted_sessions.
+        Entries that exist on disk but not in memory are merged in (additive only —
+        we never resurrect entries that were explicitly removed in memory).
+        This prevents concurrent writers (CLI, other agents) from clobbering each
+        other's changes when they hold stale in-memory state.
         """
         if not self.path.exists():
             return
@@ -267,6 +268,7 @@ class Store:
             disk_wd = disk_ws_map.get(ws.id)
             if not disk_wd:
                 continue
+            # Merge todos (additive, skip known-deleted)
             mem_ids = {t.id for t in ws.todos}
             for td in disk_wd.get("todos", []):
                 if not isinstance(td, dict) or not td.get("id"):
@@ -277,6 +279,14 @@ class Store:
                     td.setdefault("origin", "manual")
                     ws.todos.append(TodoItem(**td))
                     self._known_todo_ids.add(tid)
+            # Merge session state dicts — add any disk entries not in memory.
+            # Never remove entries that ARE in memory (those were set by us).
+            for field in ("archived_sessions", "shelved_sessions", "deleted_sessions"):
+                mem_dict = getattr(ws, field, {})
+                disk_dict = disk_wd.get(field, {})
+                for sid, ts in disk_dict.items():
+                    if sid not in mem_dict:
+                        mem_dict[sid] = ts
 
     def backup(self) -> Path:
         """Create a timestamped backup of the data file."""
