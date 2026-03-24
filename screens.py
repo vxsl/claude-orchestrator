@@ -1444,22 +1444,11 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
             log.debug("load_detail: ws=%s all=%d archived_map=%s",
                       self.ws.name, len(all_sessions),
                       {k: v for k, v in archived.items()})
-            revived = set()
-            for s in all_sessions:
-                if s.session_id in archived:
-                    archived_at = archived[s.session_id]
-                    # Use last_user_message_at, not last_activity — last_activity is
-                    # updated by refresh_session_tail on live sessions, which caused
-                    # archived sessions to keep getting revived on every refresh.
-                    # Only revive if the user explicitly sent a new message after archiving.
-                    last_act = s.last_user_message_at or ""
-                    if last_act and archived_at and self._parse_ts(last_act) > self._parse_ts(archived_at):
-                        revived.add(s.session_id)
-            if revived:
-                log.debug("load_detail: reviving %s", revived)
-                for sid in revived:
-                    del self.ws.archived_sessions[sid]
-                self.store.update(self.ws)
+            # No auto-revival: if a session is archived it stays archived until
+            # the user manually unarchives it (pressing 'a' on it in the archived pane).
+            # Auto-revival was removed because last_activity and last_user_message_at
+            # are both updated by tool_result "user" messages on live sessions,
+            # making any timestamp-based heuristic unreliable.
             # Auto-undefer: if a new user message arrived after deferral, wake the session
             unshelved = set()
             for s in all_sessions:
