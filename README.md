@@ -2,7 +2,7 @@
 
 A terminal-native workstation for agentic coding. Every git worktree is a workstream. Every workstream is a tab. Every thought becomes a running Claude session.
 
-Built with Python and [Textual](https://textual.textualize.io/) with embedded libvterm terminals, a Rust session engine, mellow GitHub Dark palette, and vim-first keybindings.
+Built with Python and [Textual](https://textual.textualize.io/) with embedded libvterm terminals, a Rust session engine, and vim-first keybindings.
 
 ## Philosophy
 
