@@ -260,13 +260,6 @@ class OrchestratorApp(App):
                 screen.action_select_item()
             else:
                 self.action_select_item()
-        elif event.key in ("ctrl+shift+h", "ctrl+shift+l"):
-            event.prevent_default()
-            event.stop()
-            if event.key == "ctrl+shift+l":
-                self.action_next_tab()
-            else:
-                self.action_prev_tab()
 
     # ── Convenience accessors for backward compat ──
 
