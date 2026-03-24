@@ -761,7 +761,8 @@ def _render_session_option(
 
     # Line 2: only show model if not opus; stats dim, tokens colored
     # sid shown here only when a badge occupies line 1's right slot
-    model_part = "" if model == "opus" else f"[{C_BLUE}]{model:<8}[/{C_BLUE}]"
+    model_color = C_FAINT if archived else C_BLUE
+    model_part = "" if model == "opus" else f"[{model_color}]{model:<8}[/{model_color}]"
     tokens_fmt = f"[{C_FAINT}]{tokens_plain}[/{C_FAINT}]" if archived else _colored_tokens(s)
     tok_pad = " " * max(1, 8 - len(tokens_plain))
     dur_str = f"{duration:<8}" if duration else ""
