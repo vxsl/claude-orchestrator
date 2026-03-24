@@ -515,7 +515,7 @@ def _render_ws_option(
             parts.append(_token_color_markup(tk, total_tokens))
         total_work_ms = sum(s.total_work_ms for s in ws_sessions)
         if total_work_ms > 0:
-            parts.append(f"[{meta_dim}]{_work_time_str(total_work_ms)} think[/{meta_dim}]")
+            parts.append(f"[{meta_dim}]{_work_time_str(total_work_ms)} [italic]think[/italic][/{meta_dim}]")
 
     # Use best session activity time (matches sort order), fall back to updated_at
     if ws_sessions:
@@ -682,17 +682,15 @@ def _render_session_option(
         line1 = f" {icon} {title_fmt}{title_pad}  [{C_FAINT}]{age_col}[/{C_FAINT}]{' ' * fill}{badge}"
         model_part = "" if model == "opus" else f"[{C_FAINT}]{model:<8}[/{C_FAINT}]"
         tok_pad = " " * max(1, 8 - len(tokens_plain))
-        dur_str = f"{duration:<8}" if duration else ""
-        dur_len = 8 if duration else 0
         work_time = s.work_time_display
-        work_str = f"{work_time} think  " if work_time else ""
+        work_str = f"{work_time} [italic]think[/italic]  " if work_time else ""
         work_len = len(work_str) if work_time else 0
         model_len = 0 if model == "opus" else 8
-        meta_left_len = 4 + model_len + 10 + 8 + dur_len + work_len
+        meta_left_len = 4 + model_len + 10 + 8 + work_len
         sid_gap = max(2, LINE_WIDTH - meta_left_len - 8)
         line2 = (
             f"{INDENT}{model_part}[{C_FAINT}]{msgs_str:<10}[/{C_FAINT}]"
-            f"[{C_FAINT}]{tokens_plain}{tok_pad}{dur_str}{work_str}[/{C_FAINT}]"
+            f"[{C_FAINT}]{tokens_plain}{tok_pad}{work_str}[/{C_FAINT}]"
             f"{' ' * sid_gap}[{C_FAINT}]{sid}[/{C_FAINT}]"
         )
         ctx_bar = _context_bar_compact(s.context_tokens, s.context_window_size)
@@ -783,20 +781,18 @@ def _render_session_option(
     model_part = "" if model == "opus" else f"[{model_color}]{model:<8}[/{model_color}]"
     tokens_fmt = f"[{C_FAINT}]{tokens_plain}[/{C_FAINT}]" if archived else _colored_tokens(s)
     tok_pad = " " * max(1, 8 - len(tokens_plain))
-    dur_str = f"{duration:<8}" if duration else ""
-    dur_len = 8 if duration else 0
     work_time = s.work_time_display
     work_str = f"{work_time} think  " if work_time else ""
     work_len = len(work_str) if work_time else 0
     model_len = 0 if model == "opus" else 8
-    meta_left_len = 4 + model_len + 10 + 8 + dur_len + work_len
+    meta_left_len = 4 + model_len + 10 + 8 + work_len
     sid_gap = max(2, LINE_WIDTH - meta_left_len - 8)
 
     line2_base = (
         f"{INDENT}{model_part}[{s_dim}]{msgs_str:<10}[/{s_dim}]"
         f"{tokens_fmt}"
         f"[{s_dim}]{tok_pad}"
-        f"{dur_str}{work_str}[/{s_dim}]"
+        f"{work_str}[/{s_dim}]"
     )
     line2 = line2_base + (f"{' ' * sid_gap}[{C_FAINT}]{sid}[/{C_FAINT}]" if badge else "")
 
