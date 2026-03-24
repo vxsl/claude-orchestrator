@@ -710,7 +710,7 @@ def _render_session_option(
             snippet_raw = s.last_message_text[:max_snippet]
             if len(s.last_message_text) > max_snippet:
                 snippet_raw += "…"
-            role_label = "a" if s.last_message_role == "assistant" else "u"
+            role_label = "a" if s.last_message_role == "assistant" else "you"
             line4 = f"{INDENT}[{C_FAINT}]{role_label}: {_rich_escape(snippet_raw)}[/{C_FAINT}]"
         else:
             line4 = f"{INDENT}[{C_FAINT}]─[/{C_FAINT}]"
@@ -836,19 +836,22 @@ def _render_session_option(
     elif s.last_message_text:
         is_user = s.last_message_role == "user"
         if is_user:
-            # Show user prompt prominently: black background + white text, up to two lines
+            # Show user prompt with muted styling + "you: " prefix
+            prefix = "you: "
             line_chars = max(20, LINE_WIDTH - 4)
             text = s.last_message_text.replace("\n", " ")
-            line_a_raw = text[:line_chars]
-            remainder = text[line_chars:]
+            first_line_chars = line_chars - len(prefix)
+            line_a_raw = text[:first_line_chars]
+            remainder = text[first_line_chars:]
             line_a = _rich_escape(line_a_raw)
-            lines.append(f"{INDENT}[white on black]{line_a}[/white on black]")
+            msg_color = C_FAINT if stale else C_DIM
+            lines.append(f"{INDENT}[{msg_color}]{prefix}{line_a}[/{msg_color}]")
             if remainder:
                 line_b_raw = remainder[:line_chars]
                 line_b = _rich_escape(line_b_raw)
                 if len(remainder) > line_chars:
                     line_b += "…"
-                lines.append(f"{INDENT}[white on black]{line_b}[/white on black]")
+                lines.append(f"{INDENT}[{msg_color}]{line_b}[/{msg_color}]")
         else:
             max_snippet = title_width + 12
             snippet = _rich_escape(s.last_message_text[:max_snippet])
