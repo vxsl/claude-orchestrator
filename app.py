@@ -1009,30 +1009,34 @@ class OrchestratorApp(App):
             ("active", "Active"), ("work", "Work"), ("personal", "Personal"),
             ("all", "All"), ("stale", "Stale"), ("archived", "Archived"),
         ]
-        # Per-filter accent colors (inactive tint, active bg)
-        _FILTER_COLORS = {
-            "active": (C_CYAN,   "#0a1e2a"),
-            "work":   (C_CYAN,   "#0a1e2a"),
-            "personal": (C_PURPLE, "#1a1028"),
-            "all":    (C_MID,    "#111820"),
-            "stale":  (C_DIM,    "#111820"),
-            "archived": (C_DIM,  "#111820"),
-        }
-        parts = []
+        SEP = f" [{C_FAINT}]·[/{C_FAINT}] "
+        preset_parts = []
         for i, (key, label) in enumerate(filters):
             n = i + 1
-            accent, active_bg = _FILTER_COLORS.get(key, (C_DIM, BG_RAISED))
             if self.state.filter_mode == key:
-                parts.append(f"[bold {accent} on {active_bg}] ◆ {label} [/bold {accent} on {active_bg}]")
+                preset_parts.append(f"[bold {C_BLUE} on #0d1f35][{n}:{label}][/bold {C_BLUE} on #0d1f35]")
             else:
-                parts.append(f"[{C_FAINT}] {n} {label} [/{C_FAINT}]")
-            if i < len(filters) - 1:
-                parts.append(f"[{C_FAINT}]\u2502[/{C_FAINT}]")
+                preset_parts.append(f"[{C_FAINT}]{n}:{label}[/{C_FAINT}]")
+        presets = SEP.join(preset_parts)
 
         if self.state.search_text:
-            parts.append(f"  [{C_DIM}]\u2502[/{C_DIM}]  [{C_DIM}]search:[/{C_DIM}] [{C_YELLOW}]{_rich_escape(self.state.search_text)}[/{C_YELLOW}]")
+            presets += f"  [{C_DIM}]·[/{C_DIM}]  [{C_DIM}]search:[/{C_DIM}] [{C_YELLOW}]{_rich_escape(self.state.search_text)}[/{C_YELLOW}]"
 
-        return "".join(parts)
+        # All non-home tabs (Sessions + open workstreams) shown at right
+        other_tabs = [t for t in self.tabs.tabs if t.id != "home"]
+        if other_tabs:
+            tab_parts = []
+            for t in other_tabs:
+                lbl = (t.label[:14] + "\u2026") if len(t.label) > 14 else t.label
+                is_active = t.id == self.tabs.active_tab.id
+                if is_active:
+                    tab_parts.append(f"[bold {C_BLUE}]● {_rich_escape(lbl)}[/bold {C_BLUE}]")
+                else:
+                    tab_parts.append(f"[{C_DIM}]○ {_rich_escape(lbl)}[/{C_DIM}]")
+            tabs_str = f"  [{C_FAINT}]│[/{C_FAINT}]  " + f"  [{C_FAINT}]│[/{C_FAINT}]  ".join(tab_parts)
+            return f" {presets}{tabs_str}"
+
+        return f" {presets}"
 
     def _render_summary_bar(self) -> str:
         count = self._active_table().option_count
