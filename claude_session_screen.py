@@ -298,11 +298,12 @@ class SessionHeaderWidget(Static):
             for i, msg in enumerate(msgs):
                 color = msg_colors[color_offset + i]
                 clean = msg.replace("\n", " ").strip()
-                max_text = max(1, w - len(prefix))
-                text = clean[:max_text]
-                if len(clean) > max_text:
-                    text += "…"
-                pad = " " * max(0, w - len(prefix) - len(text))
+                available = max(1, w - len(prefix))
+                if len(clean) > available:
+                    text = clean[:available - 1] + "…"
+                else:
+                    text = clean
+                pad = " " * max(0, available - len(text))
                 style = "bold italic" if i == len(msgs) - 1 else "italic"
                 all_lines.append(
                     f"[{C_DIM} on black]{_esc(prefix)}[/{C_DIM} on black]"
