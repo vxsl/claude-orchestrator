@@ -41,6 +41,60 @@ format_elapsed() {
     fi
 }
 
+# ─── Fast initial render (bash-only, no Python startup cost) ────
+_initial_render() {
+    local cols
+    cols=$(tput cols 2>/dev/null || echo 120)
+    local title="${INITIAL_TITLE:-$WS_NAME}"
+    local sid_short="${SESSION_ID:0:8}"
+
+    # ANSI — same palette as the Python block below
+    local BG=$'\033[48;5;234m'
+    local RST=$'\033[0m'
+    local BLD=$'\033[1m'
+    local W=$'\033[38;5;252m'
+    local D=$'\033[38;5;244m'
+    local F=$'\033[38;5;239m'
+    local B=$'\033[38;5;109m'
+    local P=$'\033[38;5;141m'
+    local CY=$'\033[38;5;81m'
+    local G=$'\033[38;5;114m'
+    local R=$'\033[38;5;167m'
+    local EL=$'\033[K'$RST
+
+    local sc="$D"
+    case "$WS_STATUS" in
+        in-progress)    sc="$CY" ;;
+        queued)         sc="$D"  ;;
+        awaiting-review) sc="$P" ;;
+        done)           sc="$G"  ;;
+        blocked)        sc="$R"  ;;
+    esac
+
+    local cc="$D"
+    case "$WS_CATEGORY" in
+        work)     cc="$CY" ;;
+        personal) cc="$P"  ;;
+        meta)     cc="$D"  ;;
+    esac
+
+    # Truncate title if needed
+    local r1_plain="⏱ 0s  ${sid_short}"
+    local title_max=$(( cols - ${#r1_plain} - 6 ))
+    if (( ${#title} > title_max && title_max > 20 )); then
+        title="${title:0:$((title_max - 1))}…"
+    fi
+    local gap=$(( cols - ${#title} - ${#r1_plain} - 4 ))
+    (( gap < 2 )) && gap=2
+
+    local line1="${BG} ${BLD}${W}${title}${RST}${BG}$(printf '%*s' $gap '')${D}⏱ 0s  ${F}${sid_short} ${EL}"
+    local line2="${BG} ${B}ORCH${RST}${BG}  ${P}${WS_NAME}${RST}${BG}  ${sc}${WS_STATUS}${RST}${BG}  ${cc}${WS_CATEGORY} ${EL}"
+    local line3="${BG}$(printf '%*s' $cols '') ${EL}"
+
+    printf '\033[H\033[2K%s\n\033[2K%s\n\033[2K%s' "$line1" "$line2" "$line3"
+}
+_initial_render
+
 # ─── Render loop ────────────────────────────────────────────────
 while true; do
     ELAPSED=$(format_elapsed $(($(date +%s) - START_TIME)))
