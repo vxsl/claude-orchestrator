@@ -14,14 +14,22 @@ if [ -n "$TMUX" ]; then
 fi
 
 export TEXTUAL_COLOR_SYSTEM=truecolor
+ORCH_CRASH_LOG=$(mktemp /tmp/orch-crash-XXXXXX.log)
+export ORCH_CRASH_LOG
 python3 "$SCRIPT_DIR/orch.py" "$@"
 EXIT_CODE=$?
 if [ $EXIT_CODE -ne 0 ]; then
-    # Textual leaves the terminal in alternate-screen mode on crash.
-    # Switch back to the normal screen so the traceback is visible.
+    # Textual renders the crash inside the alt-screen buffer which is lost on exit.
+    # Switch back to the normal screen, then show our saved traceback.
     tput rmcup 2>/dev/null || true
     stty sane 2>/dev/null || true
+    if [ -s "$ORCH_CRASH_LOG" ]; then
+        cat "$ORCH_CRASH_LOG"
+    else
+        echo "orch exited with code $EXIT_CODE (no traceback captured)"
+    fi
     echo ""
-    echo "orch exited with code $EXIT_CODE. Press Enter to close."
+    echo "Press Enter to close."
     read -r
 fi
+rm -f "$ORCH_CRASH_LOG"

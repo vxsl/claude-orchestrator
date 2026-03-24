@@ -196,8 +196,16 @@ def cmd_tui(args):
         datefmt="%H:%M:%S",
     )
     logging.getLogger("orch").setLevel(logging.DEBUG)
+    import traceback, os
     from app import OrchestratorApp
-    OrchestratorApp().run()
+    try:
+        OrchestratorApp().run()
+    except Exception:
+        crash_log = os.environ.get("ORCH_CRASH_LOG", "")
+        if crash_log:
+            with open(crash_log, "w") as f:
+                traceback.print_exc(file=f)
+        raise
 
 
 def cmd_seed(args):
