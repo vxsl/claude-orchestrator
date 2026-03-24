@@ -1843,14 +1843,19 @@ class OrchestratorApp(App):
                 if jsonl:
                     from sessions import parse_session
                     from pathlib import Path
+                    from claude_session_screen import auto_link_session
                     try:
                         s = parse_session(Path(jsonl))
                         if s:
                             s.is_live = True
                             self._inject_session(s)
-                            # Session has messages — it's a real thread now, next "c" should be fresh
-                            if s.message_count and ws.id and self._ws_pending_session.get(ws.id) == screen._session_id:
-                                del self._ws_pending_session[ws.id]
+                            if s.message_count and ws.id:
+                                # Persist the session→ws link so directory-less workstreams
+                                # (e.g. pure Jira tickets) can rediscover it after detach.
+                                auto_link_session(self.state.store, ws.id, screen._session_id)
+                                # Session is a real thread now, next "c" should be fresh
+                                if self._ws_pending_session.get(ws.id) == screen._session_id:
+                                    del self._ws_pending_session[ws.id]
                     except Exception:
                         pass
             elif isinstance(result, ClaudeSession):
