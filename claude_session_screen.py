@@ -158,6 +158,7 @@ class SessionHeaderWidget(Static):
         self._render_static()
         self._cached_session: ClaudeSession | None = None
         self._last_jsonl_size: int = 0
+        self._refresh_async()  # populate immediately, don't wait for first interval
         self.set_interval(5.0, self._refresh_async)
 
     def _format_elapsed(self) -> str:
