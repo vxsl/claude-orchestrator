@@ -117,72 +117,231 @@ class _SearchInput(Input):
 # ─── Help Screen ────────────────────────────────────────────────────
 
 class HelpScreen(FuzzyPickerScreen):
-    """Searchable keyboard reference — built on FuzzyPickerScreen."""
+    """Context-sensitive help — shows what you're looking at and how to use it."""
 
-    # Organized keybinding reference as (id, display) tuples
-    _HELP_ITEMS = [
-        # Navigation
-        ("nav-down", f"[{C_YELLOW}]j / \u2193[/{C_YELLOW}]  Move down"),
-        ("nav-up", f"[{C_YELLOW}]k / \u2191[/{C_YELLOW}]  Move up"),
-        ("nav-pgdn", f"[{C_YELLOW}]Ctrl+D[/{C_YELLOW}]  Half-page down"),
-        ("nav-pgup", f"[{C_YELLOW}]Ctrl+U[/{C_YELLOW}]  Half-page up"),
-        ("nav-top", f"[{C_YELLOW}]g[/{C_YELLOW}]  Jump to top"),
-        ("nav-bottom", f"[{C_YELLOW}]G[/{C_YELLOW}]  Jump to bottom"),
-        ("nav-drill", f"[{C_YELLOW}]Ctrl+L[/{C_YELLOW}]  Drill in / resume"),
-        ("nav-back", f"[{C_YELLOW}]Ctrl+H[/{C_YELLOW}]  Back / close"),
-        ("nav-enter", f"[{C_YELLOW}]Enter[/{C_YELLOW}]  Confirm / open"),
-        ("nav-tab", f"[{C_YELLOW}]H / L[/{C_YELLOW}]  Prev / next tab"),
-        ("nav-closetab", f"[{C_YELLOW}]x[/{C_YELLOW}]  Close tab"),
-        # Workstream actions
-        ("ws-add", f"[{C_YELLOW}]a[/{C_YELLOW}]  Add new workstream"),
-        ("ws-brain", f"[{C_YELLOW}]b[/{C_YELLOW}]  Brain dump (multi-line)"),
-        ("ws-note", f"[{C_YELLOW}]n[/{C_YELLOW}]  Quick todo"),
-        ("ws-spawn", f"[{C_YELLOW}]c[/{C_YELLOW}]  New Claude session"),
-        ("ws-repo", f"[{C_YELLOW}]C[/{C_YELLOW}]  Spawn in repo"),
-        ("ws-resume", f"[{C_YELLOW}]r[/{C_YELLOW}]  Resume session"),
-        ("ws-link", f"[{C_YELLOW}]W[/{C_YELLOW}]  Add link"),
-        ("ws-todos", f"[{C_YELLOW}]e[/{C_YELLOW}]  Todo list"),
-        ("ws-rename", f"[{C_YELLOW}]E[/{C_YELLOW}]  Rename"),
-        ("ws-open", f"[{C_YELLOW}]o[/{C_YELLOW}]  Open links"),
-        ("ws-archive", f"[{C_YELLOW}]u[/{C_YELLOW}]  Archive / unarchive"),
-        ("ws-delete", f"[{C_YELLOW}]d[/{C_YELLOW}]  Delete"),
-        # Session
-        ("sess-exit", f"[{C_YELLOW}]Ctrl+D[/{C_YELLOW}]  Exit Claude session"),
-        ("sess-extract", f"[{C_YELLOW}]Ctrl+E[/{C_YELLOW}]  Extract todo from session"),
-        ("sess-panels", f"[{C_YELLOW}]Ctrl+J/K[/{C_YELLOW}]  Cycle panels"),
-        # Filters
-        ("flt-all", f"[{C_YELLOW}]1[/{C_YELLOW}]  Filter: All"),
-        ("flt-work", f"[{C_YELLOW}]2[/{C_YELLOW}]  Filter: Work"),
-        ("flt-personal", f"[{C_YELLOW}]3[/{C_YELLOW}]  Filter: Personal"),
-        ("flt-active", f"[{C_YELLOW}]4[/{C_YELLOW}]  Filter: Active"),
-        ("flt-stale", f"[{C_YELLOW}]5[/{C_YELLOW}]  Filter: Stale"),
-        ("flt-archived", f"[{C_YELLOW}]6[/{C_YELLOW}]  Filter: Archived"),
-        ("flt-search", f"[{C_YELLOW}]/[/{C_YELLOW}]  Search workstreams"),
-        # Sort
-        ("srt-activity", f"[{C_YELLOW}]F1[/{C_YELLOW}]  Sort: Activity"),
-        ("srt-updated", f"[{C_YELLOW}]F2[/{C_YELLOW}]  Sort: Updated"),
-        ("srt-created", f"[{C_YELLOW}]F3[/{C_YELLOW}]  Sort: Created"),
-        ("srt-category", f"[{C_YELLOW}]F4[/{C_YELLOW}]  Sort: Category"),
-        ("srt-name", f"[{C_YELLOW}]F5[/{C_YELLOW}]  Sort: Name"),
-        # Other
-        ("cmd-palette", f"[{C_YELLOW}]:[/{C_YELLOW}]  Command palette"),
-        ("preview", f"[{C_YELLOW}]p[/{C_YELLOW}]  Toggle preview"),
-        ("refresh", f"[{C_YELLOW}]R[/{C_YELLOW}]  Refresh"),
-        ("help", f"[{C_YELLOW}]?[/{C_YELLOW}]  This help"),
-        ("quit", f"[{C_YELLOW}]q[/{C_YELLOW}]  Quit"),
-    ]
+    # ── Markup helpers ────────────────────────────────────────────
+    _hdr_n = 0  # class-level counter for unique IDs
 
-    def __init__(self):
+    @staticmethod
+    def _hdr(text: str) -> tuple[str, str]:
+        """Section header — bold purple with separator lines."""
+        HelpScreen._hdr_n += 1
+        slug = text.lower().replace(" ", "-").replace("'", "")
+        return (f"hdr-{slug}-{HelpScreen._hdr_n}", f"[bold {C_PURPLE}]\u2500\u2500 {text} \u2500\u2500[/]")
+
+    @staticmethod
+    def _desc(text: str, n: int = 0) -> tuple[str, str]:
+        """Description line — dim italic for orientation text."""
+        HelpScreen._hdr_n += 1
+        return (f"desc-{n}-{HelpScreen._hdr_n}", f"[italic {C_DIM}]{text}[/]")
+
+    @staticmethod
+    def _key(kid: str, keys: str, desc: str) -> tuple[str, str]:
+        """Keybinding item — yellow key, normal description."""
+        return (kid, f"[{C_YELLOW}]{keys}[/]  {desc}")
+
+    # ── Per-context help content ──────────────────────────────────
+
+    @classmethod
+    def _home_items(cls) -> list[tuple[str, str]]:
+        H, D, K = cls._hdr, cls._desc, cls._key
+        return [
+            H("What you're looking at"),
+            D("Your workstreams \u2014 everything you're working on, in one place.", 1),
+            D("Each row shows activity state, Claude sessions, and project info.", 2),
+            D("Sessions are auto-discovered from your Claude usage and grouped here.", 3),
+            D("", 4),
+            H("Getting around"),
+            K("nav-jk", "j / k", "Move down / up"),
+            K("nav-pg", "Ctrl+D / U", "Half-page down / up"),
+            K("nav-gg", "g / G", "Jump to top / bottom"),
+            K("nav-enter", "Enter / l", "Open workstream"),
+            K("nav-tab", "Ctrl+B / X", "Next / prev tab"),
+            K("nav-close", "x", "Close tab"),
+            K("nav-back", "Ctrl+H", "Back"),
+            H("Start working"),
+            K("ws-spawn", "c", "New Claude session in this workstream"),
+            K("ws-resume", "r", "Resume most recent session"),
+            K("ws-brain", "b", "Brain dump \u2014 stream of consciousness \u2192 launch"),
+            K("ws-repo", "C", "Pick a repo, then spawn Claude there"),
+            H("Manage"),
+            K("ws-add", "a", "Add new workstream"),
+            K("ws-note", "n", "Quick todo"),
+            K("ws-todos", "e", "Full todo list"),
+            K("ws-rename", "E", "Rename workstream"),
+            K("ws-link", "W", "Add link (worktree, ticket, url, \u2026)"),
+            K("ws-open", "o", "Open links in browser/editor"),
+            K("ws-archive", "u", "Archive / unarchive"),
+            K("ws-delete", "d", "Delete"),
+            H("Find things"),
+            K("flt-search", "/", "Search across all workstreams"),
+            K("cmd-palette", ":", "Command palette (fuzzy search all commands)"),
+            K("flt-1", "1\u20136", "Filter: Active / Work / Personal / All / Stale / Archived"),
+            K("srt-1", "F1\u2013F5", "Sort: Activity / Updated / Created / Category / Name"),
+            H("Dev workflow"),
+            K("dw-ship", "P", "Ship \u2014 oneshot (staged \u2192 branch \u2192 MR)"),
+            K("dw-ticket", "T", "Browse Jira tickets"),
+            K("dw-branch", "B", "Browse branches and worktrees"),
+            H("Other"),
+            K("preview", "p", "Toggle preview pane"),
+            K("refresh", "R", "Refresh"),
+            K("help", "?", "This help"),
+            K("quit", "q", "Quit"),
+        ]
+
+    @classmethod
+    def _detail_items(cls) -> list[tuple[str, str]]:
+        H, D, K = cls._hdr, cls._desc, cls._key
+        return [
+            H("What you're looking at"),
+            D("The detail view for a workstream \u2014 all its sessions and metadata.", 1),
+            D("Active sessions appear at top, archived below.", 2),
+            D("The \u201cearlier\u201d divider separates today's work from older sessions.", 3),
+            D("", 4),
+            H("Navigate"),
+            K("nav-jk", "j / k", "Move down / up"),
+            K("nav-pg", "Ctrl+D / U", "Half-page down / up"),
+            K("nav-enter", "Enter / l", "Open selected session"),
+            K("nav-back", "h / Ctrl+H", "Go back to workstream list"),
+            K("nav-panel", "Ctrl+J / K", "Cycle between panels"),
+            K("nav-zoom", "Ctrl+Z", "Zoom current panel full-screen"),
+            H("Sessions"),
+            K("sess-spawn", "c", "New Claude session"),
+            K("sess-resume", "r", "Resume selected session"),
+            K("sess-peek", "p", "Peek at session messages"),
+            K("sess-archive", "x", "Archive session"),
+            K("sess-defer", "z", "Shelve session (set aside for later)"),
+            K("sess-yank", "y", "Copy resume command to clipboard"),
+            K("sess-trash", "X", "Move to trash"),
+            H("Workstream"),
+            K("ws-note", "n", "Quick todo"),
+            K("ws-todos", "e", "Full todo list"),
+            K("ws-link", "W", "Add link"),
+            K("ws-open", "o", "Open links"),
+            K("ws-files", "f", "Browse files in workstream directory"),
+            H("Notifications"),
+            K("notif-dismiss", "d", "Dismiss notification"),
+            K("notif-all", "D", "Dismiss all notifications"),
+            H("Find things"),
+            K("flt-search", "/", "Search session content"),
+            K("cmd-palette", ":", "Command palette"),
+            K("help", "?", "This help"),
+        ]
+
+    @classmethod
+    def _session_items(cls) -> list[tuple[str, str]]:
+        H, D, K = cls._hdr, cls._desc, cls._key
+        return [
+            H("What you're looking at"),
+            D("A live Claude session in an embedded terminal.", 1),
+            D("This session is persistent \u2014 leave and it keeps running in the background.", 2),
+            D("The sidebar shows git status and log (tig) for context.", 3),
+            D("", 4),
+            H("Navigate"),
+            K("sess-back", "Ctrl+H", "Detach and go back (session keeps running)"),
+            K("sess-back2", "Ctrl+\\", "Detach and go back (alternate)"),
+            K("sess-panel", "Ctrl+J / K", "Cycle between terminal and tig panels"),
+            K("sess-zoom", "Ctrl+Z", "Zoom current panel full-screen"),
+            K("sess-archive", "Ctrl+Space", "Archive session and go back"),
+            H("Session"),
+            K("sess-extract", "Ctrl+E", "Extract a todo from the conversation"),
+            H("Terminal"),
+            K("term-scroll", "Ctrl+U / D", "Scroll up / down (half-page)"),
+            K("term-type", "", "Type normally to interact with Claude"),
+            D("", 10),
+            H("Session lifecycle"),
+            D("\u2219 thinking \u2014 Claude is actively working (animated indicator)", 20),
+            D("\u2219 your turn \u2014 Claude is waiting for your input", 21),
+            D("\u2219 committed \u2014 session ended with a git commit (work landed)", 22),
+            D("\u2219 archived \u2014 filed away, always recoverable", 23),
+        ]
+
+    @classmethod
+    def _todo_items(cls) -> list[tuple[str, str]]:
+        H, D, K = cls._hdr, cls._desc, cls._key
+        return [
+            H("What you're looking at"),
+            D("Your todo list for this workstream.", 1),
+            D("Each todo can be spawned as a new Claude session.", 2),
+            D("", 3),
+            H("Actions"),
+            K("todo-spawn", "Enter / c", "Spawn Claude session from this todo"),
+            K("todo-toggle", "Space", "Toggle done / undone"),
+            K("todo-add", "a", "Add new todo"),
+            K("todo-edit", "e", "Edit todo text"),
+            K("todo-ctx", "E", "Edit context / notes"),
+            K("todo-del", "d", "Delete todo"),
+            H("Navigate"),
+            K("nav-jk", "j / k", "Move down / up"),
+            K("nav-move", "J / K", "Move todo up / down in list"),
+            K("nav-back", "Backspace", "Go back"),
+        ]
+
+    @classmethod
+    def _sessions_items(cls) -> list[tuple[str, str]]:
+        H, D, K = cls._hdr, cls._desc, cls._key
+        return [
+            H("What you're looking at"),
+            D("All active sessions across all your workstreams.", 1),
+            D("A cross-cutting view \u2014 see everything that's running.", 2),
+            D("", 3),
+            H("Navigate"),
+            K("nav-jk", "j / k", "Move down / up"),
+            K("nav-enter", "Enter / l", "Open selected session"),
+            K("nav-back", "Ctrl+H", "Go back"),
+            H("Sessions"),
+            K("sess-resume", "r", "Resume selected session"),
+            H("Other"),
+            K("cmd-palette", ":", "Command palette"),
+            K("help", "?", "This help"),
+        ]
+
+    @classmethod
+    def _trash_items(cls) -> list[tuple[str, str]]:
+        H, D, K = cls._hdr, cls._desc, cls._key
+        return [
+            H("What you're looking at"),
+            D("Deleted sessions and workstreams you can recover.", 1),
+            D("", 2),
+            H("Actions"),
+            K("trash-restore", "u", "Restore selected item"),
+            K("trash-purge", "D", "Permanently delete"),
+            H("Navigate"),
+            K("nav-jk", "j / k", "Move down / up"),
+            K("nav-back", "Ctrl+H", "Go back"),
+            K("help", "?", "This help"),
+        ]
+
+    _CONTEXT_MAP: dict[str, classmethod] = {}  # populated after class body
+
+    def __init__(self, context: str = "home"):
+        self._context = context
+        titles = {
+            "home": "Workstreams",
+            "detail": "Workstream Detail",
+            "session": "Claude Session",
+            "todo": "Todo List",
+            "sessions": "All Sessions",
+            "trash": "Trash",
+        }
+        label = titles.get(context, "Help")
         super().__init__(
-            title=f"[bold {C_PURPLE}]Keyboard Reference[/bold {C_PURPLE}]",
-            hint=f"[{C_DIM}]Type to search  ^H back  Esc close[/{C_DIM}]",
+            title=f"[bold {C_PURPLE}]{label} \u2014 Help[/bold {C_PURPLE}]",
+            hint=f"[{C_DIM}]Type to filter  \u2502  ^H back  \u2502  Esc close[/{C_DIM}]",
         )
 
     def _get_items(self) -> list[tuple[str, str]]:
-        return list(self._HELP_ITEMS)
+        getter = {
+            "home": self._home_items,
+            "detail": self._detail_items,
+            "session": self._session_items,
+            "todo": self._todo_items,
+            "sessions": self._sessions_items,
+            "trash": self._trash_items,
+        }.get(self._context, self._home_items)
+        return getter()
 
     def _on_selected(self, item_id: str) -> None:
-        # Selecting a help item just dismisses
         self.dismiss(None)
 
 
@@ -300,10 +459,14 @@ class TodoScreen(_VimOptionListMixin, ModalScreen[None]):
         Binding("E", "edit_context", "Edit context"),
         Binding("K", "move_up", "Move \u2191", show=False),
         Binding("J", "move_down", "Move \u2193", show=False),
+        Binding("question_mark", "help", "?", show=False),
     ] + _VimOptionListMixin.VIM_BINDINGS
 
     def action_go_back(self):
         self.dismiss()
+
+    def action_help(self):
+        self.app.push_screen(HelpScreen(context="todo"))
 
     DEFAULT_CSS = f"""
     TodoScreen {{ align: center middle; }}
@@ -1726,8 +1889,13 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
                 options.append(Option(prompt, id=s.session_id))
                 idx += 1
 
+        prev_highlighted = olist.highlighted
         olist.clear_options()
         olist.add_options(options)
+        if options and prev_highlighted is None:
+            olist.highlighted = 0
+        elif prev_highlighted is not None:
+            olist.highlighted = min(prev_highlighted, len(options) - 1)
         self._animating_sessions = animating
         log.debug("build_session_list: %d notified + %d elevated + %d quiet (%d shelved), option_count=%d",
                   len(notified), len(elevated), len(quiet), len(quiet_shelved), olist.option_count)
@@ -2625,8 +2793,8 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         self.app.action_command_palette()
 
     def action_help(self):
-        """Delegate to app's help screen."""
-        self.app.action_help()
+        """Show context-sensitive help for detail view."""
+        self.app.push_screen(HelpScreen(context="detail"))
 
 
 
@@ -3280,7 +3448,7 @@ class CurrentSessionsScreen(_VimOptionListMixin, ModalScreen[None]):
         self.app.action_command_palette()
 
     def action_help(self) -> None:
-        self.app.action_help()
+        self.app.push_screen(HelpScreen(context="sessions"))
 
 
 class TrashScreen(_VimOptionListMixin, ModalScreen[None]):
@@ -3466,4 +3634,4 @@ class TrashScreen(_VimOptionListMixin, ModalScreen[None]):
         self.app.action_command_palette()
 
     def action_help(self) -> None:
-        self.app.action_help()
+        self.app.push_screen(HelpScreen(context="trash"))
