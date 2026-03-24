@@ -1448,7 +1448,11 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
             for s in all_sessions:
                 if s.session_id in archived:
                     archived_at = archived[s.session_id]
-                    last_act = s.last_activity or ""
+                    # Use last_user_message_at, not last_activity — last_activity is
+                    # updated by refresh_session_tail on live sessions, which caused
+                    # archived sessions to keep getting revived on every refresh.
+                    # Only revive if the user explicitly sent a new message after archiving.
+                    last_act = s.last_user_message_at or ""
                     if last_act and archived_at and self._parse_ts(last_act) > self._parse_ts(archived_at):
                         revived.add(s.session_id)
             if revived:
