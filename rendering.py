@@ -515,7 +515,7 @@ def _render_ws_option(
             parts.append(_token_color_markup(tk, total_tokens))
         total_work_ms = sum(s.total_work_ms for s in ws_sessions)
         if total_work_ms > 0:
-            parts.append(f"[{meta_dim}]{_work_time_str(total_work_ms)} [italic]think[/italic][/{meta_dim}]")
+            parts.append(f"[{meta_dim}][italic]{_work_time_str(total_work_ms)} think[/italic][/{meta_dim}]")
 
     # Use best session activity time (matches sort order), fall back to updated_at
     if ws_sessions:
@@ -683,7 +683,7 @@ def _render_session_option(
         model_part = "" if model == "opus" else f"[{C_FAINT}]{model:<8}[/{C_FAINT}]"
         tok_pad = " " * max(1, 8 - len(tokens_plain))
         work_time = s.work_time_display
-        work_str = f"{work_time} [italic]think[/italic]  " if work_time else ""
+        work_str = f"[italic]{work_time} think[/italic]  " if work_time else ""
         work_len = len(work_str) if work_time else 0
         model_len = 0 if model == "opus" else 8
         meta_left_len = 4 + model_len + 10 + 8 + work_len
