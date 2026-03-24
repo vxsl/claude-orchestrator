@@ -570,14 +570,14 @@ _BAR_CATS = [
     ("bash",   C_MID),
     ("read",   C_DIM),
     ("search", C_DIM),
-    ("agent",  C_PURPLE),
+    ("agent",  C_RESOLVED),
 ]
 
 _BAR_LEGEND_LABELS = [
     ("code", C_ORANGE),
     ("bash", C_MID),
     ("read", C_DIM),
-    ("agent", C_PURPLE),
+    ("agent", C_RESOLVED),
 ]
 
 
