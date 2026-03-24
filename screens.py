@@ -3115,7 +3115,7 @@ class CurrentSessionsScreen(_VimOptionListMixin, ModalScreen[None]):
         width: 100%; height: 100%;
         padding: 0; background: {BG_BASE};
     }}
-    #csd-tab-bar {{
+    #detail-tab-bar {{
         height: 1;
         padding: 0 1;
         background: {BG_CHROME};
