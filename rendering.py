@@ -72,7 +72,7 @@ BG_BASE = "#000000"      # true black — matches terminal
 BG_SURFACE = "#060606"   # barely lifted — focused panels
 BG_RAISED = "#0d1117"    # bars, headers, inputs
 BG_CHROME = "#060809"    # tab bar and footer — darker chrome, between black and panels
-BG_THINKING = "#1a3a6e"  # dark blue tint — active thinking rows
+BG_THINKING = "color(18)"  # 256-color navy (#000087) — direct palette index, no quantization
 
 
 # ─── Staleness helpers ──────────────────────────────────────────────
@@ -324,7 +324,8 @@ THROBBER_FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 def _activity_icon(activity: ThreadActivity, throbber_frame: int = 0, seen: bool = False) -> str:
     """Return a Rich-markup activity indicator."""
     if activity == ThreadActivity.THINKING:
-        return f"[bold {C_CYAN}]◉[/bold {C_CYAN}]"
+        char = THROBBER_FRAMES[throbber_frame % len(THROBBER_FRAMES)]
+        return f"[bold {C_CYAN}]{char}[/bold {C_CYAN}]"
     if activity in (ThreadActivity.AWAITING_INPUT, ThreadActivity.RESPONSE_READY):
         color = C_DIM if seen else C_YELLOW
         return f"[{color}]●[/{color}]"
@@ -338,7 +339,7 @@ def _activity_badge(activity: ThreadActivity, seen: bool = False) -> str:
     already visited this session since its last activity.
     """
     if activity == ThreadActivity.THINKING:
-        return f"[italic {C_CYAN}]thinking…[/italic {C_CYAN}]"
+        return ""  # throbber in the icon replaces the text badge
     if activity in (ThreadActivity.AWAITING_INPUT, ThreadActivity.RESPONSE_READY):
         color = C_DIM if seen else C_YELLOW
         return f"[{color}]your turn[/{color}]"
@@ -587,7 +588,7 @@ def _session_title(session: ClaudeSession, titles: dict[str, str] | None = None)
 
 # Badge plain-text widths (for right-alignment padding calculations)
 _BADGE_WIDTHS = {
-    ThreadActivity.THINKING: 9,       # "thinking…"
+    ThreadActivity.THINKING: 0,       # badge removed; throbber is in the icon
     ThreadActivity.AWAITING_INPUT: 9, # "your turn"
     ThreadActivity.RESPONSE_READY: 9, # "your turn"
     ThreadActivity.IDLE: 0,

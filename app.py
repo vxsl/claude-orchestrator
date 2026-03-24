@@ -62,7 +62,7 @@ from models import (
     _relative_time,
 )
 from sessions import ClaudeSession, invalidate_live_session_cache, ensure_rust_engine_running
-from threads import Thread, session_activity, mark_thread_seen, discover_threads
+from threads import Thread, ThreadActivity, session_activity, mark_thread_seen, discover_threads
 from thread_namer import apply_cached_names, name_uncached_threads, title_sessions, get_session_title, refresh_thread_titles
 from session_bridge import SessionBridge
 from watcher import SessionWatcher
@@ -230,6 +230,9 @@ class OrchestratorApp(App):
         self._ws_pending_session: dict[str, str] = {}  # ws_id -> session_id for reuse on "c"
 
     def on_key(self, event) -> None:
+        # Temporary key debug — remove after identifying ctrl+</>  key names
+        import pathlib
+        pathlib.Path("/tmp/orch-keys.log").open("a").write(f"key={event.key!r} char={event.character!r}\n")
         if event.key in ("ctrl+j", "ctrl+k"):
             event.prevent_default()
             event.stop()
@@ -365,6 +368,8 @@ class OrchestratorApp(App):
         self.set_timer(15, self._start_session_polling)
         self.set_timer(20, self._start_liveness_backstop)
 
+        self._throbber_timer = self.set_interval(0.1, self._tick_throbber)
+
         ws_table.focus()
 
     def on_unmount(self):
@@ -372,6 +377,16 @@ class OrchestratorApp(App):
             self._session_bridge.stop()
         if self._session_watcher:
             self._session_watcher.stop()
+
+    def _tick_throbber(self):
+        """Advance the throbber frame and refresh preview if any sessions are thinking."""
+        preview = self.state.preview_sessions
+        if preview and any(
+            session_activity(s, self.state.last_seen_cache) == ThreadActivity.THINKING
+            for s in preview
+        ):
+            self.state.throbber_frame += 1
+            self._refresh_preview_sessions()
 
     def _start_git_polling(self):
         self._poll_git_status()
