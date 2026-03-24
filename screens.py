@@ -910,7 +910,7 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         padding: 0 2;
     }}
     #detail-lists {{
-        height: auto; max-height: 50%;
+        height: auto; max-height: 70%;
     }}
     .detail-list-pane {{
         width: 1fr;
@@ -1044,6 +1044,7 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         self._peek_mode: bool = False
         self._loading_frame: int = 0
         self._loading_timer = None
+        self._throbber_timer = None
         self._refresh_timer = None
         self._mounted_once: bool = False  # skip first on_screen_resume (on_mount handles it)
         # Tig sidebar
@@ -1141,6 +1142,7 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         self.query_one("#detail-sessions", OptionList).focus()
         self._update_pane_labels()
         self._refresh_timer = self.set_interval(30, self._periodic_refresh)
+        self._throbber_timer = self.set_interval(0.1, self._tick_throbber)
         self._mounted_once = True
         if self._sessions_loading():
             self._loading_timer = self.set_interval(0.12, self._tick_loading)
@@ -1313,6 +1315,12 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         """True if the initial session discovery hasn't completed yet."""
         app = self.app
         return hasattr(app, 'state') and not app.state.sessions_loaded
+
+    def _tick_throbber(self):
+        """Animate thinking-session icons at ~10fps."""
+        if self._animating_sessions or self._animating_archived:
+            self._throbber_frame += 1
+            self._rebuild_all_options()
 
     def _tick_loading(self):
         """Animate the loading spinner while sessions are being discovered."""
