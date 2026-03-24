@@ -72,8 +72,8 @@ from workstream_synthesizer import (
 from description_refresher import refresh_descriptions
 
 from rendering import (
-    C_BLUE, C_CYAN, C_DIM, C_FAINT, C_GREEN, C_PURPLE, C_RED, C_YELLOW,
-    BG_BASE, BG_CHROME,
+    C_BLUE, C_CYAN, C_DIM, C_FAINT, C_GREEN, C_MID, C_PURPLE, C_RED, C_YELLOW,
+    BG_BASE, BG_CHROME, BG_RAISED,
     _token_color, _token_color_markup,
     _category_markup,
     _is_session_seen, _is_today, _any_session_today,
@@ -578,8 +578,14 @@ class OrchestratorApp(App):
         for i, tab in enumerate(self.tabs.tabs):
             prefix = f"{tab.icon} " if tab.icon else ""
             label = tab.label[:20] + "\u2026" if len(tab.label) > 20 else tab.label
-            if i == self.tabs.active_idx:
-                parts.append(f"[bold {C_CYAN}] {prefix}{_rich_escape(label)} [/bold {C_CYAN}]")
+            is_permanent = tab.ws_id is None
+            is_active = i == self.tabs.active_idx
+            if is_active and is_permanent:
+                parts.append(f"[bold italic {C_MID} on {BG_RAISED}] {prefix}{_rich_escape(label)} [/]")
+            elif is_active:
+                parts.append(f"[bold {C_BLUE} on {BG_RAISED}] {prefix}{_rich_escape(label)} [/]")
+            elif is_permanent:
+                parts.append(f"[italic {C_FAINT}] {prefix}{_rich_escape(label)} [/]")
             else:
                 parts.append(f"[{C_DIM}] {prefix}{_rich_escape(label)} [/{C_DIM}]")
             if i < len(self.tabs.tabs) - 1:
