@@ -283,7 +283,7 @@ class _VimOptionListMixin:
 class TodoScreen(_VimOptionListMixin, ModalScreen[None]):
     """Interactive todo list — each item is a potential pending Claude session."""
 
-    _option_list_id = "todo-active"
+    _option_list_id = "todo-list"
 
     BINDINGS = [
         Binding("escape", "dismiss", "Back"),
@@ -291,14 +291,11 @@ class TodoScreen(_VimOptionListMixin, ModalScreen[None]):
         Binding("a", "add_todo", "Add"),
         Binding("enter,space", "toggle_done", "Toggle done", priority=True),
         Binding("e", "edit_todo", "Edit"),
-        Binding("x", "archive_todo", "Archive/Restore"),
         Binding("c", "spawn_todo", "Spawn"),
         Binding("d", "delete_todo", "Delete"),
         Binding("E", "edit_context", "Edit context"),
         Binding("K", "move_up", "Move \u2191", show=False),
         Binding("J", "move_down", "Move \u2193", show=False),
-        Binding("h", "focus_active", show=False, priority=True),
-        Binding("l", "focus_archived", show=False, priority=True),
     ] + _VimOptionListMixin.VIM_BINDINGS
 
     def action_go_back(self):
@@ -310,44 +307,37 @@ class TodoScreen(_VimOptionListMixin, ModalScreen[None]):
         width: 100%; height: 100%;
         padding: 0; background: {BG_BASE};
     }}
-    #todo-title {{
-        text-style: bold; color: {C_PURPLE};
-        padding: 1 3;
+    #todo-header {{
+        height: 2;
+        padding: 0 2;
+        background: {BG_RAISED};
     }}
-    #todo-lists {{
-        height: 1fr;
-    }}
-    .todo-list-pane {{
-        width: 1fr;
-    }}
-    .todo-list-label {{
-        padding: 0 3;
-        color: {C_BLUE};
+    #todo-header-name {{
+        color: {C_PURPLE};
         text-style: bold;
     }}
-    #todo-active, #todo-archived {{
+    #todo-header-stats {{
+        color: {C_DIM};
+    }}
+    #todo-list {{
         height: 1fr;
         margin: 0 1; padding: 0;
         border: none;
         background: {BG_BASE};
     }}
-    #todo-active > .option-list--option-highlighted,
-    #todo-archived > .option-list--option-highlighted {{
-        background: #101010;
+    #todo-list > .option-list--option-highlighted {{
+        background: {BG_SURFACE};
     }}
-    #todo-no-active, #todo-no-archived {{
-        padding: 1 3;
+    #todo-no-items {{
+        padding: 2 3;
         color: {C_DIM};
-    }}
-    #todo-archived-pane {{
-        display: none;
     }}
     #todo-context {{
         height: auto;
-        max-height: 6;
-        padding: 0 3;
+        max-height: 5;
+        padding: 1 3;
+        background: {BG_RAISED};
         color: {C_DIM};
-        border-top: blank;
     }}
     #todo-help {{
         height: 1;
@@ -362,9 +352,7 @@ class TodoScreen(_VimOptionListMixin, ModalScreen[None]):
         super().__init__()
         self.ws = ws
         self.store = store
-        self._active_pane: str = "active"
         self._active_items: list[TodoItem] = []
-        self._archived_items: list[TodoItem] = []
         self._rebuilding: bool = False
 
     @property
@@ -373,51 +361,26 @@ class TodoScreen(_VimOptionListMixin, ModalScreen[None]):
 
     def compose(self) -> ComposeResult:
         with Vertical(id="todo-container"):
-            yield Static(f"[bold {C_PURPLE}]Todos: {_rich_escape(self.ws.name)}[/bold {C_PURPLE}]", id="todo-title")
-
-            with Horizontal(id="todo-lists"):
-                with Vertical(id="todo-active-pane", classes="todo-list-pane"):
-                    yield Static(f"[bold {C_BLUE}]Active[/bold {C_BLUE}]", id="todo-active-label", classes="todo-list-label")
-                    yield OptionList(id="todo-active")
-                    yield Static(f"[{C_DIM}]No todos \u2014 press a to add[/{C_DIM}]", id="todo-no-active")
-                with Vertical(id="todo-archived-pane", classes="todo-list-pane"):
-                    yield Static(f"[{C_DIM}]Archived[/{C_DIM}]", id="todo-archived-label", classes="todo-list-label")
-                    yield OptionList(id="todo-archived")
-                    yield Static(f"[{C_DIM}]Empty[/{C_DIM}]", id="todo-no-archived")
-
+            with Vertical(id="todo-header"):
+                yield Static("", id="todo-header-name")
+                yield Static("", id="todo-header-stats")
+            yield OptionList(id="todo-list")
+            yield Static(f"[{C_DIM}]No todos \u2014 press [bold]a[/bold] to add[/{C_DIM}]", id="todo-no-items")
             yield Static("", id="todo-context")
             yield Static(self._render_help(), id="todo-help")
 
     def on_mount(self):
         self._rebuild()
-        self.query_one("#todo-active", OptionList).focus()
+        self.query_one("#todo-list", OptionList).focus()
 
     def _focused_olist(self) -> OptionList:
-        if self._active_pane == "archived":
-            return self.query_one("#todo-archived", OptionList)
-        return self.query_one("#todo-active", OptionList)
+        return self.query_one("#todo-list", OptionList)
 
     def _olist(self) -> OptionList:
         return self._focused_olist()
 
-    def on_focus(self, event):
-        """Sync _active_pane with actual widget focus."""
-        widget = event.control
-        if not isinstance(widget, OptionList):
-            return
-        if widget.id == "todo-archived" and self._archived_items:
-            if self._active_pane != "archived":
-                self._active_pane = "archived"
-                self._update_pane_labels()
-                self._update_context_preview()
-        elif widget.id == "todo-active":
-            if self._active_pane != "active":
-                self._active_pane = "active"
-                self._update_pane_labels()
-                self._update_context_preview()
-
     def _rebuild(self):
-        """Reload data and rebuild both panes."""
+        """Reload data and rebuild the list."""
         self._rebuilding = True
         try:
             self._rebuild_inner()
@@ -428,52 +391,28 @@ class TodoScreen(_VimOptionListMixin, ModalScreen[None]):
         from state import AppState
         self.ws = self.store.get(self.ws.id) or self.ws
         self._active_items = AppState.active_todos(self.ws)
-        self._archived_items = AppState.archived_todos(self.ws)
 
-        # Active pane
-        olist = self.query_one("#todo-active", OptionList)
-        no_active = self.query_one("#todo-no-active", Static)
+        olist = self.query_one("#todo-list", OptionList)
+        no_items = self.query_one("#todo-no-items", Static)
         old_id = self._highlighted_item_id(olist, self._active_items)
-        old_active_idx = olist.highlighted
+        old_idx = olist.highlighted
+
         if self._active_items:
             olist.display = True
-            no_active.display = False
+            no_items.display = False
             options = [Option(_render_todo_option(item), id=item.id) for item in self._active_items]
             olist.clear_options()
             olist.add_options(options)
-            self._restore_highlight(olist, self._active_items, old_id, old_active_idx)
+            self._restore_highlight(olist, self._active_items, old_id, old_idx)
         else:
             olist.clear_options()
             olist.display = False
-            no_active.display = True
+            no_items.display = True
 
-        # Archived pane — only show if there are archived items or user is viewing them
-        arch_olist = self.query_one("#todo-archived", OptionList)
-        no_arch = self.query_one("#todo-no-archived", Static)
-        arch_pane = self.query_one("#todo-archived-pane")
-        old_arch_id = self._highlighted_item_id(arch_olist, self._archived_items)
-        old_arch_idx = arch_olist.highlighted
-        if self._archived_items:
-            arch_pane.display = True
-            arch_olist.display = True
-            no_arch.display = False
-            options = [Option(_render_todo_option(item, is_archived=True), id=item.id) for item in self._archived_items]
-            arch_olist.clear_options()
-            arch_olist.add_options(options)
-            self._restore_highlight(arch_olist, self._archived_items, old_arch_id, old_arch_idx)
-        else:
-            arch_olist.clear_options()
-            # Hide entire archived pane when empty
-            arch_pane.display = False
-            if self._active_pane == "archived":
-                self._active_pane = "active"
-                self.query_one("#todo-active", OptionList).focus()
-
-        self._update_pane_labels()
+        self._update_header()
         self._update_context_preview()
-        # Restore focus — clear_options() can cause the OptionList to lose focus.
-        # Defer to after refresh so Textual finishes processing internal events first.
-        self.call_after_refresh(self._focused_olist().focus)
+        # Restore focus — clear_options() can lose focus; defer until after refresh.
+        self.call_after_refresh(olist.focus)
 
     @staticmethod
     def _highlighted_item_id(olist: OptionList, items: list[TodoItem]) -> str | None:
@@ -499,27 +438,34 @@ class TodoScreen(_VimOptionListMixin, ModalScreen[None]):
         else:
             olist.highlighted = 0
 
-    def _update_pane_labels(self):
-        active_label = self.query_one("#todo-active-label", Static)
-        arch_label = self.query_one("#todo-archived-label", Static)
+    def _update_header(self):
         na = len(self._active_items)
-        narch = len(self._archived_items)
-        if self._active_pane == "active":
-            active_label.update(f"[bold {C_BLUE}]Active[/bold {C_BLUE}] [{C_DIM}]({na})[/{C_DIM}]")
-            arch_label.update(f"[{C_DIM}]Archived ({narch})[/{C_DIM}]")
-        else:
-            active_label.update(f"[{C_DIM}]Active ({na})[/{C_DIM}]")
-            arch_label.update(f"[bold {C_BLUE}]Archived[/bold {C_BLUE}] [{C_DIM}]({narch})[/{C_DIM}]")
+        done = sum(1 for t in self._active_items if t.done)
+        crystal = sum(1 for t in self._active_items if getattr(t, "origin", "manual") == "crystallized")
+        name = _rich_escape(self.ws.name)
+        self.query_one("#todo-header-name", Static).update(
+            f"[bold {C_PURPLE}]\u25c6 Todos[/bold {C_PURPLE}]  [{C_DIM}]{name}[/{C_DIM}]"
+        )
+        parts = []
+        pending = na - done
+        if pending:
+            parts.append(f"[{C_LIGHT}]{pending}[/{C_LIGHT}] pending")
+        if done:
+            parts.append(f"[{C_GREEN}]{done}[/{C_GREEN}] done")
+        if crystal:
+            parts.append(f"[{C_GOLD}]{crystal}[/{C_GOLD}] crystallized")
+        sep = f" [{C_FAINT}]\u00b7[/{C_FAINT}] "
+        stats = sep.join(parts) if parts else f"[{C_DIM}]empty[/{C_DIM}]"
+        self.query_one("#todo-header-stats", Static).update(stats)
 
     def _update_context_preview(self):
         item = self._highlighted_item()
         ctx_widget = self.query_one("#todo-context", Static)
         if item and item.context:
             is_crystal = getattr(item, "origin", "manual") == "crystallized"
-            # Show first 4 lines of context
-            lines = item.context.strip().split("\n")[:4]
-            preview = "\n".join(lines)
-            if len(item.context.strip().split("\n")) > 4:
+            all_lines = item.context.strip().split("\n")
+            preview = _rich_escape("\n".join(all_lines[:4]))
+            if len(all_lines) > 4:
                 preview += f"\n[{C_DIM}]...[/{C_DIM}]"
             label_color = C_GOLD if is_crystal else C_BLUE
             ctx_widget.update(f"[{label_color}]Context:[/{label_color}] {preview}")
@@ -529,31 +475,19 @@ class TodoScreen(_VimOptionListMixin, ModalScreen[None]):
             ctx_widget.update("")
 
     def _highlighted_item(self) -> TodoItem | None:
-        olist = self._focused_olist()
-        items = self._archived_items if self._active_pane == "archived" else self._active_items
-        if olist.highlighted is not None and olist.highlighted < len(items):
-            return items[olist.highlighted]
+        olist = self.query_one("#todo-list", OptionList)
+        if olist.highlighted is not None and olist.highlighted < len(self._active_items):
+            return self._active_items[olist.highlighted]
         return None
 
     def on_option_list_option_highlighted(self, event: OptionList.OptionHighlighted):
-        if self._rebuilding:
-            return
-        # Sync pane state based on which list emitted the event
-        if event.option_list.id == "todo-archived":
-            if self._active_pane != "archived":
-                self._active_pane = "archived"
-                self._update_pane_labels()
-        elif event.option_list.id == "todo-active":
-            if self._active_pane != "active":
-                self._active_pane = "active"
-                self._update_pane_labels()
-        self._update_context_preview()
+        if not self._rebuilding:
+            self._update_context_preview()
 
     def _render_help(self) -> str:
         pairs = [
             ("a", "add"), ("Enter", "done"), ("e", "edit"), ("c", "spawn"),
-            ("x", "archive"), ("d", "delete"), ("E", "context"),
-            ("J/K", "reorder"), ("h/l", "panes"), ("q", "back"),
+            ("d", "del"), ("E", "ctx"), ("J/K", "reorder"), ("q", "back"),
         ]
         return "  ".join(f"[{C_YELLOW}]{k}[/{C_YELLOW}] {v}" for k, v in pairs)
 
@@ -563,10 +497,8 @@ class TodoScreen(_VimOptionListMixin, ModalScreen[None]):
         def on_text(text: str | None):
             if text and text.strip():
                 self._app_state.add_todo(self.ws.id, text.strip())
-                self._active_pane = "active"
                 self._rebuild()
-                # Focus active list and jump to bottom (new item)
-                olist = self.query_one("#todo-active", OptionList)
+                olist = self.query_one("#todo-list", OptionList)
                 olist.focus()
                 if olist.option_count > 0:
                     olist.highlighted = olist.option_count - 1
@@ -578,23 +510,17 @@ class TodoScreen(_VimOptionListMixin, ModalScreen[None]):
         if not item:
             return
         self._app_state.toggle_todo(self.ws.id, item.id)
-        # Re-sort and replace all prompts in place — avoids clear_options() focus loss.
-        # Option count doesn't change (toggling done doesn't remove from active).
+        # Replace prompts in place — avoids clear_options() focus loss.
         from state import AppState
         self.ws = self.store.get(self.ws.id) or self.ws
-        is_archived = self._active_pane == "archived"
-        new_items = AppState.archived_todos(self.ws) if is_archived else AppState.active_todos(self.ws)
-        olist = self._focused_olist()
+        new_items = AppState.active_todos(self.ws)
+        olist = self.query_one("#todo-list", OptionList)
         for i, t in enumerate(new_items):
-            prompt = _render_todo_option(t, is_archived=is_archived)
-            olist.replace_option_prompt_at_index(i, prompt)
-        # Move highlight to the item's new position
+            olist.replace_option_prompt_at_index(i, _render_todo_option(t))
         new_idx = next((i for i, t in enumerate(new_items) if t.id == item.id), 0)
         olist.highlighted = new_idx
-        if is_archived:
-            self._archived_items = new_items
-        else:
-            self._active_items = new_items
+        self._active_items = new_items
+        self._update_header()
         self._update_context_preview()
 
     def action_edit_todo(self):
@@ -606,16 +532,6 @@ class TodoScreen(_VimOptionListMixin, ModalScreen[None]):
                 self._app_state.edit_todo(self.ws.id, item.id, text=text.strip())
                 self._rebuild()
         self.app.push_screen(_TodoEditScreen(item.text), callback=on_text)
-
-    def action_archive_todo(self):
-        item = self._highlighted_item()
-        if not item:
-            return
-        if self._active_pane == "archived":
-            self._app_state.unarchive_todo(self.ws.id, item.id)
-        else:
-            self._app_state.archive_todo(self.ws.id, item.id)
-        self._rebuild()
 
     def action_delete_todo(self):
         item = self._highlighted_item()
@@ -647,31 +563,15 @@ class TodoScreen(_VimOptionListMixin, ModalScreen[None]):
 
     def action_move_up(self):
         item = self._highlighted_item()
-        if item and self._active_pane == "active":
+        if item:
             self._app_state.reorder_todo(self.ws.id, item.id, -1)
             self._rebuild()
 
     def action_move_down(self):
         item = self._highlighted_item()
-        if item and self._active_pane == "active":
+        if item:
             self._app_state.reorder_todo(self.ws.id, item.id, 1)
             self._rebuild()
-
-    def action_focus_active(self):
-        self._active_pane = "active"
-        olist = self.query_one("#todo-active", OptionList)
-        if olist.display:
-            olist.focus()
-        self._update_pane_labels()
-        self._update_context_preview()
-
-    def action_focus_archived(self):
-        if not self._archived_items:
-            return
-        self._active_pane = "archived"
-        self.query_one("#todo-archived", OptionList).focus()
-        self._update_pane_labels()
-        self._update_context_preview()
 
 class _TodoEditScreen(ModalScreen[str | None]):
     """Single-line input pre-filled with existing text."""
