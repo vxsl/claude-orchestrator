@@ -953,6 +953,7 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         Binding("z", "defer_session", "Defer", show=False),
         Binding("d", "dismiss_notification", "Dismiss", show=False),
         Binding("D", "dismiss_all_notifications", "Dismiss all", show=False),
+        Binding("A", "archive_all_sessions", "Archive all", show=False),
         Binding("X", "trash_session", "Trash", show=False),
         Binding("T", "view_trash", "Trash view", show=False),
         Binding("f9", "dismiss_discovered", "Dismiss suggestion", show=False),
@@ -2719,6 +2720,20 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
                 self.ws.archived_sessions[sid] = datetime.now(timezone.utc).isoformat()
                 self.store.update(self.ws)
         self._refresh()
+
+    def action_archive_all_sessions(self):
+        """A = archive all currently-visible active sessions."""
+        now = datetime.now(timezone.utc).isoformat()
+        changed = False
+        for s in list(self._detail_sessions):
+            if s.session_id not in self.ws.archived_sessions:
+                self.ws.archived_sessions[s.session_id] = now
+                changed = True
+        if changed:
+            self.store.update(self.ws)
+            n = len(self._detail_sessions)
+            self.app.notify(f"Archived {n} session{'s' if n != 1 else ''}", timeout=2)
+            self._refresh()
 
     def action_defer_session(self):
         """z = defer/un-defer the highlighted session."""

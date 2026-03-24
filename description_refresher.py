@@ -193,10 +193,16 @@ def _find_sessions_for_ws(ws: Workstream, all_sessions: list[ClaudeSession]) -> 
 def refresh_descriptions(
     store: Store,
     all_sessions: list[ClaudeSession],
-) -> int:
+) -> list[tuple[str, str]]:
     """Re-evaluate descriptions for workstreams with changed context.
 
-    Returns the number of descriptions updated.
+    Returns a list of (ws_id, new_description) pairs for workstreams whose
+    descriptions should be updated.  The caller is responsible for applying
+    these on the main thread via store.update() — this function must NOT call
+    store.update() directly because it runs in a background thread and a
+    concurrent store.update() would race with main-thread writes, potentially
+    replacing a current ws object with a stale snapshot and clobbering
+    fields like archived_sessions.
     """
     cache = _load_cache()
     now = datetime.now()
@@ -240,7 +246,7 @@ def refresh_descriptions(
         })
 
     if not candidates:
-        return 0
+        return []
 
     # Batch into one LLM call
     batch = candidates[:BATCH_SIZE]
@@ -248,25 +254,25 @@ def refresh_descriptions(
     results = _call_llm(prompt)
 
     if not results:
-        return 0
+        return []
 
-    updated = 0
+    updates: list[tuple[str, str]] = []
+    cache_updates: dict = {}
     for ctx in batch:
         ws = ctx["ws"]
         new_desc = results.get(ws.id, "keep")
 
-        # Update cache regardless (tracks that we evaluated)
-        cache[ws.id] = {
+        cache_updates[ws.id] = {
             "context_hash": ctx["context_hash"],
             "evaluated_at": now.isoformat(),
             "description": ws.description,
         }
 
         if isinstance(new_desc, str) and new_desc.lower() != "keep" and new_desc != ws.description:
-            ws.description = new_desc
-            store.update(ws)
-            cache[ws.id]["description"] = new_desc
-            updated += 1
+            cache_updates[ws.id]["description"] = new_desc
+            updates.append((ws.id, new_desc))
 
+    # Persist the evaluation cache (does not touch the workstream store)
+    cache.update(cache_updates)
     _save_cache(cache)
-    return updated
+    return updates

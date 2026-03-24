@@ -1492,9 +1492,12 @@ class OrchestratorApp(App):
             apply_cached_names(threads)
             any_ai_changes = True
 
-        desc_updated = refresh_descriptions(self.state.store, sessions)
-        if desc_updated > 0:
+        desc_updates = refresh_descriptions(self.state.store, sessions)
+        if desc_updates:
             any_ai_changes = True
+            # Apply on main thread — store.update must not be called from a
+            # background thread (races with main-thread writes, clobbers ws fields).
+            self.call_from_thread(self._apply_desc_updates, desc_updates)
 
         # Single callback for all AI-powered updates (was 3-5 separate callbacks)
         if any_ai_changes:
@@ -1509,6 +1512,18 @@ class OrchestratorApp(App):
             self._refresh_ws_table_debounced()
         for screen in self.screen_stack:
             screen.post_message(SessionsChanged())
+
+    def _apply_desc_updates(self, updates: list[tuple[str, str]]):
+        """Apply workstream description updates on the main thread.
+
+        Called via call_from_thread from _do_load_sessions so that store.update
+        is always called on the main thread, never from a background thread.
+        """
+        for ws_id, new_desc in updates:
+            ws = self.state.store.get(ws_id)
+            if ws and ws.description != new_desc:
+                ws.description = new_desc
+                self.state.store.update(ws)
 
     def _apply_synthesis(self, threads: list[Thread], discovered: list[Workstream]):
         self.state.threads = threads
