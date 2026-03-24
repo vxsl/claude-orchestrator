@@ -179,6 +179,10 @@ class Thread:
         return sum(s.total_input_tokens + s.total_output_tokens for s in self.sessions)
 
     @property
+    def total_thinking_chars(self) -> int:
+        return sum(s.total_thinking_chars for s in self.sessions)
+
+    @property
     def tokens_display(self) -> str:
         t = self.total_tokens
         if t > 1_000_000:

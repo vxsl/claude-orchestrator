@@ -376,6 +376,7 @@ class ClaudeSession:
     last_activity: str = ""
     total_input_tokens: int = 0
     total_output_tokens: int = 0
+    total_thinking_chars: int = 0  # Sum of thinking block text lengths (proxy for thinking effort)
     message_count: int = 0
     assistant_message_count: int = 0
     model: str = ""
@@ -459,6 +460,18 @@ class ClaudeSession:
         if total > 1_000:
             return f"{total / 1_000:.1f}k"
         return str(total)
+
+    @property
+    def thinking_display(self) -> str:
+        """Compact display of estimated thinking tokens (chars/4)."""
+        t = self.total_thinking_chars // 4
+        if t == 0:
+            return ""
+        if t > 1_000_000:
+            return f"~{t / 1_000_000:.1f}M"
+        if t > 1_000:
+            return f"~{t / 1_000:.1f}k"
+        return f"~{t}"
 
     @property
     def display_name(self) -> str:
@@ -699,9 +712,12 @@ def parse_session(jsonl_path: Path) -> Optional[ClaudeSession]:
                     _pending_commit = _last_bash_has_commit(msg)
                     if not session.model and msg.get("model"):
                         session.model = msg["model"]
-                    # Scan content blocks for tool usage
+                    # Scan content blocks for tool usage and thinking
                     for block in msg.get("content", []):
-                        if isinstance(block, dict) and block.get("type") == "tool_use":
+                        if not isinstance(block, dict):
+                            continue
+                        btype = block.get("type")
+                        if btype == "tool_use":
                             cat = _TOOL_CATEGORIES.get(block.get("name", ""), "other")
                             session.tool_counts[cat] = session.tool_counts.get(cat, 0) + 1
                             if cat == "mutate":
@@ -710,6 +726,8 @@ def parse_session(jsonl_path: Path) -> Optional[ClaudeSession]:
                                     bn = Path(fp).name
                                     if bn not in session.files_mutated:
                                         session.files_mutated.append(bn)
+                        elif btype == "thinking":
+                            session.total_thinking_chars += len(block.get("thinking", ""))
 
             session.started_at = first_ts or ""
             session.last_activity = last_ts or first_ts or ""

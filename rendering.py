@@ -131,6 +131,26 @@ def _colored_tokens(session_or_thread) -> str:
     return f"[{color}]{session_or_thread.tokens_display}[/{color}]"
 
 
+def _thinking_markup_from_chars(chars: int) -> str:
+    """Return Rich-markup for estimated thinking tokens (~chars/4), or empty string."""
+    t = chars // 4
+    if t == 0:
+        return ""
+    if t > 1_000_000:
+        label = f"~{t / 1_000_000:.1f}M"
+    elif t > 1_000:
+        label = f"~{t / 1_000:.1f}k"
+    else:
+        label = f"~{t}"
+    return f"[{C_DIM}]{label}[/{C_DIM}]"
+
+
+def _thinking_markup(session_or_thread) -> str:
+    """Return Rich-markup for estimated thinking tokens, or empty string."""
+    chars = getattr(session_or_thread, 'total_thinking_chars', 0)
+    return _thinking_markup_from_chars(chars)
+
+
 # ─── Context window bar ────────────────────────────────────────────
 
 def _context_color(pct: float) -> str:
@@ -502,6 +522,10 @@ def _render_ws_option(
             else:
                 tk = str(total_tokens)
             parts.append(_token_color_markup(tk, total_tokens))
+        think_chars = sum(s.total_thinking_chars for s in ws_sessions)
+        think_m = _thinking_markup_from_chars(think_chars)
+        if think_m:
+            parts.append(think_m)
 
     # Use best session activity time (matches sort order), fall back to updated_at
     if ws_sessions:
@@ -681,7 +705,8 @@ def _render_session_option(
         ctx_bar = _context_bar_compact(s.context_tokens, s.context_window_size)
         bar = _tool_bar(s.tool_counts)
         files = _file_touchpoints(s.files_mutated)
-        left = "  ".join(p for p in (ctx_bar, bar, files) if p)
+        think = _thinking_markup(s)
+        left = "  ".join(p for p in (ctx_bar, bar, files, think) if p)
         if not left:
             left = f"[{C_FAINT}]{'─' * 6}[/{C_FAINT}]"
         line3 = f"{INDENT}{left}"
@@ -783,14 +808,15 @@ def _render_session_option(
     lines = [line1, line2]
 
     if not archived:
-        # Line 3: context bar + tool usage bar + file touchpoints + project path
+        # Line 3: context bar + tool usage bar + file touchpoints + thinking est. + project path
         ctx_bar = _context_bar_compact(s.context_tokens, s.context_window_size)
         bar = _tool_bar(s.tool_counts)
         files = _file_touchpoints(s.files_mutated)
+        think = _thinking_markup(s)
         proj_label = ""
         if ws_repo_path and s.project_path and s.project_path.rstrip("/") != ws_repo_path.rstrip("/"):
             proj_label = f"[{C_FAINT}]{Path(s.project_path).name}[/{C_FAINT}]"
-        left = "  ".join(p for p in (ctx_bar, bar, files) if p)
+        left = "  ".join(p for p in (ctx_bar, bar, files, think) if p)
         if not left:
             left = f"[{C_FAINT}]{'─' * 6}[/{C_FAINT}]"
         if proj_label:
