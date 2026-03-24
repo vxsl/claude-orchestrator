@@ -1018,13 +1018,14 @@ def _render_notified_session_option(
         LINE_WIDTH = title_width + 20
 
     icon = _activity_icon(act, throbber_frame, seen=seen)
-    # Badge: use green instead of yellow for "your turn" on notified sessions
-    if act in (ThreadActivity.AWAITING_INPUT, ThreadActivity.RESPONSE_READY):
-        badge_color = C_DIM if seen else C_GREEN
-        badge = f"[{badge_color}]your turn[/{badge_color}]"
+    # "your turn" states: show session ID on line 1 instead of badge
+    your_turn = act in (ThreadActivity.AWAITING_INPUT, ThreadActivity.RESPONSE_READY)
+    if your_turn:
+        badge = ""
+        badge_w = 0
     else:
         badge = _activity_badge(act, seen=seen)
-    badge_w = _BADGE_WIDTHS.get(act, 0)
+        badge_w = _BADGE_WIDTHS.get(act, 0)
     model = _short_model(s.model)
     title_raw = _session_title(s)[:title_width]
     title_esc = _rich_escape(title_raw)
@@ -1037,15 +1038,18 @@ def _render_notified_session_option(
     # Title always bright for notified sessions
     title_fmt = f"[{C_LIGHT}]{title_esc}[/{C_LIGHT}]"
 
-    # Line 1: title + badge (same as normal)
+    # Line 1: title + sid for your-turn, badge otherwise
     prefix_w = 3
-    if badge:
+    if your_turn:
+        fill = max(2, LINE_WIDTH - prefix_w - len(title_raw) - 8)
+        line1 = f" {icon} {title_fmt}{' ' * fill}[{C_FAINT}]{sid}[/{C_FAINT}]"
+    elif badge:
         fill = max(2, LINE_WIDTH - prefix_w - len(title_raw) - badge_w)
         line1 = f" {icon} {title_fmt}{' ' * fill}{badge}"
     else:
         line1 = f" {icon} {title_fmt}"
 
-    # Line 2: metadata (same as normal)
+    # Line 2: metadata (sid omitted when shown on line 1 for your-turn sessions)
     model_part = "" if model == "opus" else f"[{C_BLUE}]{model:<8}[/{C_BLUE}]"
     tokens_fmt = _colored_tokens(s)
     tok_pad = " " * max(1, 8 - len(tokens_plain))
@@ -1054,14 +1058,23 @@ def _render_notified_session_option(
     model_len = 0 if model == "opus" else 8
     meta_left_len = 4 + model_len + 10 + 8 + dur_len + len(age_str)
     sid_gap = max(2, LINE_WIDTH - meta_left_len - 8)
-    line2 = (
-        f"{INDENT}{model_part}[{C_DIM}]{msgs_str:<10}[/{C_DIM}]"
-        f"{tokens_fmt}"
-        f"[{C_DIM}]{tok_pad}"
-        f"{dur_str}[/{C_DIM}]"
-        f"[{C_MID}]{age_str}[/{C_MID}]"
-        f"{' ' * sid_gap}[{C_FAINT}]{sid}[/{C_FAINT}]"
-    )
+    if your_turn:
+        line2 = (
+            f"{INDENT}{model_part}[{C_DIM}]{msgs_str:<10}[/{C_DIM}]"
+            f"{tokens_fmt}"
+            f"[{C_DIM}]{tok_pad}"
+            f"{dur_str}[/{C_DIM}]"
+            f"[{C_MID}]{age_str}[/{C_MID}]"
+        )
+    else:
+        line2 = (
+            f"{INDENT}{model_part}[{C_DIM}]{msgs_str:<10}[/{C_DIM}]"
+            f"{tokens_fmt}"
+            f"[{C_DIM}]{tok_pad}"
+            f"{dur_str}[/{C_DIM}]"
+            f"[{C_MID}]{age_str}[/{C_MID}]"
+            f"{' ' * sid_gap}[{C_FAINT}]{sid}[/{C_FAINT}]"
+        )
 
     # Line 3: tool bar + file touchpoints (same as normal)
     bar = _tool_bar(s.tool_counts)
