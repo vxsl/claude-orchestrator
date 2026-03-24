@@ -359,24 +359,19 @@ def _parse_iso(ts: str):
 def _is_session_seen(session, last_seen: dict[str, str] | None = None) -> bool:
     """True if user has viewed this session since its last meaningful change.
 
-    Uses last_activity as the anchor (excludes CLI-local messages and
-    interrupt markers).  Special case: if the user's last interaction
-    (last_user_message_at) is at least as recent as Claude's last activity,
-    the user has "seen" the session by acting on it — this covers the
-    interrupt case where the user cancels a running session.
+    Uses last_user_message_at (stable) instead of last_activity, which
+    gets bumped by heartbeat/system messages on every tail refresh.
     """
     if not last_seen:
         return False
     seen_ts = last_seen.get(session.session_id)
     if not seen_ts:
         return False
-    activity_ts = session.last_activity or ''
-    user_ts = getattr(session, 'last_user_message_at', '') or ''
-    # If user's last interaction is at least as recent as Claude's last
-    # activity, they've "been there" for everything Claude did — seen.
-    if activity_ts and user_ts and user_ts >= activity_ts:
-        return True
-    anchor = activity_ts or user_ts
+    # Use last_activity as the anchor: it captures when Claude last
+    # responded (turn_duration / stop_hook_summary) without being bumped
+    # by CLI-local messages (those are excluded from last_activity in the
+    # parser).  Falls back to last_user_message_at (e.g. interrupt markers).
+    anchor = session.last_activity or getattr(session, 'last_user_message_at', '') or ''
     if not anchor:
         return False
     seen_dt = _parse_iso(seen_ts)
