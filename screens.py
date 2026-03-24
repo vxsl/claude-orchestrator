@@ -41,13 +41,13 @@ from models import (
 from sessions import ClaudeSession
 from threads import Thread, ThreadActivity, session_activity, load_last_seen, mark_thread_seen
 from rendering import (
-    C_BLUE, C_CYAN, C_DIM, C_GOLD, C_GREEN, C_LIGHT, C_ORANGE, C_PURPLE, C_RED, C_YELLOW,
+    C_BLUE, C_CYAN, C_DIM, C_FAINT, C_GOLD, C_GREEN, C_LIGHT, C_ORANGE, C_PURPLE, C_RED, C_YELLOW,
     BG_BASE, BG_RAISED, BG_SURFACE,
     CATEGORY_THEME,
     LINK_TYPE_ICONS, LINK_ORDER, LINK_KINDS,
     THROBBER_FRAMES,
     _category_markup, _link_icon,
-    _activity_icon, _activity_badge, _is_session_seen, _parse_iso,
+    _activity_icon, _activity_badge, _is_session_seen, _is_today, _parse_iso,
     _colored_tokens, _token_color_markup,
     _short_model, _short_project,
     _render_session_option, _session_title,
@@ -130,7 +130,7 @@ class HelpScreen(FuzzyPickerScreen):
         ("nav-drill", f"[{C_YELLOW}]Ctrl+L[/{C_YELLOW}]  Drill in / resume"),
         ("nav-back", f"[{C_YELLOW}]Ctrl+H[/{C_YELLOW}]  Back / close"),
         ("nav-enter", f"[{C_YELLOW}]Enter[/{C_YELLOW}]  Confirm / open"),
-        ("nav-tab", f"[{C_YELLOW}]Ctrl+Tab[/{C_YELLOW}]  Next tab"),
+        ("nav-tab", f"[{C_YELLOW}]H / L[/{C_YELLOW}]  Prev / next tab"),
         ("nav-closetab", f"[{C_YELLOW}]x[/{C_YELLOW}]  Close tab"),
         # Workstream actions
         ("ws-add", f"[{C_YELLOW}]a[/{C_YELLOW}]  Add new workstream"),
@@ -139,7 +139,7 @@ class HelpScreen(FuzzyPickerScreen):
         ("ws-spawn", f"[{C_YELLOW}]c[/{C_YELLOW}]  New Claude session"),
         ("ws-repo", f"[{C_YELLOW}]C[/{C_YELLOW}]  Spawn in repo"),
         ("ws-resume", f"[{C_YELLOW}]r[/{C_YELLOW}]  Resume session"),
-        ("ws-link", f"[{C_YELLOW}]L[/{C_YELLOW}]  Add link"),
+        ("ws-link", f"[{C_YELLOW}]W[/{C_YELLOW}]  Add link"),
         ("ws-todos", f"[{C_YELLOW}]e[/{C_YELLOW}]  Todo list"),
         ("ws-rename", f"[{C_YELLOW}]E[/{C_YELLOW}]  Rename"),
         ("ws-open", f"[{C_YELLOW}]o[/{C_YELLOW}]  Open links"),
@@ -868,7 +868,7 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         Binding("c", "spawn", "Spawn"),
         Binding("r", "resume", "Resume"),
         Binding("n", "quick_note", "+todo"),
-        Binding("L", "add_link", "Link+"),
+        Binding("W", "add_link", "Link+"),
         Binding("e", "open_todos", "Todos"),
         Binding("o", "open_links", "Open links"),
         Binding("f", "file_picker", "Files"),
@@ -891,6 +891,11 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
     #detail-container {{
         width: 100%; height: 100%;
         padding: 0; background: {BG_BASE};
+    }}
+    #detail-tab-bar {{
+        height: 1;
+        padding: 0 1;
+        background: {BG_RAISED};
     }}
     #detail-header {{
         height: auto;
@@ -1026,6 +1031,7 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
 
     def compose(self) -> ComposeResult:
         with Vertical(id="detail-container"):
+            yield Static("", id="detail-tab-bar")
             with Vertical(id="detail-header"):
                 yield Static(self._render_title(), id="detail-title")
                 yield Static(self._render_meta(), id="detail-meta")
@@ -1605,11 +1611,18 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
             options.append(Option(QUIET_SEPARATOR_LABEL, id="__separator__", disabled=True))
             idx += 1
 
-        for s in quiet:
+        earlier_sep_inserted = False
+        for qi, s in enumerate(quiet):
             act = session_activity(s, self._last_seen_cache)
             if act in (ThreadActivity.THINKING, ThreadActivity.AWAITING_INPUT):
                 animating.append((idx, act))
             seen = _is_session_seen(s, self._last_seen_cache)
+            if not earlier_sep_inserted and qi > 0 and not _is_today(s.last_activity or s.started_at or ""):
+                pad = max(1, (lw - 10) // 2)
+                earlier_label = f"[{C_FAINT}]{'─' * pad} earlier {'─' * pad}[/{C_FAINT}]"
+                options.append(Option(earlier_label, id="__sep_earlier__", disabled=True))
+                idx += 1
+                earlier_sep_inserted = True
             prompt = _render_session_option(s, act, self._throbber_frame, ws_repo_path=self.ws.repo_path, seen=seen, line_width=lw)
             options.append(Option(prompt, id=s.session_id))
             idx += 1
