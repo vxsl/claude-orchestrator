@@ -39,7 +39,7 @@ from thread_namer import get_session_title
 log = logging.getLogger("orch.claude_session")
 
 # Keys that pass through the TerminalWidget to the screen for panel navigation
-_PASSTHROUGH_KEYS = {"ctrl+j", "ctrl+k", "ctrl+e", "ctrl+h", "ctrl+z", "ctrl+backslash", "ctrl+b", "ctrl+x", "ctrl+@"}
+_PASSTHROUGH_KEYS = {"ctrl+j", "ctrl+k", "ctrl+e", "ctrl+h", "ctrl+z", "ctrl+backslash", "ctrl+b", "ctrl+x", "ctrl+@", "question_mark"}
 
 ORCH_DIR = str(Path(__file__).parent)
 
@@ -304,7 +304,7 @@ class SessionHeaderWidget(Static):
                 else:
                     text = clean
                 is_last = i == len(msgs) - 1
-                pad = " " * max(0, available - len(text) + (0 if is_last else 3))
+                pad = " " * max(0, available - len(text) + (0 if is_last else 1))
                 style = "bold italic" if is_last else "italic"
                 all_lines.append(
                     f"[{C_DIM} on black]{_esc(prefix)}[/{C_DIM} on black]"
@@ -377,6 +377,7 @@ class ClaudeSessionScreen(Screen):
     BINDINGS = [
         Binding("ctrl+e", "extract_todo", "Extract todo", priority=True),
         Binding("ctrl+backslash", "go_back", "C-\\ back", priority=True),
+        Binding("question_mark", "help", "?", show=False),
     ]
 
     DEFAULT_CSS = f"""
@@ -747,6 +748,10 @@ class ClaudeSessionScreen(Screen):
                       "session_id": self._session_id,
                       "ws": self._ws, "start_time": self._start_time,
                       "jsonl": self._jsonl})
+
+    def action_help(self) -> None:
+        from screens import HelpScreen
+        self.app.push_screen(HelpScreen(context="session"))
 
     # ── Panel navigation ──────────────────────────────────────────
 

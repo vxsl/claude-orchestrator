@@ -312,7 +312,11 @@ class HelpScreen(FuzzyPickerScreen):
             K("help", "?", "This help"),
         ]
 
-    _CONTEXT_MAP: dict[str, classmethod] = {}  # populated after class body
+    DEFAULT_CSS = """
+    HelpScreen #fp-list {
+        max-height: 40;
+    }
+    """
 
     def __init__(self, context: str = "home"):
         self._context = context
