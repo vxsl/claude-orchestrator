@@ -4,6 +4,10 @@ A terminal-native workstation for agentic coding. Every git worktree is a workst
 
 Built with Python and [Textual](https://textual.textualize.io/) with embedded libvterm terminals, a Rust session engine, and vim-first keybindings.
 
+<img width="3023" height="1890" alt="2026-03-24_14-05" src="https://github.com/user-attachments/assets/449b11fa-6dfe-4188-87f4-b079c1e7c708" />
+
+<img width="3023" height="1889" alt="2026-03-24_14-08" src="https://github.com/user-attachments/assets/f5f01fb0-7669-416c-882d-c4796f0f050d" />
+
 ## Philosophy
 
 **Thought to thread.** The gap between "I have an idea" and "Claude is working on it" should be zero friction. Three paths, all converging:
