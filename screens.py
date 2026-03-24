@@ -1199,12 +1199,40 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
             yield Static(self._render_help(), id="detail-help")
 
     def on_mount(self):
+        # Fast synchronous path: set up timers, show title, focus.
+        # Defers heavy work (session load, OptionList build) to after first frame
+        # so the screen appears immediately with its structural elements.
+        self._refresh_timer = self.set_interval(30, self._periodic_refresh)
+        self._throbber_timer = self.set_interval(0.15, self._tick_throbber)
+        self._mounted_once = True
+        if self._sessions_loading():
+            self._loading_timer = self.set_interval(0.12, self._tick_loading)
+        # Render title from ws data before sessions load (shows 0 sessions briefly)
+        try:
+            self.query_one("#detail-title", Static).update(self._render_title() + "  " + self._render_meta())
+        except Exception:
+            pass
+        self.query_one("#detail-sessions", OptionList).focus()
+        # Defer all heavy work — screen appears fast, then populates after one frame.
+        self.call_after_refresh(self._initial_mount)
+
+    def _initial_mount(self):
+        """Heavy on_mount work deferred to after first frame.
+
+        Loads sessions, builds the OptionList at real terminal width (size was 0
+        during on_mount so we'd get wrong-width rendering), and starts tig.
+        Replaces the previous two-pass approach (on_mount build + call_after_refresh
+        rebuild at real width).
+        """
         self._last_seen_cache = load_last_seen()
         self._mark_all_seen()
         self._load_feed()  # must run before _load_detail_sessions so notification map is ready
         self._load_detail_sessions()
-        # Update header with session stats now that _detail_sessions is populated
-        self.query_one("#detail-title", Static).update(self._render_title() + "  " + self._render_meta())
+        # Update header now that session data is loaded
+        try:
+            self.query_one("#detail-title", Static).update(self._render_title() + "  " + self._render_meta())
+        except Exception:
+            pass
         try:
             self.query_one("#detail-body", Static).update(self._render_body())
         except Exception:
@@ -1215,21 +1243,7 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
                     tw.start()
                 except Exception as e:
                     log.error("DetailScreen: failed to start tig terminal %s: %s", tw.id, e)
-        self.query_one("#detail-sessions", OptionList).focus()
         self._update_pane_labels()
-        self._refresh_timer = self.set_interval(30, self._periodic_refresh)
-        self._throbber_timer = self.set_interval(0.15, self._tick_throbber)
-        self._mounted_once = True
-        if self._sessions_loading():
-            self._loading_timer = self.set_interval(0.12, self._tick_loading)
-        # Rebuild after layout is computed so _session_line_width returns the real width.
-        # On first mount the OptionList size is 0, causing half-width rendering until
-        # the next timer tick. call_after_refresh defers until Textual has laid out the DOM.
-        self.call_after_refresh(self._initial_build_and_focus)
-
-    def _initial_build_and_focus(self):
-        """Rebuild session list at real width, then ensure first item is highlighted."""
-        self._build_session_list()
         olist = self.query_one("#detail-sessions", OptionList)
         if olist.option_count > 0 and olist.highlighted is None:
             olist.highlighted = 0
