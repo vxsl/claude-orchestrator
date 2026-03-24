@@ -46,7 +46,7 @@ C_MID = "#b1bac4"        # secondary text (terminal normal white)
 C_DIM = "#6e7681"        # subdued (terminal bright-black)
 C_FAINT = "#484f58"      # near-invisible — IDs, decorative
 C_RESOLVED = "#7a8a9e"  # muted blue-gray — committed/resolved sessions
-C_DEFER = "#7a5218"    # dim amber — deferred sessions (paused/waiting)
+C_SHELF = "#7a5218"    # dim amber — shelved sessions (set aside)
 
 # ─── Background Palette ──────────────────────────────────────────────
 BG_BASE = "#000000"      # true black — matches terminal
@@ -648,8 +648,8 @@ def _render_session_option(
 
     # ── Deferred: amber-tinted and de-emphasized — overrides stale/committed styling ──
     if deferred:
-        icon = f"[{C_DEFER}]⏸[/{C_DEFER}]"
-        badge = f"[{C_DEFER}]deferred[/{C_DEFER}]"
+        icon = f"[{C_SHELF}]⏸[/{C_SHELF}]"
+        badge = f"[{C_SHELF}]deferred[/{C_SHELF}]"
         badge_w = 8
         model = _short_model(s.model)
         title_raw = _session_title(s)[:title_width]
@@ -660,7 +660,7 @@ def _render_session_option(
         msgs_str = f"{s.message_count}↑{s.assistant_message_count}↓"
         duration = s.duration_display
         age_str = s.age
-        title_fmt = f"[{C_DEFER}]{title_esc}[/{C_DEFER}]"
+        title_fmt = f"[{C_SHELF}]{title_esc}[/{C_SHELF}]"
         prefix_w = 3
         age_col = f"{age_str:>4}"
         age_w = 2 + 4
@@ -813,14 +813,27 @@ def _render_session_option(
         lines.append(f"{INDENT}[{C_RESOLVED}]{sha_short}[/{C_RESOLVED}] [{s_dim}]{commit_msg}[/{s_dim}]")
     elif s.last_message_text:
         is_user = s.last_message_role == "user"
-        prefix = f"[{s_mid}]you:[/{s_mid}] " if is_user else ""
-        prefix_len = 5 if is_user else 0  # len("you: ")
-        max_snippet = title_width + 12 - prefix_len
-        snippet = _rich_escape(s.last_message_text[:max_snippet])
-        if len(s.last_message_text) > max_snippet:
-            snippet += "…"
-        msg_color = s_mid if is_user else (C_FAINT if stale else "#3b4048")
-        lines.append(f"{INDENT}{prefix}[italic {msg_color}]{snippet}[/italic {msg_color}]")
+        if is_user:
+            # Show user prompt prominently: black background + white text, up to two lines
+            line_chars = max(20, LINE_WIDTH - 4)
+            text = s.last_message_text.replace("\n", " ")
+            line_a_raw = text[:line_chars]
+            remainder = text[line_chars:]
+            line_a = _rich_escape(line_a_raw)
+            lines.append(f"{INDENT}[white on black]{line_a}[/white on black]")
+            if remainder:
+                line_b_raw = remainder[:line_chars]
+                line_b = _rich_escape(line_b_raw)
+                if len(remainder) > line_chars:
+                    line_b += "…"
+                lines.append(f"{INDENT}[white on black]{line_b}[/white on black]")
+        else:
+            max_snippet = title_width + 12
+            snippet = _rich_escape(s.last_message_text[:max_snippet])
+            if len(s.last_message_text) > max_snippet:
+                snippet += "…"
+            msg_color = C_FAINT if stale else "#3b4048"
+            lines.append(f"{INDENT}[italic {msg_color}]{snippet}[/italic {msg_color}]")
 
     return "\n".join(lines)
 
@@ -1094,7 +1107,7 @@ def QUIET_SEPARATOR_LABEL(width: int = 60) -> str:
 
 def DEFERRED_SEPARATOR_LABEL(width: int = 60) -> str:
     prefix = "⏸ deferred "
-    return f"[{C_DEFER}]{prefix}{'─' * max(2, width - len(prefix))}[/{C_DEFER}]"
+    return f"[{C_SHELF}]{prefix}{'─' * max(2, width - len(prefix))}[/{C_SHELF}]"
 
 def THINKING_SEPARATOR_LABEL(width: int = 60) -> str:
     prefix = "◉ thinking "
