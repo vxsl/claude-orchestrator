@@ -955,7 +955,7 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         Binding("D", "dismiss_all_notifications", "Dismiss all", show=False),
         Binding("X", "trash_session", "Trash", show=False),
         Binding("T", "view_trash", "Trash view", show=False),
-        Binding("ctrl+x", "dismiss_discovered", "Dismiss suggestion", show=False),
+        Binding("f9", "dismiss_discovered", "Dismiss suggestion", show=False),
         Binding("/", "search", "Search", show=False, priority=True),
         # Delegate to app — OptionList type-ahead consumes these before
         # they reach app-level bindings in a ModalScreen.
@@ -1668,12 +1668,9 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
                     del self.ws.shelved_sessions[sid]
                 self.store.update(self.ws)
             hidden = set(self.ws.archived_sessions)
-            # Hide the pending new session (from "c") until it has actual messages
-            pending_sid = getattr(self.app, '_ws_pending_session', {}).get(self.ws.id)
             self._all_sessions = [
                 s for s in all_sessions
                 if s.session_id not in hidden
-                and not (s.session_id == pending_sid and s.message_count == 0)
             ]
             self._all_archived = [s for s in all_sessions if s.session_id in hidden]
             self._shelved_set = set(self.ws.shelved_sessions)
