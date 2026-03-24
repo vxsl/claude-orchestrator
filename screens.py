@@ -1329,6 +1329,7 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         quiet_active = [s for s in quiet if s.session_id not in self._deferred_set]
         quiet_deferred = [s for s in quiet if s.session_id in self._deferred_set]
         quiet_thinking = [s for s in quiet_active if session_activity(s, self._last_seen_cache) == ThreadActivity.THINKING]
+        quiet_thinking.sort(key=lambda s: s.started_at or "", reverse=True)
         quiet_other = [s for s in quiet_active if s not in quiet_thinking]
         all_elevated = notified + elevated
 
@@ -1636,6 +1637,7 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         quiet_active = [s for s in quiet if s.session_id not in self._deferred_set]
         quiet_deferred = [s for s in quiet if s.session_id in self._deferred_set]
         quiet_thinking = [s for s in quiet_active if session_activity(s, self._last_seen_cache) == ThreadActivity.THINKING]
+        quiet_thinking.sort(key=lambda s: s.started_at or "", reverse=True)
         quiet_other = [s for s in quiet_active if s not in quiet_thinking]
 
         # Build all options before touching widget tree
