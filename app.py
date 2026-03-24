@@ -998,28 +998,24 @@ class OrchestratorApp(App):
         return "  ".join(parts)
 
     def _render_filter_bar(self) -> str:
-        filters = {
-            "active": "1:Active", "work": "2:Work", "personal": "3:Personal",
-            "all": "4:All", "stale": "5:Stale", "archived": "6:Archived",
-        }
+        filters = [
+            ("active", "Active"), ("work", "Work"), ("personal", "Personal"),
+            ("all", "All"), ("stale", "Stale"), ("archived", "Archived"),
+        ]
         parts = []
-        for key, label in filters.items():
+        for i, (key, label) in enumerate(filters):
+            n = i + 1
             if self.state.filter_mode == key:
-                parts.append(f"[bold {C_CYAN}] {label} [/bold {C_CYAN}]")
+                parts.append(f"[bold {C_CYAN}] ◆ {label} [/bold {C_CYAN}]")
             else:
-                parts.append(f"[{C_FAINT}]{label}[/{C_FAINT}]")
-
-        sort_labels = {
-            "activity": "Activity", "updated": "Updated", "created": "Created",
-            "category": "Category", "name": "Name",
-        }
-        sort_label = sort_labels.get(self.state.sort_mode, self.state.sort_mode)
-        parts.append(f"  [{C_DIM}]Sort:[/{C_DIM}][bold {C_BLUE}]{sort_label}[/bold {C_BLUE}]")
+                parts.append(f"[{C_FAINT}] {n} {label} [/{C_FAINT}]")
+            if i < len(filters) - 1:
+                parts.append(f"[{C_FAINT}]\u2502[/{C_FAINT}]")
 
         if self.state.search_text:
-            parts.append(f"  [{C_DIM}]Search:[/{C_DIM}][{C_YELLOW}]{_rich_escape(self.state.search_text)}[/{C_YELLOW}]")
+            parts.append(f"  [{C_DIM}]\u2502[/{C_DIM}]  [{C_DIM}]search:[/{C_DIM}] [{C_YELLOW}]{_rich_escape(self.state.search_text)}[/{C_YELLOW}]")
 
-        return " ".join(parts)
+        return "".join(parts)
 
     def _render_summary_bar(self) -> str:
         count = self._active_table().option_count
