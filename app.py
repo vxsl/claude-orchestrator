@@ -567,7 +567,7 @@ class OrchestratorApp(App):
             None, TerminalWidget.tmux_session_alive, session_id
         )
         if alive and self.tabs.active_tab.ws_id == ws.id:
-            await self.launch_claude_session(ws, session_id=session_id)
+            self.launch_claude_session(ws, session_id=session_id)
 
     def _on_detail_dismissed(self):
         """Called when a DetailScreen is dismissed (back to Home).

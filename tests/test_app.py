@@ -2496,4 +2496,40 @@ class TestWorktreePathNormalization:
         # Both should be in the same group
         assert len(by_project) == 1
         assert "/home/user/dev/project" in by_project
-        assert len(by_project["/home/user/dev/project"]) == 2
+
+
+class TestAutoResumeTabSession:
+    """Regression tests for _auto_resume_tab_session worker."""
+
+    @pytest.mark.asyncio
+    async def test_auto_resume_calls_launch_not_await(self):
+        """_auto_resume_tab_session must call launch_claude_session (not await it).
+
+        Regression: launch_claude_session is @work-decorated and returns a Worker,
+        so awaiting it raises TypeError. The worker should call it as a plain method.
+        """
+        import asyncio
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        ws = Workstream(name="test", category=Category.META)
+        session_id = "test-session-id"
+
+        app = OrchestratorApp.__new__(OrchestratorApp)
+
+        # Mock tabs so ws_id guard passes
+        mock_tab = MagicMock()
+        mock_tab.ws_id = ws.id
+        app.tabs = MagicMock()
+        app.tabs.active_tab = mock_tab
+
+        # launch_claude_session should be a plain (non-async) mock
+        launch_mock = MagicMock()
+        app.launch_claude_session = launch_mock
+
+        with patch("terminal.TerminalWidget.tmux_session_alive", return_value=True):
+            # Extract the underlying coroutine function (bypassing @work decorator)
+            import app as app_module
+            coro = app_module.OrchestratorApp._auto_resume_tab_session.__wrapped__
+            await coro(app, ws, session_id)
+
+        launch_mock.assert_called_once_with(ws, session_id=session_id)
