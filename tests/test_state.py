@@ -1152,17 +1152,26 @@ from state import TabManager, TabState
 class TestTabManager:
     def test_initial_state(self):
         tm = TabManager()
-        assert len(tm.tabs) == 1
+        # Two permanent tabs: Workstreams (home) + Sessions (current_sessions)
+        assert len(tm.tabs) == 2
         assert tm.active_idx == 0
         assert tm.is_home
         assert tm.active_tab_id == "home"
 
+    def test_initial_sessions_tab(self):
+        tm = TabManager()
+        assert tm.tabs[1].id == "current_sessions"
+        assert not tm.is_current_sessions  # home is active
+        tm.switch_to(1)
+        assert tm.is_current_sessions
+        assert not tm.is_home
+
     def test_open_tab(self):
         tm = TabManager()
         idx = tm.open_tab("ws-1", "Auth refactor", "●")
-        assert idx == 1
-        assert len(tm.tabs) == 2
-        assert tm.active_idx == 1  # auto-switches
+        assert idx == 2  # after the two permanent tabs
+        assert len(tm.tabs) == 3
+        assert tm.active_idx == 2  # auto-switches
         assert tm.active_tab.ws_id == "ws-1"
         assert not tm.is_home
 
@@ -1172,56 +1181,62 @@ class TestTabManager:
         tm.switch_to(0)  # go home
         idx2 = tm.open_tab("ws-1", "Auth refactor")
         assert idx1 == idx2
-        assert len(tm.tabs) == 2
-        assert tm.active_idx == 1  # switched to existing
+        assert len(tm.tabs) == 3
+        assert tm.active_idx == 2  # switched to existing
 
     def test_close_tab(self):
         tm = TabManager()
         tm.open_tab("ws-1", "One")
         tm.open_tab("ws-2", "Two")
-        assert len(tm.tabs) == 3
-        closed = tm.close_tab(1)  # close "One"
+        assert len(tm.tabs) == 4
+        closed = tm.close_tab(2)  # close "One" (at index 2, after the two permanent tabs)
         assert closed == "ws-1"
-        assert len(tm.tabs) == 2
-        assert tm.tabs[1].ws_id == "ws-2"
+        assert len(tm.tabs) == 3
+        assert tm.tabs[2].ws_id == "ws-2"
 
     def test_cannot_close_home(self):
         tm = TabManager()
         result = tm.close_tab(0)
         assert result is None
-        assert len(tm.tabs) == 1
+        assert len(tm.tabs) == 2  # permanent tabs remain
+
+    def test_cannot_close_sessions_tab(self):
+        tm = TabManager()
+        result = tm.close_tab(1)
+        assert result is None
+        assert len(tm.tabs) == 2
 
     def test_close_active_tab_moves_left(self):
         tm = TabManager()
         tm.open_tab("ws-1", "One")
         tm.open_tab("ws-2", "Two")
-        assert tm.active_idx == 2  # ws-2
+        assert tm.active_idx == 3  # ws-2
         tm.close_active_tab()
-        assert tm.active_idx == 1  # ws-1
+        assert tm.active_idx == 2  # ws-1
         assert tm.active_tab.ws_id == "ws-1"
 
     def test_close_tab_before_active_preserves(self):
         tm = TabManager()
         tm.open_tab("ws-1", "One")
         tm.open_tab("ws-2", "Two")
-        assert tm.active_idx == 2  # ws-2
-        tm.close_tab(1)  # close ws-1
-        assert tm.active_idx == 1  # ws-2 is now at index 1
+        assert tm.active_idx == 3  # ws-2
+        tm.close_tab(2)  # close ws-1
+        assert tm.active_idx == 2  # ws-2 is now at index 2
         assert tm.active_tab.ws_id == "ws-2"
 
     def test_next_tab_wraps(self):
         tm = TabManager()
         tm.open_tab("ws-1", "One")
-        assert tm.active_idx == 1
+        assert tm.active_idx == 2  # ws-1 at index 2
         tm.next_tab()
-        assert tm.active_idx == 0  # wrapped to home
+        assert tm.active_idx == 0  # wrapped back to home
 
     def test_prev_tab_wraps(self):
         tm = TabManager()
         tm.open_tab("ws-1", "One")
         tm.switch_to(0)
         tm.prev_tab()
-        assert tm.active_idx == 1  # wrapped to ws-1
+        assert tm.active_idx == 2  # wrapped to ws-1
 
     def test_switch_to_id(self):
         tm = TabManager()
@@ -1229,31 +1244,42 @@ class TestTabManager:
         tm.open_tab("ws-2", "Two")
         tm.switch_to_id("home")
         assert tm.active_idx == 0
-        tm.switch_to_id("ws-1")
+        tm.switch_to_id("current_sessions")
         assert tm.active_idx == 1
+        tm.switch_to_id("ws-1")
+        assert tm.active_idx == 2
 
     def test_find_tab(self):
         tm = TabManager()
         tm.open_tab("ws-1", "One")
-        assert tm.find_tab("ws-1") == 1
+        assert tm.find_tab("ws-1") == 2  # after the two permanent tabs
         assert tm.find_tab("ws-999") is None
 
     def test_update_label(self):
         tm = TabManager()
         tm.open_tab("ws-1", "Old name")
         tm.update_label("ws-1", "New name")
-        assert tm.tabs[1].label == "New name"
+        assert tm.tabs[2].label == "New name"
 
     def test_close_active_home_returns_none(self):
         tm = TabManager()
         result = tm.close_active_tab()
         assert result is None
 
-    def test_single_tab_next_does_nothing(self):
+    def test_close_active_sessions_returns_none(self):
         tm = TabManager()
-        result = tm.next_tab()
-        assert not result
+        tm.switch_to(1)
+        result = tm.close_active_tab()
+        assert result is None
+
+    def test_two_permanent_tabs_next_cycles(self):
+        tm = TabManager()
         assert tm.active_idx == 0
+        result = tm.next_tab()
+        assert result
+        assert tm.active_idx == 1  # moves to sessions tab
+        tm.next_tab()
+        assert tm.active_idx == 0  # wraps back to home
 
 
 class TestArchivedFilter:

@@ -31,3 +31,7 @@ backups/
 # OS
 .DS_Store
 Thumbs.db
+
+# Dev artifacts
+keys.log
+profile_*.py

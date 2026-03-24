@@ -1471,7 +1471,10 @@ class TabManager:
     """
 
     def __init__(self):
-        self.tabs: list[TabState] = [TabState(id="home", ws_id=None, label="Home", icon="\u2302")]
+        self.tabs: list[TabState] = [
+            TabState(id="home", ws_id=None, label="Workstreams", icon="\u2302"),
+            TabState(id="current_sessions", ws_id=None, label="Sessions", icon="\u25c8"),
+        ]
         self.active_idx: int = 0
 
     @property
@@ -1484,7 +1487,11 @@ class TabManager:
 
     @property
     def is_home(self) -> bool:
-        return self.active_idx == 0
+        return self.active_tab.id == "home"
+
+    @property
+    def is_current_sessions(self) -> bool:
+        return self.active_tab.id == "current_sessions"
 
     def open_tab(self, ws_id: str, label: str, icon: str = "") -> int:
         """Open a tab for a workstream. Returns tab index. Reuses if already open."""
@@ -1498,8 +1505,8 @@ class TabManager:
         return self.active_idx
 
     def close_tab(self, index: int) -> str | None:
-        """Close tab at index. Cannot close Home (index 0). Returns closed tab id."""
-        if index <= 0 or index >= len(self.tabs):
+        """Close tab at index. Cannot close permanent tabs (indices 0 or 1). Returns closed tab id."""
+        if index <= 1 or index >= len(self.tabs):
             return None
         tab_id = self.tabs[index].id
         self.tabs.pop(index)
@@ -1512,8 +1519,8 @@ class TabManager:
         return tab_id
 
     def close_active_tab(self) -> str | None:
-        """Close the current tab. Returns closed tab id or None if on Home."""
-        if self.active_idx == 0:
+        """Close the current tab. Returns closed tab id or None if on a permanent tab (0 or 1)."""
+        if self.active_idx <= 1:
             return None
         return self.close_tab(self.active_idx)
 

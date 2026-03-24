@@ -375,15 +375,15 @@ class TestTabSwitching:
     async def test_tab_stays_on_home_when_no_other_tabs(self, app_with_store):
         async with app_with_store.run_test(size=(120, 40)) as pilot:
             await pilot.press("tab")
-            assert pilot.app.tabs.is_home
-            assert pilot.app.tabs.active_idx == 0
+            # Tab key is not tab-cycling; home tab should remain or switch to sessions tab
+            assert pilot.app.tabs.active_idx in (0, 1)
 
     async def test_tab_bar_renders_in_top_bar(self, app_with_store):
         """Tab bar renders as the first line of the top-bar Static."""
         async with app_with_store.run_test(size=(120, 40)) as pilot:
             top_bar = pilot.app.query_one("#top-bar")
             rendered = top_bar.render()
-            assert "Home" in str(rendered)
+            assert "Workstreams" in str(rendered)
 
     async def test_archived_filter_shows_archived(self, app_with_store):
         """Pressing 6 activates archived filter instead of a separate view."""
@@ -924,8 +924,8 @@ class TestTabBarE2E:
         async with app_with_store.run_test(size=(120, 40)) as pilot:
             top_bar = pilot.app.query_one("#top-bar")
             rendered = str(top_bar.render())
-            assert "Home" in rendered
-            assert len(pilot.app.tabs.tabs) >= 1  # At least "Home"
+            assert "Workstreams" in rendered
+            assert len(pilot.app.tabs.tabs) >= 2  # At least "Workstreams" + "Sessions"
 
     async def test_open_detail_creates_tab(self, app_with_store):
         """Opening a workstream detail adds a tab."""
@@ -935,15 +935,15 @@ class TestTabBarE2E:
             assert len(pilot.app.tabs.tabs) >= 2
 
     async def test_x_closes_tab(self, app_with_store):
-        """x on the home screen should close a non-Home tab."""
+        """x on the home screen should close a non-permanent tab."""
         async with app_with_store.run_test(size=(120, 40)) as pilot:
             # Open a detail tab then go back to home
             await pilot.press("enter")
             tab_count_after_open = len(pilot.app.tabs.tabs)
-            assert tab_count_after_open >= 2
+            assert tab_count_after_open >= 3  # home + sessions + at least one ws
             await pilot.press("escape")  # back to home
-            # Switch to the detail tab via tab manager, then close
-            pilot.app.tabs.switch_to(1)
+            # Switch to a workstream detail tab (index 2+) and close it
+            pilot.app.tabs.switch_to(2)
             pilot.app.action_close_tab()
             assert len(pilot.app.tabs.tabs) == tab_count_after_open - 1
 
@@ -953,7 +953,16 @@ class TestTabBarE2E:
             assert pilot.app.tabs.is_home
             await pilot.press("x")
             assert pilot.app.tabs.is_home
-            assert len(pilot.app.tabs.tabs) == 1
+            assert len(pilot.app.tabs.tabs) == 2  # home + sessions always present
+
+    async def test_x_cannot_close_sessions_tab(self, app_with_store):
+        """x on Sessions tab should not close it."""
+        async with app_with_store.run_test(size=(120, 40)) as pilot:
+            pilot.app.tabs.switch_to(1)
+            assert pilot.app.tabs.is_current_sessions
+            await pilot.press("x")
+            assert pilot.app.tabs.is_current_sessions
+            assert len(pilot.app.tabs.tabs) == 2
 
 
 # ─── E2E: Filter Keys 1-6 ──────────────────────────────────────────

@@ -91,7 +91,7 @@ from screens import (
     HelpScreen, QuickNoteScreen, TodoScreen, LinksScreen,
     AddScreen, DetailScreen, BrainDumpScreen, BrainPreviewScreen,
     AddLinkScreen, LinkSessionScreen, ConfirmScreen,
-    RepoPickerScreen, WorkstreamPickerScreen, _SENTINEL_NEW,
+    RepoPickerScreen, WorkstreamPickerScreen, CurrentSessionsScreen, _SENTINEL_NEW,
 )
 
 
@@ -220,8 +220,9 @@ class OrchestratorApp(App):
         self._refresh_pending = False  # debounce flag for _refresh_ws_table
         self._preview_ws_id: str | None = None  # track current preview to skip redundant updates
         self._detached_sessions: dict[str, dict] = {}  # session_id -> {ws, start_time, jsonl}
-        self._detail_screen_active: bool = False  # True when a DetailScreen is pushed
+        self._detail_screen_active: bool = False  # True when a DetailScreen or CurrentSessionsScreen is pushed
         self._detail_screen_cache: dict[str, DetailScreen] = {}  # ws_id -> cached screen
+        self._current_sessions_screen: CurrentSessionsScreen | None = None
         self._tab_active_session: dict[str, str] = {}  # ws_id -> session_id (for tab-switch resume)
         self._tab_switch_in_progress: bool = False  # suppress _on_detail_dismissed during tab switch
         self._last_liveness_check: float = 0.0  # rate limiter for liveness checks
@@ -428,15 +429,17 @@ class OrchestratorApp(App):
             self._apply_tab_switch()
 
     def _apply_tab_switch(self):
-        """Handle tab switch — open DetailScreen or return to Home."""
+        """Handle tab switch — open DetailScreen, CurrentSessionsScreen, or return to Home."""
         tab = self.tabs.active_tab
         self._sync_tab_bar()
         if tab.ws_id:
             ws = self.state.get_ws(tab.ws_id)
             if ws:
                 self._push_detail_for_tab(ws)
+        elif tab.id == "current_sessions":
+            self._push_current_sessions_screen()
         else:
-            # Home tab: pop everything above Home (CSS + any stale Detail).
+            # Workstreams tab: pop everything above Home (CSS + any stale Detail).
             # pop_screen() is synchronous so we can call dismiss() in a loop.
             while len(self.screen_stack) > 1:
                 self.screen_stack[-1].dismiss()
@@ -480,6 +483,30 @@ class OrchestratorApp(App):
         if isinstance(self.screen, DetailScreen):
             self.screen.dismiss()  # dismiss stale Detail (_on_detail_dismissed suppressed)
         self._finish_tab_switch(ws)
+
+    def _push_current_sessions_screen(self) -> None:
+        """Push the CurrentSessionsScreen, dismissing any active overlay first."""
+        from claude_session_screen import ClaudeSessionScreen as CSS
+        self._tab_switch_in_progress = True
+        if self._detail_screen_active:
+            if isinstance(self.screen, CSS):
+                self._tab_active_session[self.screen._ws.id] = self.screen._session_id
+                self.screen.dismiss()
+                self.call_after_refresh(self._finish_current_sessions_switch)
+                return
+            else:
+                self.screen.dismiss()
+        self._finish_current_sessions_switch()
+
+    def _finish_current_sessions_switch(self) -> None:
+        """Core: install/push the CurrentSessionsScreen."""
+        self._detail_screen_active = True
+        if self._current_sessions_screen is None:
+            self._current_sessions_screen = CurrentSessionsScreen()
+            self.install_screen(self._current_sessions_screen, "current_sessions_screen")
+        self.push_screen("current_sessions_screen", callback=lambda _: self._on_detail_dismissed())
+        self.call_after_refresh(lambda: setattr(self, "_tab_switch_in_progress", False))
+        self._sync_tab_bar()
 
     def _finish_tab_switch(self, ws: Workstream) -> None:
         """Core: install/push the DetailScreen for ws and schedule optional session resume."""

@@ -3054,3 +3054,220 @@ class ConfirmScreen(ModalScreen[bool]):
 
     def action_deny(self):
         self.dismiss(False)
+
+
+# ─── Current Sessions Screen ─────────────────────────────────────────
+
+class CurrentSessionsScreen(_VimOptionListMixin, ModalScreen[None]):
+    """Cross-workstream view: all non-deferred, non-archived sessions active today."""
+
+    BINDINGS = [
+        Binding("escape", "dismiss", "Back", priority=True),
+        Binding("backspace,ctrl+h", "dismiss", "back"),
+        Binding("enter,l", "select_session", show=False),
+        Binding("r", "resume", "Resume"),
+        Binding("colon", "command_palette", ":", show=False),
+        Binding("question_mark", "help", "?", show=False),
+    ] + _VimOptionListMixin.VIM_BINDINGS
+
+    DEFAULT_CSS = f"""
+    CurrentSessionsScreen {{ align: center middle; }}
+    #csd-container {{
+        width: 100%; height: 100%;
+        padding: 0; background: {BG_BASE};
+    }}
+    #csd-tab-bar {{
+        height: 1;
+        padding: 0 1;
+        background: {BG_CHROME};
+    }}
+    #csd-title {{
+        text-style: bold;
+        background: {BG_RAISED};
+        padding: 0 2;
+    }}
+    #csd-sessions {{
+        height: 1fr;
+        margin: 0 1; padding: 0;
+        border: none;
+        background: {BG_BASE};
+    }}
+    #csd-sessions > .option-list--option-highlighted {{
+        background: #101010;
+    }}
+    #csd-no-sessions {{
+        padding: 1 3;
+        color: {C_DIM};
+    }}
+    #csd-help {{
+        height: 1;
+        padding: 0 2;
+        background: {BG_CHROME};
+        color: {C_DIM};
+        dock: bottom;
+    }}
+    """
+
+    _option_list_id = "csd-sessions"
+
+    def __init__(self):
+        super().__init__()
+        self._sessions: list[tuple] = []  # list of (Workstream, ClaudeSession)
+        self._session_ws_map: dict[str, object] = {}  # session_id -> Workstream
+        self._throbber_frame: int = 0
+        self._last_seen_cache: dict[str, str] = {}
+        self._animating_sessions: list[tuple[int, ThreadActivity]] = []
+        self._refresh_timer = None
+        self._throbber_timer = None
+
+    def compose(self) -> ComposeResult:
+        from textual.containers import Vertical as V
+        with V(id="csd-container"):
+            yield Static("", id="detail-tab-bar")
+            yield Static(
+                f"[bold {C_CYAN}]Sessions[/bold {C_CYAN}]  [{C_DIM}]today · active[/{C_DIM}]",
+                id="csd-title",
+            )
+            yield OptionList(id="csd-sessions")
+            yield Static(f"[{C_DIM}]No sessions active today[/{C_DIM}]", id="csd-no-sessions")
+            yield Static(
+                f"[{C_DIM}]↑↓/jk nav  enter/l open ws  r resume  esc back[/{C_DIM}]",
+                id="csd-help",
+            )
+
+    def on_mount(self) -> None:
+        self._last_seen_cache = load_last_seen()
+        self._load_sessions()
+        self._refresh_timer = self.set_interval(5.0, self._load_sessions)
+        self._throbber_timer = self.set_interval(0.1, self._tick_throbber)
+
+    def on_screen_resume(self) -> None:
+        self._last_seen_cache = load_last_seen()
+        self._load_sessions()
+
+    def _tick_throbber(self) -> None:
+        if self._animating_sessions:
+            self._throbber_frame += 1
+            self._build_list()
+
+    def _load_sessions(self) -> None:
+        app = self.app
+        if not hasattr(app, "state"):
+            return
+        results = []
+        for ws in app.state.store.active:
+            sessions = app.state.sessions_for_ws(ws, include_archived_sessions=False)
+            deferred = set(ws.deferred_sessions)
+            for s in sessions:
+                if s.session_id in deferred:
+                    continue
+                if not _is_today(s.last_activity or ""):
+                    continue
+                results.append((ws, s))
+        results.sort(key=lambda x: x[1].last_activity or "", reverse=True)
+        self._sessions = results
+        self._session_ws_map = {s.session_id: ws for ws, s in results}
+        self._build_list()
+
+    def _build_list(self) -> None:
+        try:
+            olist = self.query_one("#csd-sessions", OptionList)
+            no_sess = self.query_one("#csd-no-sessions", Static)
+        except Exception:
+            return
+
+        if not self._sessions:
+            olist.display = False
+            no_sess.display = True
+            return
+
+        olist.display = True
+        no_sess.display = False
+
+        try:
+            lw = olist.size.width - 4
+        except Exception:
+            lw = 80
+
+        animating = []
+        options = []
+        idx = 0
+
+        # Group by workstream, section order = most-recent-session first
+        ws_groups: dict[str, list] = {}
+        ws_order: list[str] = []
+        ws_map_by_id: dict[str, object] = {}
+        for ws, s in self._sessions:
+            if ws.id not in ws_groups:
+                ws_groups[ws.id] = []
+                ws_order.append(ws.id)
+                ws_map_by_id[ws.id] = ws
+            ws_groups[ws.id].append(s)
+
+        for ws_id in ws_order:
+            ws = ws_map_by_id[ws_id]
+            group = ws_groups[ws_id]
+            icon = getattr(ws, "icon", "") or "◆"
+            ws_label = f"[{C_CYAN}]{icon} {_rich_escape(ws.name)}[/{C_CYAN}]"
+            options.append(Option(ws_label, id=f"__ws__{ws_id}", disabled=True))
+            idx += 1
+            for s in group:
+                act = session_activity(s, self._last_seen_cache)
+                if act in (ThreadActivity.THINKING, ThreadActivity.AWAITING_INPUT):
+                    animating.append((idx, act))
+                seen = _is_session_seen(s, self._last_seen_cache)
+                prompt = _render_session_option(
+                    s, act, self._throbber_frame,
+                    ws_repo_path=ws.repo_path or "",
+                    seen=seen,
+                    line_width=lw,
+                )
+                options.append(Option(prompt, id=s.session_id))
+                idx += 1
+
+        old_idx = olist.highlighted
+        olist.clear_options()
+        olist.add_options(options)
+        self._animating_sessions = animating
+        if old_idx is not None and old_idx < olist.option_count:
+            olist.highlighted = old_idx
+
+    def _get_selected(self):
+        """Return (Workstream, session_id) for the highlighted row, or (None, None)."""
+        try:
+            olist = self.query_one("#csd-sessions", OptionList)
+            if olist.highlighted is None or not olist.option_count:
+                return None, None
+            opt = olist.get_option_at_index(olist.highlighted)
+            sid = opt.id
+            if not sid or sid.startswith("__"):
+                return None, None
+            ws = self._session_ws_map.get(sid)
+            return ws, sid
+        except Exception:
+            return None, None
+
+    def action_select_session(self) -> None:
+        ws, _sid = self._get_selected()
+        if ws:
+            app = self.app
+            app.tabs.open_tab(ws.id, ws.name, "\u25cf")
+            app._apply_tab_switch()
+
+    def action_resume(self) -> None:
+        ws, sid = self._get_selected()
+        if ws and sid:
+            app = self.app
+            app.tabs.open_tab(ws.id, ws.name, "\u25cf")
+            app._apply_tab_switch()
+            app.call_after_refresh(
+                lambda w=ws, s=sid: app.call_after_refresh(
+                    lambda w=w, s=s: app.launch_claude_session(w, session_id=s)
+                )
+            )
+
+    def action_command_palette(self) -> None:
+        self.app.action_command_palette()
+
+    def action_help(self) -> None:
+        self.app.action_help()
