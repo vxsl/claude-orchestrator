@@ -32,6 +32,7 @@ from textual.widgets import (
     Input,
     OptionList,
     Static,
+    TextArea,
 )
 from textual.widgets.option_list import Option
 from textual._widget_navigation import find_next_enabled_no_wrap
@@ -74,7 +75,7 @@ from rendering import (
     BG_BASE,
     _token_color, _token_color_markup,
     _category_markup,
-    _is_session_seen,
+    _is_session_seen, _is_today, _any_session_today,
     _render_session_option, _render_ws_option, _session_title,
     _rich_escape,
 )
@@ -91,6 +92,13 @@ from screens import (
     AddLinkScreen, LinkSessionScreen, ConfirmScreen,
     RepoPickerScreen, WorkstreamPickerScreen, _SENTINEL_NEW,
 )
+
+
+def _divider_option(width: int = 40) -> Option:
+    """A disabled Option that renders as a dim 'earlier' divider line."""
+    pad = max(1, (width - 10) // 2)
+    line = f"[{C_FAINT}]{'─' * pad} earlier {'─' * pad}[/{C_FAINT}]"
+    return Option(line, id="__sep__", disabled=True)
 
 
 # ─── Inline Inputs ──────────────────────────────────────────────────
@@ -247,6 +255,17 @@ class OrchestratorApp(App):
                 screen.action_select_item()
             else:
                 self.action_select_item()
+        elif event.key in ("H", "L", "ctrl+shift+h", "ctrl+shift+l"):
+            # H / L for prev/next tab — skip if a text input is focused
+            focused = self.focused
+            if isinstance(focused, (Input, TextArea)):
+                return
+            event.prevent_default()
+            event.stop()
+            if event.key in ("L", "ctrl+shift+l"):
+                self.action_next_tab()
+            else:
+                self.action_prev_tab()
 
     # ── Convenience accessors for backward compat ──
 
@@ -431,6 +450,8 @@ class OrchestratorApp(App):
             self._detail_screen_cache[ws.id] = screen
             self.install_screen(screen, screen_name)
         self.push_screen(screen_name, callback=lambda _: self._on_detail_dismissed())
+        # Update the detail screen's tab bar now that it's the active screen
+        self._sync_tab_bar()
 
     def _on_detail_dismissed(self):
         """Called when a DetailScreen is dismissed (back to Home).
@@ -447,6 +468,11 @@ class OrchestratorApp(App):
     def _sync_tab_bar(self):
         """Re-render the top bar to reflect current tab state."""
         self._update_all_bars()
+        # Also update tab bar on DetailScreen (if active)
+        try:
+            self.screen.query_one("#detail-tab-bar", Static).update(self._render_tab_bar())
+        except Exception:
+            pass
 
     def _render_tab_bar(self) -> str:
         """Render the tab bar line as Rich markup."""
@@ -761,16 +787,20 @@ class OrchestratorApp(App):
         olist = self.query_one("#preview-sessions", OptionList)
         highlighted = olist.highlighted
         options = []
+        sep_inserted = False
         for i, s in enumerate(self.state.preview_sessions):
             act = session_activity(s, self.state.last_seen_cache)
             seen = _is_session_seen(s, self.state.last_seen_cache)
+            if not sep_inserted and i > 0 and not _is_today(s.last_activity or s.started_at or ""):
+                options.append(_divider_option(38))
+                sep_inserted = True
             options.append(Option(
                 _render_session_option(s, act, self.state.throbber_frame, title_width=35, seen=seen),
                 id=str(i),
             ))
         olist.clear_options()
         olist.add_options(options)
-        if highlighted is not None and highlighted < len(self.state.preview_sessions):
+        if highlighted is not None and highlighted < len(options):
             olist.highlighted = highlighted
 
     @on(OptionList.OptionHighlighted, "#ws-table")
@@ -956,6 +986,7 @@ class OrchestratorApp(App):
         # Build all options, skipping expensive rendering for unchanged items
         render_cache = getattr(self, '_ws_render_cache', {})
         options = []
+        today_flags = []
         new_cache = {}
         for ws in items:
             ws_sessions = self.state.sessions_for_ws(ws)
@@ -977,22 +1008,35 @@ class OrchestratorApp(App):
                 )
             new_cache[ws.id] = (fp, prompt)
             options.append(Option(prompt, id=ws.id))
+            today_flags.append(
+                _any_session_today(ws_sessions) if ws_sessions else _is_today(ws.updated_at)
+            )
         self._ws_render_cache = new_cache
+
+        # Insert "earlier" divider between today and non-today items
+        sep_idx = next((i for i, t in enumerate(today_flags) if not t), None)
+        final_options: list = list(options)
+        if sep_idx is not None and sep_idx > 0:
+            final_options.insert(sep_idx, _divider_option(lw))
 
         # In-place update when item set unchanged (liveness/timer refreshes)
         # Avoids expensive clear+re-add cycle (~7ms savings on 65 items)
-        new_ids = [o.id for o in options]
+        def _opt_id(o):
+            return getattr(o, 'id', '__sep__')
+        new_ids = [_opt_id(o) for o in final_options]
         existing_ids = []
         try:
-            existing_ids = [table.get_option_at_index(i).id
+            existing_ids = [_opt_id(table.get_option_at_index(i))
                            for i in range(table.option_count)]
         except Exception:
             pass
 
         with self.batch_update():
-            if new_ids == existing_ids and len(options) == table.option_count:
+            if new_ids == existing_ids and len(final_options) == table.option_count:
                 # Structure unchanged — only replace options whose content changed
-                for i, opt in enumerate(options):
+                for i, opt in enumerate(final_options):
+                    if getattr(opt, 'id', None) is None:
+                        continue  # separator, content never changes
                     try:
                         existing = table.get_option_at_index(i)
                         if existing.prompt != opt.prompt:
@@ -1002,7 +1046,7 @@ class OrchestratorApp(App):
             else:
                 # Structure changed — full rebuild
                 table.clear_options()
-                table.add_options(options)
+                table.add_options(final_options)
                 self._olist_restore_cursor(table, old_key, old_idx)
             self._update_all_bars()
             new_key = self._olist_cursor_key(table)
@@ -1228,6 +1272,8 @@ class OrchestratorApp(App):
             self._detail_screen_cache[ws.id] = screen
             self.install_screen(screen, screen_name)
         self.push_screen(screen_name, callback=lambda _: self._on_detail_dismissed())
+        # Update the detail screen's tab bar now that it's the active screen
+        self._sync_tab_bar()
 
     # ── Workstream actions ──
 
@@ -1446,6 +1492,7 @@ class OrchestratorApp(App):
             if callback:
                 callback(result)
         self.push_screen(screen, callback=_on_dismiss)
+        self._sync_tab_bar()
 
 
 
