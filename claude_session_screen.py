@@ -474,6 +474,12 @@ class ClaudeSessionScreen(Screen):
                 '`orch distill crystallize --text "..." --context "..."` directly. '
                 '$ORCH_WS_ID is set automatically.'
             )
+            parts.append(
+                '\nNotify: Send a desktop notification to the user with '
+                '`~/bin/notification/claude-notify.sh "message"`. '
+                'Use this when you hit a blocker, need a decision, or finish a long task '
+                'and want the user\'s attention. Keep the message short (one line).'
+            )
 
         # Commit reminder — agents frequently forget to commit, leaving all work unstaged
         parts.append(
