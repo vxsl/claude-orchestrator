@@ -435,43 +435,62 @@ class OrchestratorApp(App):
             if ws:
                 self._push_detail_for_tab(ws)
         else:
-            # Home tab — dismiss any open DetailScreen
-            if self._detail_screen_active:
-                self.screen.dismiss()
+            # Home tab: pop everything above Home (CSS + any stale Detail).
+            # pop_screen() is synchronous so we can call dismiss() in a loop.
+            while len(self.screen_stack) > 1:
+                self.screen_stack[-1].dismiss()
+            self._detail_screen_active = False
 
     def _push_detail_for_tab(self, ws: Workstream):
-        """Push a DetailScreen for a workstream tab (cached for instant re-entry).
+        """Switch to ws's DetailScreen, keeping the stack clean.
 
-        When switching away from a ClaudeSessionScreen, only the CSS is dismissed;
-        the DetailScreen below it stays in the Textual stack.  On return we detect
-        this and skip the redundant push (avoids a duplicate entry in the stack).
+        When CSS is on top, we dismiss it and defer a second dismiss for the
+        now-exposed stale Detail before pushing the new tab's Detail.  This
+        keeps the Textual stack at exactly [Home, Detail] at all times.
         """
+        from claude_session_screen import ClaudeSessionScreen as CSS
         self._tab_switch_in_progress = True
+
         if self._detail_screen_active:
-            from claude_session_screen import ClaudeSessionScreen as CSS
             if isinstance(self.screen, CSS):
-                # Tab-switching away from a live session: record it so we can resume on return.
-                # TerminalWidget.on_unmount calls detach_persistent(), so tmux stays alive.
+                # Leaving a session: record the session ID for auto-resume on return.
+                # TerminalWidget.on_unmount calls detach_persistent() so tmux stays alive.
                 self._tab_active_session[self.screen._ws.id] = self.screen._session_id
-            self.screen.dismiss()
+                self.screen.dismiss()  # pops CSS; stale Detail is now on top
+                # Defer: once CSS is visually settled, dismiss stale Detail then push new one.
+                target_ws_id = ws.id
+                self.call_after_refresh(
+                    lambda w=ws, tid=target_ws_id: self._finish_tab_switch_after_css(w, tid)
+                )
+                return
+            else:
+                self.screen.dismiss()
+
+        self._finish_tab_switch(ws)
+
+    def _finish_tab_switch_after_css(self, ws: Workstream, target_ws_id: str) -> None:
+        """Deferred: dismiss the stale Detail left by CSS, then push the new tab's Detail.
+
+        The target_ws_id guard handles the case where the user switched tabs again
+        before this callback fired — in that case the new switch already cleaned up.
+        """
+        if self.tabs.active_tab.ws_id != target_ws_id:
+            return  # user moved on; the new switch already handled cleanup
+        if isinstance(self.screen, DetailScreen):
+            self.screen.dismiss()  # dismiss stale Detail (_on_detail_dismissed suppressed)
+        self._finish_tab_switch(ws)
+
+    def _finish_tab_switch(self, ws: Workstream) -> None:
+        """Core: install/push the DetailScreen for ws and schedule optional session resume."""
         self._detail_screen_active = True
         screen_name = f"detail:{ws.id}"
         if ws.id not in self._detail_screen_cache:
             screen = DetailScreen(ws, self.state.store)
             self._detail_screen_cache[ws.id] = screen
             self.install_screen(screen, screen_name)
-        # If this tab's Detail is already in the stack (left behind when we dismissed a CSS
-        # that was sitting on top of it), don't push a duplicate — it'll be revealed once
-        # the screen above it is dismissed.
-        cached = self._detail_screen_cache[ws.id]
-        if cached not in self.screen_stack:
-            self.push_screen(screen_name, callback=lambda _: self._on_detail_dismissed())
-        # Clear the tab-switch flag after the queued operations are processed.
+        self.push_screen(screen_name, callback=lambda _: self._on_detail_dismissed())
         self.call_after_refresh(lambda: setattr(self, '_tab_switch_in_progress', False))
-        # Update the detail screen's tab bar now that it's the active screen
         self._sync_tab_bar()
-        # Auto-resume session if this tab had one active when we last left it.
-        # The alive-check is offloaded to avoid blocking the event loop.
         sid = self._tab_active_session.pop(ws.id, None)
         if sid:
             self._auto_resume_tab_session(ws, sid)
@@ -480,14 +499,14 @@ class OrchestratorApp(App):
     async def _auto_resume_tab_session(self, ws: Workstream, session_id: str) -> None:
         """Async worker: check if a tmux session is still alive, then resume it.
 
-        Called when switching back to a tab that had an active ClaudeSessionScreen.
-        The alive-check runs off-thread so the tab switch itself isn't blocked.
+        The ws-ID guard prevents a stale callback from pushing a session screen
+        onto the wrong tab if the user navigated away before this worker ran.
         """
         from terminal import TerminalWidget
         alive = await asyncio.get_running_loop().run_in_executor(
             None, TerminalWidget.tmux_session_alive, session_id
         )
-        if alive:
+        if alive and self.tabs.active_tab.ws_id == ws.id:
             await self.launch_claude_session(ws, session_id=session_id)
 
     def _on_detail_dismissed(self):
@@ -631,9 +650,25 @@ class OrchestratorApp(App):
     def _session_fingerprint(sessions):
         return {(s.session_id, s.is_live, s.last_message_role, s.last_activity) for s in sessions}
 
+    _db_refresh_running = False  # guard against overlapping workers
+
     @work(thread=True, exclusive=True, group="rust_engine")
     def _do_refresh_from_db(self):
         """Re-read sessions from SQLite and update the UI."""
+        # Textual's exclusive=True cancels the *future* but not the thread.
+        # Guard with a flag so overlapping workers skip rather than pile up
+        # and fight for the GIL (which inflated 9ms work to 1700ms+).
+        if self._db_refresh_running:
+            if _PERF_ENABLED:
+                _perf_log.warning("_do_refresh_from_db: skipped (already running)")
+            return
+        self._db_refresh_running = True
+        try:
+            self.__do_refresh_from_db_inner()
+        finally:
+            self._db_refresh_running = False
+
+    def __do_refresh_from_db_inner(self):
         _t0 = _time.monotonic() if _PERF_ENABLED else 0
         threads = discover_threads()
         apply_cached_names(threads)
