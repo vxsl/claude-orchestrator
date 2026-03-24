@@ -946,16 +946,15 @@ class OrchestratorApp(App):
         new_cache: dict = {}
 
         options = []
-        rerendered: set[int] = set()  # indices of options that changed this tick
+        rerendered_ids: set[str] = set()  # option IDs (str(i)) whose render changed
         sep_inserted = False
-        sep_offset = 0  # number of separators inserted before each index
 
         for i, s in enumerate(sessions):
             act = session_activity(s, last_seen)
             seen = _is_session_seen(s, last_seen)
             is_thinking = (act == ThreadActivity.THINKING)
 
-            # Fingerprint: throbber_frame included only for THINKING sessions
+            # Fingerprint: include throbber_frame only for THINKING sessions
             fp = (s.session_id, act, seen, frame if is_thinking else 0)
             cached = render_cache.get(s.session_id)
             if cached and cached[0] == fp:
@@ -964,14 +963,12 @@ class OrchestratorApp(App):
                 prompt = _render_session_option(
                     s, act, frame, title_width=35, seen=seen
                 )
-                opt_idx = i + sep_offset + (1 if sep_inserted else 0)
-                rerendered.add(opt_idx)
+                rerendered_ids.add(str(i))
             new_cache[s.session_id] = (fp, prompt)
 
             if not sep_inserted and i > 0 and not _is_today(s.last_activity or s.started_at or ""):
                 options.append(_divider_option(38))
                 sep_inserted = True
-                sep_offset += 1
 
             options.append(Option(prompt, id=str(i)))
 
@@ -980,8 +977,9 @@ class OrchestratorApp(App):
         # In-place updates when structure is unchanged — avoids full remount.
         if olist.option_count == len(options):
             for idx, opt in enumerate(options):
-                if idx not in rerendered:
-                    continue  # fingerprint-cached — no need to update
+                opt_id = getattr(opt, 'id', None)
+                if opt_id not in rerendered_ids:
+                    continue  # fingerprint-cached — skip
                 try:
                     existing = olist.get_option_at_index(idx)
                     if existing.prompt != opt.prompt:
@@ -1072,7 +1070,8 @@ class OrchestratorApp(App):
         home_tab = self.tabs.tabs[0]
         home_icon = home_tab.icon + " " if home_tab.icon else ""
         home_str = f"[bold italic {C_MID} on {BG_BASE}] {home_icon}{_rich_escape(home_tab.label)} [/]"
-        DIVIDER = f"  [{C_FAINT}]\u2502[/{C_FAINT}]  "
+        CHILD_SEP = f" [{C_DIM}]\u203a[/{C_DIM}] "   # › — parent→child
+        DIVIDER   = f"  [{C_FAINT}]\u2502[/{C_FAINT}]  "  # │ — peer separator
 
         # All non-home tabs (Sessions + open workstreams) shown at right
         other_tabs = [t for t in self.tabs.tabs if t.id != "home"]
@@ -1086,9 +1085,9 @@ class OrchestratorApp(App):
                 else:
                     tab_parts.append(f"[{C_DIM}]○ {_rich_escape(lbl)}[/{C_DIM}]")
             tabs_str = DIVIDER + DIVIDER.join(tab_parts)
-            return f"{home_str}{DIVIDER}{presets}{tabs_str}"
+            return f"{home_str}{CHILD_SEP}{presets}{tabs_str}"
 
-        return f"{home_str}{DIVIDER}{presets}"
+        return f"{home_str}{CHILD_SEP}{presets}"
 
     def _render_summary_bar(self) -> str:
         count = self._active_table().option_count
