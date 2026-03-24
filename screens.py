@@ -3073,7 +3073,9 @@ class CurrentSessionsScreen(_VimOptionListMixin, ModalScreen[None]):
             yield OptionList(id="csd-sessions")
             yield Static(f"[{C_DIM}]No sessions active today[/{C_DIM}]", id="csd-no-sessions")
             yield Static(
-                f"[{C_DIM}]↑↓/jk nav  enter/l/r open  ^H/esc back[/{C_DIM}]",
+                "  ".join(f"[{C_YELLOW}]{k}[/{C_YELLOW}] {v}" for k, v in [
+                    ("↑↓/jk", "nav"), ("enter/l/r", "open"), ("^H/esc", "back"),
+                ]),
                 id="csd-help",
             )
 

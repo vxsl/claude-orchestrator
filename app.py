@@ -150,7 +150,7 @@ class OrchestratorApp(App):
         height: 1; padding: 0 1; background: {BG_CHROME}; dock: top;
     }}
     #summary-bar {{
-        height: 1; padding: 0 1; background: {BG_CHROME}; color: {C_DIM}; dock: bottom;
+        height: 1; padding: 0 2; background: {BG_CHROME}; color: {C_DIM}; dock: bottom;
     }}
     #main-content {{ height: 1fr; }}
     #ws-table {{
@@ -1131,10 +1131,10 @@ class OrchestratorApp(App):
             return (
                 f"  {count} archived  "
                 f"[{C_DIM}]\u2502[/{C_DIM}]  "
-                f"[{C_DIM}]u[/{C_DIM}] unarchive  "
-                f"[{C_DIM}]d[/{C_DIM}] delete  "
-                f"[{C_DIM}]1[/{C_DIM}] back to all  "
-                f"[{C_DIM}]?[/{C_DIM}] help"
+                f"[{C_YELLOW}]u[/{C_YELLOW}] unarchive  "
+                f"[{C_YELLOW}]d[/{C_YELLOW}] delete  "
+                f"[{C_YELLOW}]1[/{C_YELLOW}] back to all  "
+                f"[{C_YELLOW}]?[/{C_YELLOW}] help"
             )
         # Count active ticket-solve jobs across all workstreams
         solving = sum(
@@ -1145,12 +1145,12 @@ class OrchestratorApp(App):
         return (
             f"  {count} workstreams{solve_part}  "
             f"[{C_DIM}]\u2502[/{C_DIM}]  "
-            f"[{C_DIM}]r[/{C_DIM}] resume  "
-            f"[{C_DIM}]c[/{C_DIM}] new session  "
-            f"[{C_DIM}]n[/{C_DIM}] note  "
-            f"[{C_DIM}]/[/{C_DIM}] search  "
-            f"[{C_DIM}]?[/{C_DIM}] help  "
-            f"[{C_DIM}]Tab[/{C_DIM}] tabs"
+            f"[{C_YELLOW}]r[/{C_YELLOW}] resume  "
+            f"[{C_YELLOW}]c[/{C_YELLOW}] new session  "
+            f"[{C_YELLOW}]n[/{C_YELLOW}] note  "
+            f"[{C_YELLOW}]/[/{C_YELLOW}] search  "
+            f"[{C_YELLOW}]?[/{C_YELLOW}] help  "
+            f"[{C_YELLOW}]Tab[/{C_YELLOW}] tabs"
         )
 
     # ── Workstreams table ──
