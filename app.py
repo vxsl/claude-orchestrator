@@ -7,6 +7,7 @@ and external process actions in actions.py.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import subprocess
@@ -221,6 +222,8 @@ class OrchestratorApp(App):
         self._detached_sessions: dict[str, dict] = {}  # session_id -> {ws, start_time, jsonl}
         self._detail_screen_active: bool = False  # True when a DetailScreen is pushed
         self._detail_screen_cache: dict[str, DetailScreen] = {}  # ws_id -> cached screen
+        self._tab_active_session: dict[str, str] = {}  # ws_id -> session_id (for tab-switch resume)
+        self._tab_switch_in_progress: bool = False  # suppress _on_detail_dismissed during tab switch
         self._last_liveness_check: float = 0.0  # rate limiter for liveness checks
         self._liveness_deferred: bool = False  # trailing-edge pending flag
 
@@ -255,14 +258,10 @@ class OrchestratorApp(App):
                 screen.action_select_item()
             else:
                 self.action_select_item()
-        elif event.key in ("H", "L", "ctrl+shift+h", "ctrl+shift+l"):
-            # H / L for prev/next tab — skip if a text input is focused
-            focused = self.focused
-            if isinstance(focused, (Input, TextArea)):
-                return
+        elif event.key in ("ctrl+shift+h", "ctrl+shift+l"):
             event.prevent_default()
             event.stop()
-            if event.key in ("L", "ctrl+shift+l"):
+            if event.key == "ctrl+shift+l":
                 self.action_next_tab()
             else:
                 self.action_prev_tab()
@@ -417,6 +416,7 @@ class OrchestratorApp(App):
         closed = self.tabs.close_active_tab()
         if closed:
             # Evict cached screen for closed tab
+            self._tab_active_session.pop(closed, None)
             if closed in self._detail_screen_cache:
                 screen_name = f"detail:{closed}"
                 try:
@@ -440,8 +440,19 @@ class OrchestratorApp(App):
                 self.screen.dismiss()
 
     def _push_detail_for_tab(self, ws: Workstream):
-        """Push a DetailScreen for a workstream tab (cached for instant re-entry)."""
+        """Push a DetailScreen for a workstream tab (cached for instant re-entry).
+
+        When switching away from a ClaudeSessionScreen, only the CSS is dismissed;
+        the DetailScreen below it stays in the Textual stack.  On return we detect
+        this and skip the redundant push (avoids a duplicate entry in the stack).
+        """
+        self._tab_switch_in_progress = True
         if self._detail_screen_active:
+            from claude_session_screen import ClaudeSessionScreen as CSS
+            if isinstance(self.screen, CSS):
+                # Tab-switching away from a live session: record it so we can resume on return.
+                # TerminalWidget.on_unmount calls detach_persistent(), so tmux stays alive.
+                self._tab_active_session[self.screen._ws.id] = self.screen._session_id
             self.screen.dismiss()
         self._detail_screen_active = True
         screen_name = f"detail:{ws.id}"
@@ -449,17 +460,44 @@ class OrchestratorApp(App):
             screen = DetailScreen(ws, self.state.store)
             self._detail_screen_cache[ws.id] = screen
             self.install_screen(screen, screen_name)
-        self.push_screen(screen_name, callback=lambda _: self._on_detail_dismissed())
+        # If this tab's Detail is already in the stack (left behind when we dismissed a CSS
+        # that was sitting on top of it), don't push a duplicate — it'll be revealed once
+        # the screen above it is dismissed.
+        cached = self._detail_screen_cache[ws.id]
+        if cached not in self.screen_stack:
+            self.push_screen(screen_name, callback=lambda _: self._on_detail_dismissed())
+        # Clear the tab-switch flag after the queued operations are processed.
+        self.call_after_refresh(lambda: setattr(self, '_tab_switch_in_progress', False))
         # Update the detail screen's tab bar now that it's the active screen
         self._sync_tab_bar()
+        # Auto-resume session if this tab had one active when we last left it.
+        # The alive-check is offloaded to avoid blocking the event loop.
+        sid = self._tab_active_session.pop(ws.id, None)
+        if sid:
+            self._auto_resume_tab_session(ws, sid)
+
+    @work(thread=False)
+    async def _auto_resume_tab_session(self, ws: Workstream, session_id: str) -> None:
+        """Async worker: check if a tmux session is still alive, then resume it.
+
+        Called when switching back to a tab that had an active ClaudeSessionScreen.
+        The alive-check runs off-thread so the tab switch itself isn't blocked.
+        """
+        from terminal import TerminalWidget
+        alive = await asyncio.get_running_loop().run_in_executor(
+            None, TerminalWidget.tmux_session_alive, session_id
+        )
+        if alive:
+            await self.launch_claude_session(ws, session_id=session_id)
 
     def _on_detail_dismissed(self):
         """Called when a DetailScreen is dismissed (back to Home).
 
-        Skips reset if another DetailScreen is already active (tab switch).
+        Skips reset if a tab switch is in progress (the dismiss/push pair fires the
+        callback between the pop and the push, when self.screen is temporarily Home).
         """
-        if self._detail_screen_active and isinstance(self.screen, DetailScreen):
-            return  # another detail was pushed during tab switch
+        if self._tab_switch_in_progress:
+            return
         self._detail_screen_active = False
         self.tabs.switch_to(0)
         self._sync_tab_bar()
@@ -1438,7 +1476,8 @@ class OrchestratorApp(App):
 
     # ── Spawn & resume ──
 
-    def launch_claude_session(
+    @work(thread=False)
+    async def launch_claude_session(
         self,
         ws: Workstream,
         session_id: str | None = None,
@@ -1450,13 +1489,15 @@ class OrchestratorApp(App):
         from claude_session_screen import ClaudeSessionScreen
         from terminal import TerminalWidget
 
-        # Check if this session is still alive in tmux
+        # Check if this session is still alive in tmux — run in executor to avoid
+        # blocking the event loop (tmux subprocess.run can hang for up to 3s).
         reattach = False
         effective_sid = session_id
         if session_id:
             self._detached_sessions.pop(session_id, None)
-            if TerminalWidget.tmux_session_alive(session_id):
-                reattach = True
+            reattach = await asyncio.get_running_loop().run_in_executor(
+                None, TerminalWidget.tmux_session_alive, session_id
+            )
 
         screen = ClaudeSessionScreen(
             ws=ws, store=self.state.store,
@@ -1471,7 +1512,9 @@ class OrchestratorApp(App):
                     "start_time": result["start_time"],
                     "jsonl": result["jsonl"],
                 }
-                # Parse the JSONL so we can inject the session immediately
+                # Parse the JSONL so we can inject the session immediately.
+                # Mark is_live=True since the process is still running (detached,
+                # not killed) — parse_session doesn't check PIDs.
                 jsonl = result.get("jsonl")
                 if jsonl:
                     from sessions import parse_session
@@ -1479,6 +1522,7 @@ class OrchestratorApp(App):
                     try:
                         s = parse_session(Path(jsonl))
                         if s:
+                            s.is_live = True
                             self._inject_session(s)
                     except Exception:
                         pass

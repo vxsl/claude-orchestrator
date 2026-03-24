@@ -6,6 +6,7 @@ Pure functions with no Textual dependency. Used by screens, app, and state modul
 from __future__ import annotations
 
 import functools
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -255,7 +256,6 @@ def _parse_worktree_display(dirname: str) -> tuple[str, str]:
 
     Display is the ticket ID (e.g. 'UB-6709') if found, else the full dirname.
     """
-    import re
     if "." in dirname:
         repo, branch = dirname.split(".", 1)
         m = re.match(r"^([A-Z]+-\d+)", branch)
@@ -502,9 +502,23 @@ def _render_ws_option(
                 tk = str(total_tokens)
             parts.append(_token_color_markup(tk, total_tokens))
 
-    parts.append(f"[{C_FAINT}]{_relative_time(ws.updated_at)}[/{C_FAINT}]")
+    # Use best session activity time (matches sort order), fall back to updated_at
+    if ws_sessions:
+        effective_ts = max((s.last_activity or s.started_at or "" for s in ws_sessions), default="")
+        if not effective_ts:
+            effective_ts = ws.updated_at
+    else:
+        effective_ts = ws.last_user_activity or ws.updated_at
+    time_str = _relative_time(effective_ts)
+    time_markup = f"[{C_FAINT}]{time_str}[/{C_FAINT}]"
 
-    line2 = f"{IND}{sep.join(parts)}"
+    left_markup = f"{IND}{sep.join(parts)}"
+    if line_width > 20:
+        left_plain = re.sub(r"\[/?[^\]]*\]", "", left_markup)
+        gap = max(2, line_width - len(left_plain) - len(time_str))
+        line2 = f"{left_markup}{' ' * gap}{time_markup}"
+    else:
+        line2 = f"{left_markup}{sep}{time_markup}"
 
     # ── Line 3: description snippet (if any) ──
     lines = [line1, line2]
@@ -710,7 +724,6 @@ def _render_session_option(
     if not left:
         left = f"[{C_FAINT}]{'─' * 6}[/{C_FAINT}]"
     if proj_label:
-        import re
         left_plain = re.sub(r"\[/?[^\]]*\]", "", left)
         proj_plain = re.sub(r"\[/?[^\]]*\]", "", proj_label)
         gap = max(2, LINE_WIDTH - 4 - len(left_plain) - len(proj_plain))
@@ -828,7 +841,6 @@ def _render_content_search_result(
     if not left:
         left = f"[{C_FAINT}]{'─' * 6}[/{C_FAINT}]"
     if proj_label:
-        import re
         left_plain = re.sub(r"\[/?[^\]]*\]", "", left)
         proj_plain = re.sub(r"\[/?[^\]]*\]", "", proj_label)
         gap = max(2, LINE_WIDTH - 4 - len(left_plain) - len(proj_plain))
@@ -960,7 +972,6 @@ def _render_notified_session_option(
     if not left:
         left = f"[{C_FAINT}]{'─' * 6}[/{C_FAINT}]"
     if proj_label:
-        import re
         left_plain = re.sub(r"\[/?[^\]]*\]", "", left)
         proj_plain = re.sub(r"\[/?[^\]]*\]", "", proj_label)
         gap = max(2, LINE_WIDTH - 4 - len(left_plain) - len(proj_plain))
