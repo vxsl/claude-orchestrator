@@ -2026,10 +2026,14 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
             n = len(self._detail_sessions)
             total_tok = sum(s.total_input_tokens + s.total_output_tokens for s in self._detail_sessions)
             total_msgs = sum(s.message_count for s in self._detail_sessions)
+            total_work_ms = sum(s.total_work_ms for s in self._detail_sessions)
             _tk = f"{total_tok / 1_000_000:.1f}M" if total_tok > 1_000_000 else f"{total_tok / 1_000:.0f}k" if total_tok > 1_000 else str(total_tok)
+            from rendering import _work_time_str
+            _wt = f" \u00b7 {_work_time_str(total_work_ms)} think" if total_work_ms > 0 else ""
             parts.append(
                 f"[{C_DIM}]{n} sessions \u00b7 {total_msgs} msgs \u00b7 "
-                f"{_token_color_markup(_tk, total_tok)}[/{C_DIM}]"
+                f"{_token_color_markup(_tk, total_tok)}"
+                f"[/{C_DIM}][{C_DIM}]{_wt}[/{C_DIM}]"
             )
         return "  ".join(parts)
 
