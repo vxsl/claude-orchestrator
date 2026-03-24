@@ -164,7 +164,7 @@ class SessionHeaderWidget(Static):
         self.set_interval(5.0, self._refresh_async)
 
     def on_resize(self, event) -> None:
-        self._width = event.size.width
+        self._width = self.content_size.width
         self._refresh_async()
 
     def _format_elapsed(self) -> str:
@@ -292,7 +292,7 @@ class SessionHeaderWidget(Static):
             # Colors dim from oldest (darkest) to newest (brightest)
             msg_colors = ["#7a5218", "#b07a25", C_YELLOW]  # dim amber → mid gold → bright yellow
             prefix = "you said: "
-            w = max(20, self._width - 4)  # content width (subtract padding)
+            w = max(20, self._width)  # content width (already stored as content_size.width)
             msgs = list(reversed(last_user_messages[:3]))  # oldest first
             color_offset = 3 - len(msgs)
             for i, msg in enumerate(msgs):
