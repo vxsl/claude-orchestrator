@@ -6,6 +6,7 @@ Pure functions with no Textual dependency. Used by screens, app, and state modul
 from __future__ import annotations
 
 import functools
+from datetime import datetime, timezone
 from pathlib import Path
 
 def _rich_escape(text: str) -> str:
@@ -46,6 +47,34 @@ C_RESOLVED = "#7a8a9e"  # muted blue-gray — committed/resolved sessions
 BG_BASE = "#000000"      # true black — matches terminal
 BG_SURFACE = "#060606"   # barely lifted — focused panels
 BG_RAISED = "#0d1117"    # bars, headers, inputs
+
+
+# ─── Staleness helpers ──────────────────────────────────────────────
+
+def _is_today(ts: str) -> bool:
+    """True if the ISO timestamp falls on today (local time)."""
+    if not ts:
+        return False
+    try:
+        dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+        now = datetime.now().astimezone()
+        return dt.astimezone(now.tzinfo).date() == now.date()
+    except (ValueError, TypeError):
+        return False
+
+
+def _any_session_today(sessions: list) -> bool:
+    """True if any session in the list was active today."""
+    return any(_is_today(s.last_activity or s.started_at or "") for s in sessions)
+
+
+# When stale (not active today), shift colors one notch dimmer.
+# Semantic colors (activity icons, token magnitude, category) stay unchanged.
+_STALE_COLOR = {
+    C_LIGHT: C_MID,
+    C_MID: C_DIM,
+    C_DIM: C_FAINT,
+}
 
 
 # ─── Theme maps ─────────────────────────────────────────────────────
@@ -372,6 +401,13 @@ def _render_ws_option(
     """
     IND = "     "
 
+    # ── Staleness: not active today → dim title/description one notch ──
+    stale = ws_sessions and not _any_session_today(ws_sessions)
+    name_color = C_MID if stale else C_LIGHT
+    name_bold = "" if stale else "bold "
+    desc_color = C_FAINT if stale else C_DIM
+    meta_dim = C_FAINT if stale else C_DIM
+
     # ── Activity icon (auto-derived from session state, not manual status) ──
     best = _best_activity(ws_sessions, last_seen)
     all_seen = _all_sessions_seen(ws_sessions, last_seen)
@@ -388,7 +424,7 @@ def _render_ws_option(
     # ── Line 1: icon + name + indicators + branch ──
     name_esc = _rich_escape(ws.name)
     indicators = _ws_indicators(ws, tmux_check=tmux_check)
-    ind_markup = f"  [{C_DIM}]{indicators}[/{C_DIM}]" if indicators else ""
+    ind_markup = f"  [{meta_dim}]{indicators}[/{meta_dim}]" if indicators else ""
 
     branch_markup = ""
     if git_status and git_status.branch and not git_status.error:
@@ -396,13 +432,13 @@ def _render_ws_option(
         if git_status.is_dirty:
             branch_markup = f"  [{C_YELLOW}]{branch_name}*[/{C_YELLOW}]"
         else:
-            branch_markup = f"  [{C_DIM}]{branch_name}[/{C_DIM}]"
+            branch_markup = f"  [{meta_dim}]{branch_name}[/{meta_dim}]"
         if git_status.ahead:
             branch_markup += f"[{C_GREEN}]+{git_status.ahead}[/{C_GREEN}]"
         if git_status.behind:
             branch_markup += f"[{C_RED}]-{git_status.behind}[/{C_RED}]"
 
-    line1 = f" {icon} [bold {C_LIGHT}]{name_esc}[/bold {C_LIGHT}]{ind_markup}{branch_markup}"
+    line1 = f" {icon} [{name_bold}{name_color}]{name_esc}[/{name_bold}{name_color}]{ind_markup}{branch_markup}"
 
     # ── Line 2: metadata chain separated by dim dots ──
     sep = f" [{C_FAINT}]·[/{C_FAINT}] "
@@ -449,7 +485,7 @@ def _render_ws_option(
 
     sess_count = len(ws_sessions) if ws_sessions else 0
     if sess_count:
-        parts.append(f"[{C_DIM}]{sess_count} sess[/{C_DIM}]")
+        parts.append(f"[{meta_dim}]{sess_count} sess[/{meta_dim}]")
 
     if ws_sessions:
         total_tokens = sum(s.total_input_tokens + s.total_output_tokens for s in ws_sessions)
@@ -473,7 +509,7 @@ def _render_ws_option(
         max_desc = (line_width - 5) if line_width > 20 else 67
         if len(desc) > max_desc:
             desc = desc[:max_desc - 1] + "…"
-        lines.append(f"{IND}[{C_DIM}]{_rich_escape(desc)}[/{C_DIM}]")
+        lines.append(f"{IND}[{desc_color}]{_rich_escape(desc)}[/{desc_color}]")
 
     # Trailing blank line for visual separation
     lines.append("")
@@ -591,6 +627,11 @@ def _render_session_option(
     else:
         LINE_WIDTH = title_width + 20  # right-alignment anchor
 
+    # ── Staleness: not active today → dim one notch ──
+    stale = not _is_today(s.last_activity or s.started_at or "")
+    s_mid = C_DIM if stale else C_MID       # secondary text
+    s_dim = C_FAINT if stale else C_DIM     # tertiary text
+
     # Resolved state: session's last action was a git commit
     # But active states (thinking, awaiting input) take priority — the session
     # has moved on from the commit.
@@ -614,13 +655,15 @@ def _render_session_option(
     duration = s.duration_display
     age_str = s.age
 
-    # Title styling: committed = dim green, idle = dim, active = bright
+    # Title styling: committed = dim, idle = dim, active = bright
+    # Stale sessions shift bright → mid
     if committed:
-        title_fmt = f"[{C_DIM}]{title_esc}[/{C_DIM}]"
+        title_fmt = f"[{s_dim}]{title_esc}[/{s_dim}]"
     elif act == ThreadActivity.IDLE:
-        title_fmt = f"[{C_DIM}]{title_esc}[/{C_DIM}]"
+        title_fmt = f"[{s_dim}]{title_esc}[/{s_dim}]"
     else:
-        title_fmt = f"[{C_LIGHT}]{title_esc}[/{C_LIGHT}]"
+        title_color = C_MID if stale else C_LIGHT
+        title_fmt = f"[{title_color}]{title_esc}[/{title_color}]"
 
     # Line 1: " {icon} {title}          {badge}"
     prefix_w = 3  # visible: space + icon + space
@@ -641,11 +684,11 @@ def _render_session_option(
     sid_gap = max(2, LINE_WIDTH - meta_left_len - 8)
 
     line2 = (
-        f"{INDENT}{model_part}[{C_DIM}]{msgs_str:<10}[/{C_DIM}]"
+        f"{INDENT}{model_part}[{s_dim}]{msgs_str:<10}[/{s_dim}]"
         f"{tokens_fmt}"
-        f"[{C_DIM}]{tok_pad}"
-        f"{dur_str}[/{C_DIM}]"
-        f"[{C_MID}]{age_str}[/{C_MID}]"
+        f"[{s_dim}]{tok_pad}"
+        f"{dur_str}[/{s_dim}]"
+        f"[{s_mid}]{age_str}[/{s_mid}]"
         f"{' ' * sid_gap}[{C_FAINT}]{sid}[/{C_FAINT}]"
     )
 
@@ -679,15 +722,15 @@ def _render_session_option(
         commit_msg = _rich_escape(s.last_commit_summary[:max_msg])
         if len(s.last_commit_summary) > max_msg:
             commit_msg += "…"
-        lines.append(f"{INDENT}[{C_RESOLVED}]{sha_short}[/{C_RESOLVED}] [{C_DIM}]{commit_msg}[/{C_DIM}]")
+        lines.append(f"{INDENT}[{C_RESOLVED}]{sha_short}[/{C_RESOLVED}] [{s_dim}]{commit_msg}[/{s_dim}]")
     elif s.last_message_text:
         max_snippet = title_width + 12
         snippet = _rich_escape(s.last_message_text[:max_snippet])
         if len(s.last_message_text) > max_snippet:
             snippet += "…"
         is_user = s.last_message_role == "user"
-        prefix = f"[{C_MID}]you:[/{C_MID}] " if is_user else ""
-        msg_color = C_MID if is_user else "#3b4048"
+        prefix = f"[{s_mid}]you:[/{s_mid}] " if is_user else ""
+        msg_color = s_mid if is_user else (C_FAINT if stale else "#3b4048")
         lines.append(f"{INDENT}{prefix}[italic {msg_color}]{snippet}[/italic {msg_color}]")
 
     return "\n".join(lines)
