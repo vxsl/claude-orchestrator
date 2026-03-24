@@ -311,16 +311,7 @@ def _activity_icon(activity: ThreadActivity, throbber_frame: int = 0, seen: bool
 
 
 def _activity_badge(activity: ThreadActivity, seen: bool = False) -> str:
-    """Return a Rich-markup pill/badge for non-idle activity states.
-
-    When seen=True, "your turn" renders dim to indicate the user has
-    already visited this session since its last activity.
-    """
-    if activity == ThreadActivity.THINKING:
-        return ""  # throbber in the icon replaces the text badge
-    if activity in (ThreadActivity.AWAITING_INPUT, ThreadActivity.RESPONSE_READY):
-        color = C_DIM if seen else C_YELLOW
-        return f"[{color}]your turn[/{color}]"
+    """Return a Rich-markup pill/badge for non-idle activity states."""
     return ""
 
 
@@ -567,9 +558,9 @@ def _session_title(session: ClaudeSession, titles: dict[str, str] | None = None)
 
 # Badge plain-text widths (for right-alignment padding calculations)
 _BADGE_WIDTHS = {
-    ThreadActivity.THINKING: 0,       # badge removed; throbber is in the icon
-    ThreadActivity.AWAITING_INPUT: 9, # "your turn"
-    ThreadActivity.RESPONSE_READY: 9, # "your turn"
+    ThreadActivity.THINKING: 0,
+    ThreadActivity.AWAITING_INPUT: 0,
+    ThreadActivity.RESPONSE_READY: 0,
     ThreadActivity.IDLE: 0,
 }
 
@@ -636,7 +627,7 @@ def _file_touchpoints(files: list[str]) -> str:
 def _render_session_option(
     s: ClaudeSession, act: ThreadActivity, throbber_frame: int = 0,
     title_width: int = 48, ws_repo_path: str = "", seen: bool = False,
-    line_width: int = 0, deferred: bool = False,
+    line_width: int = 0, deferred: bool = False, archived: bool = False,
 ) -> str:
     """Render a session as a formatted multi-line OptionList entry.
 
@@ -1085,6 +1076,7 @@ def _render_notified_session_option(
 
 QUIET_SEPARATOR_LABEL = f"[{C_DIM}]──────────────────────────────────────────────[/{C_DIM}]"
 DEFERRED_SEPARATOR_LABEL = f"[{C_DEFER}]⏸ deferred ─────────────────────────────────[/{C_DEFER}]"
+THINKING_SEPARATOR_LABEL = f"[bold {C_CYAN}]◉[/bold {C_CYAN}] [{C_CYAN}]thinking ────────────────────────────────[/{C_CYAN}]"
 
 
 # ─── Todo rendering ────────────────────────────────────────────────
