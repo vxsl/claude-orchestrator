@@ -125,7 +125,7 @@ class SessionHeaderWidget(Static):
     DEFAULT_CSS = f"""
     SessionHeaderWidget {{
         height: auto;
-        padding: 0 2;
+        padding: 0 1 0 2;
         background: {BG_RAISED};
     }}
     """
