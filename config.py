@@ -21,8 +21,8 @@ DEFAULT_KEYS: dict[str, tuple[str, str, bool, bool]] = {
     "half_page_up": ("ctrl+u", "½PgUp", False, False),
     "select_item": ("enter,l", "Open", True, False),
     # Tab switching
-    "next_tab": ("ctrl+tab", "Tab›", True, True),
-    "prev_tab": ("ctrl+shift+tab", "‹Tab", False, True),
+    "next_tab": ("ctrl+shift+l", "›Tab", True, True),
+    "prev_tab": ("ctrl+shift+h", "Tab‹", True, True),
     # Actions
     "add": ("a", "Add", True, False),
     "brain_dump": ("b", "Brain", False, False),
@@ -30,7 +30,7 @@ DEFAULT_KEYS: dict[str, tuple[str, str, bool, bool]] = {
     "spawn": ("c", "Spawn", True, False),
     "repo_spawn": ("C", "Repo", True, False),
     "resume": ("r", "Resume", True, False),
-    "link_action": ("L", "Link", True, False),
+    "link_action": ("W", "Link", True, False),
     "quick_note": ("n", "", False, False),
     "edit_notes": ("e", "", False, False),
     "rename": ("E", "", False, False),
