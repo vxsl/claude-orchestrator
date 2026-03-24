@@ -459,21 +459,16 @@ class OrchestratorApp(App):
             pass
 
     def _update_main_tig(self, ws):
-        """Restart tig in the main lower pane for the given workstream."""
+        """Start or restart tig in the main lower pane for the given workstream."""
         cwd = self._detect_main_tig_cwd(ws)
         if cwd == self._main_tig_cwd:
             return  # already showing this repo
 
         self._main_tig_cwd = cwd
-
         lower = self.query_one("#main-lower")
 
-        # Remove existing tig widgets
-        self._stop_main_tig()
-        for wrap in list(lower.query(".main-tig-wrap")):
-            wrap.remove()
-
         if not cwd:
+            self._stop_main_tig()
             lower.display = False
             return
 
@@ -484,27 +479,33 @@ class OrchestratorApp(App):
 
         lower.display = True
 
-        status_wrap = Vertical(id="main-tig-status-wrap", classes="main-tig-wrap")
-        log_wrap = Vertical(id="main-tig-log-wrap", classes="main-tig-wrap")
-        lower.mount(status_wrap, log_wrap)
-
-        status_tw = TerminalWidget(
-            command="tig status",
-            env=self._main_tig_env,
-            cwd=cwd,
-            passthrough_keys={"ctrl+j", "ctrl+k", "ctrl+h", "backspace"},
-            id="main-tig-status",
-        )
-        log_tw = TerminalWidget(
-            command="tig",
-            env=self._main_tig_env,
-            cwd=cwd,
-            passthrough_keys={"ctrl+j", "ctrl+k", "ctrl+h", "backspace"},
-            id="main-tig-log",
-        )
-        status_wrap.mount(status_tw)
-        log_wrap.mount(log_tw)
-        self.call_after_refresh(self._start_main_tig)
+        existing_wraps = list(lower.query(".main-tig-wrap"))
+        if existing_wraps:
+            # Restart tig in-place — avoids DOM remove+mount race (remove() is async)
+            self._stop_main_tig()
+            for tw in lower.query(TerminalWidget):
+                tw._cwd = cwd
+            self.call_after_refresh(self._start_main_tig)
+        else:
+            # First mount
+            status_wrap = Vertical(id="main-tig-status-wrap", classes="main-tig-wrap")
+            log_wrap = Vertical(id="main-tig-log-wrap", classes="main-tig-wrap")
+            lower.mount(status_wrap, log_wrap)
+            status_wrap.mount(TerminalWidget(
+                command="tig status",
+                env=self._main_tig_env,
+                cwd=cwd,
+                passthrough_keys={"ctrl+j", "ctrl+k", "ctrl+h", "backspace"},
+                id="main-tig-status",
+            ))
+            log_wrap.mount(TerminalWidget(
+                command="tig",
+                env=self._main_tig_env,
+                cwd=cwd,
+                passthrough_keys={"ctrl+j", "ctrl+k", "ctrl+h", "backspace"},
+                id="main-tig-log",
+            ))
+            self.call_after_refresh(self._start_main_tig)
 
     def _start_main_tig(self):
         try:
