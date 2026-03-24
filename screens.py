@@ -2298,12 +2298,24 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
             self._run_content_search_sync()
 
     def _run_content_search_sync(self):
-        """Run content search synchronously (cache must be warm)."""
+        """Run content search synchronously (cache must be warm).
+
+        When content search finds no matches, falls back to title filter so
+        the user always sees results while typing rather than "No matches"
+        during partial queries.
+        """
         all_sessions = self._all_sessions + self._all_archived
         results = content_search(self._search_text, all_sessions, self._content_cache)
-        self._content_results = results
-        self._content_search_active = True
-        self._show_content_results()
+        if results:
+            self._content_results = results
+            self._content_search_active = True
+            self._show_content_results()
+        else:
+            # Nothing matched in content — fall back to title/metadata filter
+            # so partial queries still show sessions instead of "No matches".
+            self._content_search_active = False
+            self._content_results = []
+            self._apply_title_filter()
 
     def _show_content_results(self):
         """Update the sessions OptionList with content search results."""

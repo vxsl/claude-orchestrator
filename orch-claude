@@ -94,6 +94,10 @@ if [[ -n "$WS_ID" ]]; then
     CONTEXT+=$'\n\n'"${DISTILL_HINT}"
 fi
 
+# ─── Append notification hint to context ──────────────────────────
+NOTIFY_HINT='Notify: Send a desktop notification to the user with `~/bin/notification/claude-notify.sh "message"`. Use this when you hit a blocker, need a decision, or finish a long task and want the user'"'"'s attention. Keep the message short (one line).'
+CONTEXT+=$'\n\n'"${NOTIFY_HINT}"
+
 # ─── Record start time for elapsed calculation ─────────────────
 SESSION_START=$(date +%s)
 
