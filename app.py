@@ -144,7 +144,7 @@ class OrchestratorApp(App):
         background: {BG_BASE};
     }}
     #top-bar {{
-        height: auto; max-height: 4; padding: 0 1; background: {BG_BASE}; dock: top;
+        height: auto; max-height: 4; padding: 0 2; background: {BG_RAISED}; dock: top;
     }}
     #summary-bar {{
         height: 1; padding: 0 1; background: {BG_CHROME}; color: {C_DIM}; dock: bottom;
@@ -239,6 +239,8 @@ class OrchestratorApp(App):
                 self.action_prev_tab()
             return
         if event.key in ("ctrl+j", "ctrl+k"):
+            if not self._detail_screen_active:
+                return
             event.prevent_default()
             event.stop()
             screen = self.screen
@@ -1127,6 +1129,7 @@ class OrchestratorApp(App):
         options = []
         today_flags = []
         new_cache = {}
+        n_rendered = 0
         for ws in items:
             ws_sessions = self.state.sessions_for_ws(ws)
             git_st = None
@@ -1145,12 +1148,16 @@ class OrchestratorApp(App):
                     line_width=lw,
                     git_status=git_st,
                 )
+                n_rendered += 1
             new_cache[ws.id] = (fp, prompt)
             options.append(Option(prompt, id=ws.id))
             today_flags.append(
                 _any_session_today(ws_sessions) if ws_sessions else _is_today(ws.updated_at)
             )
         self._ws_render_cache = new_cache
+        if _PERF_ENABLED:
+            _perf_log.warning("_do_refresh_ws_table: build_options %.1fms (%d rendered/%d cached)",
+                              (_time.monotonic() - _t0) * 1000, n_rendered, len(items) - n_rendered)
 
         # Insert "earlier" divider between today and non-today items
         sep_idx = next((i for i, t in enumerate(today_flags) if not t), None)
@@ -1163,36 +1170,50 @@ class OrchestratorApp(App):
         def _opt_id(o):
             return getattr(o, 'id', '__sep__')
         new_ids = [_opt_id(o) for o in final_options]
-        existing_ids = []
-        try:
-            existing_ids = [_opt_id(table.get_option_at_index(i))
-                           for i in range(table.option_count)]
-        except Exception:
-            pass
+        # Use cached IDs to avoid iterating get_option_at_index when structure is stable
+        cached_ids = getattr(self, '_ws_table_ids', None)
+        if cached_ids is None:
+            try:
+                cached_ids = [_opt_id(table.get_option_at_index(i))
+                               for i in range(table.option_count)]
+            except Exception:
+                cached_ids = []
+        _t1 = _time.monotonic() if _PERF_ENABLED else 0
 
+        n_replaced = 0
         with self.batch_update():
-            if new_ids == existing_ids and len(final_options) == table.option_count:
+            if new_ids == cached_ids and len(final_options) == table.option_count:
                 # Structure unchanged — only replace options whose content changed
                 for i, opt in enumerate(final_options):
                     if getattr(opt, 'id', None) is None:
                         continue  # separator, content never changes
+                    cached_prompt = render_cache.get(opt.id)
+                    old_fp_prompt = render_cache.get(opt.id)  # already updated in new_cache
+                    # Compare against what we had before this cycle
+                    prev_cached = render_cache.get(opt.id) if render_cache is not new_cache else None
                     try:
                         existing = table.get_option_at_index(i)
                         if existing.prompt != opt.prompt:
                             table.replace_option_prompt_at_index(i, opt.prompt)
+                            n_replaced += 1
                     except Exception:
                         table.replace_option_prompt_at_index(i, opt.prompt)
+                        n_replaced += 1
+                self._ws_table_ids = new_ids
             else:
                 # Structure changed — full rebuild
                 table.clear_options()
                 table.add_options(final_options)
                 self._olist_restore_cursor(table, old_key, old_idx)
+                self._ws_table_ids = new_ids
             self._update_all_bars()
             new_key = self._olist_cursor_key(table)
             self._update_preview(force=(new_key != old_key))
         if _PERF_ENABLED:
-            _perf_log.warning("_do_refresh_ws_table: %.1fms (%d items)",
-                              (_time.monotonic() - _t0) * 1000, len(items))
+            _perf_log.warning("_do_refresh_ws_table: id_check %.1fms, batch_update %.1fms (%d replaced), total %.1fms",
+                              (_t1 - _t0) * 1000,
+                              (_time.monotonic() - _t1) * 1000, n_replaced,
+                              (_time.monotonic() - _t0) * 1000)
 
     def _selected_ws(self) -> Workstream | None:
         try:

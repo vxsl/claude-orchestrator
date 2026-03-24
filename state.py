@@ -470,7 +470,7 @@ class AppState:
 
     def __init__(self, store: Store | None = None):
         self.store = store or Store()
-        self.filter_mode: str = "all"
+        self.filter_mode: str = "active"
         self.sort_mode: str = "updated"
         self.search_text: str = ""
         self.sessions: list[ClaudeSession] = []
