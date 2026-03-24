@@ -230,10 +230,7 @@ class OrchestratorApp(App):
         self._ws_pending_session: dict[str, str] = {}  # ws_id -> session_id for reuse on "c"
 
     def on_key(self, event) -> None:
-        # Temporary key debug — remove after identifying ctrl+</>  key names
-        import pathlib
-        pathlib.Path("/tmp/orch-keys.log").open("a").write(f"key={event.key!r} char={event.character!r}\n")
-        if event.key in ("ctrl+j", "ctrl+k"):
+if event.key in ("ctrl+j", "ctrl+k"):
             event.prevent_default()
             event.stop()
             screen = self.screen
