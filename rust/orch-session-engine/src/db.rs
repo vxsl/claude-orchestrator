@@ -18,7 +18,17 @@ pub fn open_db(path: &Path) -> Result<Connection> {
         ",
     )?;
     create_tables(&conn)?;
+    migrate(&conn)?;
     Ok(conn)
+}
+
+/// Add columns that didn't exist in older schema versions.
+fn migrate(conn: &Connection) -> Result<()> {
+    let _ = conn.execute(
+        "ALTER TABLE sessions ADD COLUMN total_work_ms INTEGER NOT NULL DEFAULT 0",
+        [],
+    );
+    Ok(())
 }
 
 fn create_tables(conn: &Connection) -> Result<()> {
@@ -53,6 +63,7 @@ fn create_tables(conn: &Connection) -> Result<()> {
             git_branch          TEXT NOT NULL DEFAULT '',
             first_message       TEXT NOT NULL DEFAULT '',
             context_tokens      INTEGER NOT NULL DEFAULT 0,
+            total_work_ms       INTEGER NOT NULL DEFAULT 0,
             mtime               REAL NOT NULL DEFAULT 0
         );
 
@@ -148,11 +159,12 @@ pub fn upsert_session(
             model, jsonl_path, is_live, last_message_role, last_user_message_at,
             last_stop_reason, turn_complete, all_session_ids, last_message_text,
             last_user_message_text, last_tool_name, last_commit_sha, last_commit_summary,
-            tool_counts, files_mutated, git_branch, first_message, context_tokens, mtime
+            tool_counts, files_mutated, git_branch, first_message, context_tokens,
+            total_work_ms, mtime
         ) VALUES (
             ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10,
             ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19,
-            ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29
+            ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30
         )
         ON CONFLICT(session_id) DO UPDATE SET
             project_dir = excluded.project_dir,
@@ -182,6 +194,7 @@ pub fn upsert_session(
             git_branch = excluded.git_branch,
             first_message = excluded.first_message,
             context_tokens = excluded.context_tokens,
+            total_work_ms = excluded.total_work_ms,
             mtime = excluded.mtime",
         params![
             session.session_id,
@@ -212,6 +225,7 @@ pub fn upsert_session(
             session.git_branch,
             session.first_message,
             session.context_tokens,
+            session.total_work_ms,
             mtime,
         ],
     )?;

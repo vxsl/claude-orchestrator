@@ -108,6 +108,7 @@ def _hydrate_session(row: dict) -> ClaudeSession:
         git_branch=row["git_branch"],
         first_message=row["first_message"],
         context_tokens=row["context_tokens"],
+        total_work_ms=row.get("total_work_ms", 0),
     )
 
 
