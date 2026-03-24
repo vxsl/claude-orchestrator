@@ -291,15 +291,17 @@ class SessionHeaderWidget(Static):
             first_line_chars = max(1, w - len(prefix))
             line_a_text = clean[:first_line_chars]
             remainder = clean[first_line_chars:]
+            pad_a = " " * max(0, w - len(prefix) - len(line_a_text))
             all_lines.append(
                 f"[{C_DIM} on black]{_esc(prefix)}[/{C_DIM} on black]"
-                f"[bold italic {C_MID} on black]{_esc(line_a_text)}[/bold italic {C_MID} on black]"
+                f"[bold italic {C_MID} on black]{_esc(line_a_text)}{pad_a}[/bold italic {C_MID} on black]"
             )
             if remainder:
                 line_b = remainder[:w]
                 if len(remainder) > w:
                     line_b += "…"
-                all_lines.append(f"[bold italic {C_MID} on black]{_esc(line_b)}[/bold italic {C_MID} on black]")
+                pad_b = " " * max(0, w - len(line_b))
+                all_lines.append(f"[bold italic {C_MID} on black]{_esc(line_b)}{pad_b}[/bold italic {C_MID} on black]")
 
         self.app.call_from_thread(self.update, "\n".join(all_lines))
 
