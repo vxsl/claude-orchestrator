@@ -375,6 +375,22 @@ class Store:
         ws.touch()
         for i, existing in enumerate(self.workstreams):
             if existing.id == ws.id:
+                # Additive merge: preserve session state entries from the current
+                # in-memory ws that the incoming ws doesn't have.  This protects
+                # against stale/ghost screens (which hold old ws objects) clobbering
+                # archive/shelve/delete state that was written after they were created.
+                #
+                # When the user explicitly un-archives a session, `existing` IS `ws`
+                # (same Python object, since the previous update() set workstreams[i]=ws),
+                # so the merge loop sees the same dict on both sides and adds nothing.
+                # Only stale screens (different object, missing entries) get merged.
+                if existing is not ws:
+                    for field in ("archived_sessions", "shelved_sessions", "deleted_sessions"):
+                        existing_dict: dict = getattr(existing, field, {})
+                        ws_dict: dict = getattr(ws, field, {})
+                        for sid, ts in existing_dict.items():
+                            if sid not in ws_dict:
+                                ws_dict[sid] = ts
                 self.workstreams[i] = ws
                 break
         self.save()
