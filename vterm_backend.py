@@ -207,6 +207,7 @@ class VTermBackend:
     def _on_settermprop(self, prop, val, user):
         if prop == _PROP_CURSORSHAPE and val:
             self.cursor_shape = ctypes.cast(val, POINTER(c_int))[0]
+            self.dirty_rows.add(self.cursor_y)  # shape change has no damage event
         elif prop == _PROP_MOUSE and val:
             self.mouse_tracking = ctypes.cast(val, POINTER(c_int))[0] > 0
         return 0
@@ -288,12 +289,15 @@ class VTermBackend:
             pos.col = x
             _vterm_screen_get_cell(screen, pos, cell_ref)
 
+            # Inline color conversion needed for both cursor and normal cells
+            fg_color = self._color_to_str(cell.fg, ctmp, screen)
+            bg_color = self._color_to_str(cell.bg, ctmp, screen)
             if x == cursor_x:
-                key = ("cursor", self.cursor_shape)
+                if self.cursor_shape == 1:
+                    key = ("cursor", 1)  # block: reverse video
+                else:
+                    key = ("cursor_bar", fg_color, bg_color, cell.attrs)  # bar: underline
             else:
-                # Inline color conversion to avoid method call overhead
-                fg_color = self._color_to_str(cell.fg, ctmp, screen)
-                bg_color = self._color_to_str(cell.bg, ctmp, screen)
                 key = (fg_color, bg_color, cell.attrs)
 
             # Get character

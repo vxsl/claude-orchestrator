@@ -842,9 +842,18 @@ class TerminalWidget(Widget, can_focus=True):
         if cached is not None:
             return cached
         if isinstance(key, tuple) and key[0] == "cursor":
-            shape = key[1] if len(key) > 1 else 1
-            # shape: 1=block, 2=underline, 3=bar (libvterm) or DECSCUSR 5/6
-            style = Style(reverse=True) if shape == 1 else Style(underline=True)
+            style = Style(reverse=True)
+        elif isinstance(key, tuple) and key[0] == "cursor_bar":
+            # Bar cursor: cell's natural style + underline to mark position
+            _, fg, bg, attrs = key
+            style = Style(
+                color=fg, bgcolor=bg,
+                bold=bool(attrs & 0x01),
+                italic=bool(attrs & 0x08),
+                underline=True,
+                strike=bool(attrs & 0x80),
+                reverse=bool(attrs & 0x20),
+            )
         else:
             fg, bg, attrs = key
             style = Style(
@@ -911,7 +920,19 @@ class TerminalWidget(Widget, can_focus=True):
             cell = backend.get_cell(y, x)
 
             if x == cursor_x:
-                style = Style(reverse=True) if backend.cursor_shape == 1 else Style(underline=True)
+                if backend.cursor_shape == 1:
+                    style = Style(reverse=True)
+                else:
+                    attrs = cell.attrs
+                    style = Style(
+                        color=backend.color_to_rich(cell.fg),
+                        bgcolor=backend.color_to_rich(cell.bg),
+                        bold=bool(attrs & 0x01),
+                        italic=bool(attrs & 0x08),
+                        underline=True,
+                        strike=bool(attrs & 0x80),
+                        reverse=bool(attrs & 0x20),
+                    )
             else:
                 attrs = cell.attrs
                 style = Style(
@@ -954,7 +975,17 @@ class TerminalWidget(Widget, can_focus=True):
             char: Char = line[x]
 
             if x == cursor_x and self.has_focus:
-                style = Style(reverse=True) if self._cursor_shape in (1, 2) else Style(underline=True)
+                if self._cursor_shape in (1, 2):
+                    style = Style(reverse=True)
+                else:
+                    style = Style(
+                        color=_pyte_color(char.fg),
+                        bgcolor=_pyte_color(char.bg),
+                        bold=char.bold,
+                        italic=char.italics,
+                        underline=True,
+                        strike=char.strikethrough,
+                    )
             else:
                 style = _char_style(char)
 
