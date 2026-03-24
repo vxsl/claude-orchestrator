@@ -700,12 +700,17 @@ def parse_session(jsonl_path: Path) -> Optional[ClaudeSession]:
                                         session.first_message = text[:200]
                                         break
 
-                # Track timestamps
+                # Track timestamps — CLI-local messages (slash commands,
+                # local-command output) are excluded from last_ts so that
+                # last_activity reflects meaningful Claude activity only.
+                # This lets _is_session_seen use last_activity as the anchor
+                # without being fooled by automated command bookkeeping.
                 ts = data.get("timestamp")
                 if ts:
                     if first_ts is None:
                         first_ts = ts
-                    last_ts = ts
+                    if not _is_cli_local_message(data):
+                        last_ts = ts
 
                 # Track last message role (user or assistant)
                 if msg_type in ("user", "assistant"):
@@ -719,7 +724,11 @@ def parse_session(jsonl_path: Path) -> Optional[ClaudeSession]:
                         # doesn't mistake a new user prompt for "your turn".
                         session.last_stop_reason = ""
                         session.last_tool_name = ""
-                        if ts:
+                        if ts and not _is_cli_local_message(data):
+                            # Don't let CLI-local messages (slash commands,
+                            # command output) bump last_user_message_at — that
+                            # timestamp drives the "seen" indicator and would
+                            # make sessions appear unseen after automated cmds.
                             session.last_user_message_at = ts
                             if _is_human_turn(data):
                                 session.last_human_turn_at = ts
@@ -845,7 +854,7 @@ def refresh_session_tail(session: ClaudeSession, tail_bytes: int = 8192) -> bool
                 continue
 
             ts = data.get("timestamp")
-            if ts:
+            if ts and not _is_cli_local_message(data):
                 session.last_activity = ts
 
             msg_type = data.get("type", "")
@@ -864,7 +873,7 @@ def refresh_session_tail(session: ClaudeSession, tail_bytes: int = 8192) -> bool
                 if msg_type == "user":
                     session.last_stop_reason = ""
                     session.last_tool_name = ""
-                    if ts:
+                    if ts and not _is_cli_local_message(data):
                         session.last_user_message_at = ts
                         if _is_human_turn(data):
                             session.last_human_turn_at = ts

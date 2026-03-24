@@ -367,9 +367,11 @@ def _is_session_seen(session, last_seen: dict[str, str] | None = None) -> bool:
     seen_ts = last_seen.get(session.session_id)
     if not seen_ts:
         return False
-    # Use last_user_message_at as the stable "something happened" marker.
-    # Falls back to last_activity for sessions without user messages.
-    anchor = getattr(session, 'last_user_message_at', '') or session.last_activity or ''
+    # Use last_activity as the anchor: it captures when Claude last
+    # responded (turn_duration / stop_hook_summary) without being bumped
+    # by CLI-local messages (those are excluded from last_activity in the
+    # parser).  Falls back to last_user_message_at (e.g. interrupt markers).
+    anchor = session.last_activity or getattr(session, 'last_user_message_at', '') or ''
     if not anchor:
         return False
     seen_dt = _parse_iso(seen_ts)

@@ -411,13 +411,17 @@ pub fn parse_session(jsonl_path: &Path) -> Result<Session> {
             }
         }
 
-        // Track timestamps
+        // Track timestamps — CLI-local messages excluded from last_ts so
+        // that last_activity reflects meaningful Claude activity only.
+        // _is_session_seen uses last_activity as its anchor.
         if let Some(ts) = data["timestamp"].as_str() {
             if !ts.is_empty() {
                 if first_ts.is_none() {
                     first_ts = Some(ts.to_string());
                 }
-                last_ts = Some(ts.to_string());
+                if !is_cli_local_message(&data) {
+                    last_ts = Some(ts.to_string());
+                }
             }
         }
 
@@ -433,9 +437,13 @@ pub fn parse_session(jsonl_path: &Path) -> Result<Session> {
             if msg_type == "user" {
                 session.last_stop_reason.clear();
                 session.last_tool_name.clear();
-                if let Some(ts) = data["timestamp"].as_str() {
-                    if !ts.is_empty() {
-                        session.last_user_message_at = ts.to_string();
+                // CLI-local messages must not bump last_user_message_at —
+                // that timestamp drives the "seen" indicator.
+                if !is_cli_local_message(&data) {
+                    if let Some(ts) = data["timestamp"].as_str() {
+                        if !ts.is_empty() {
+                            session.last_user_message_at = ts.to_string();
+                        }
                     }
                 }
             }
@@ -600,7 +608,7 @@ pub fn refresh_session_tail(session: &mut Session, tail_bytes: u64) -> Result<bo
         };
 
         if let Some(ts) = data["timestamp"].as_str() {
-            if !ts.is_empty() {
+            if !ts.is_empty() && !is_cli_local_message(&data) {
                 session.last_activity = ts.to_string();
             }
         }
@@ -619,18 +627,17 @@ pub fn refresh_session_tail(session: &mut Session, tail_bytes: u64) -> Result<bo
         }
 
         if msg_type == "user" || msg_type == "assistant" {
-            let is_meta_user = msg_type == "user"
-                && (data["isMeta"].as_bool() == Some(true)
-                    || data["userType"].as_str() == Some("external"));
-            if !is_meta_user {
+            if !(msg_type == "user" && is_cli_local_message(&data)) {
                 session.turn_complete = false;
             }
             if msg_type == "user" {
                 session.last_stop_reason.clear();
                 session.last_tool_name.clear();
-                if let Some(ts) = data["timestamp"].as_str() {
-                    if !ts.is_empty() {
-                        session.last_user_message_at = ts.to_string();
+                if !is_cli_local_message(&data) {
+                    if let Some(ts) = data["timestamp"].as_str() {
+                        if !ts.is_empty() {
+                            session.last_user_message_at = ts.to_string();
+                        }
                     }
                 }
             }
