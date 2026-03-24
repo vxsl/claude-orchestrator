@@ -1143,13 +1143,18 @@ class OrchestratorApp(App):
 
         # ── Line 2: session activity ──
         sessions = self.state.sessions
+        archived_sids = {
+            sid for w in self.state.store.active
+            for sid in w.archived_sessions
+        }
         thinking = sum(
             1 for s in sessions
             if session_activity(s, self.state.last_seen_cache) == ThreadActivity.THINKING
         )
         your_turn = sum(
             1 for s in sessions
-            if session_activity(s, self.state.last_seen_cache) in (
+            if s.session_id not in archived_sids
+            and session_activity(s, self.state.last_seen_cache) in (
                 ThreadActivity.AWAITING_INPUT, ThreadActivity.RESPONSE_READY
             )
         )
