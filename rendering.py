@@ -50,6 +50,7 @@ BG_BASE = "#000000"      # true black — matches terminal
 BG_SURFACE = "#060606"   # barely lifted — focused panels
 BG_RAISED = "#0d1117"    # bars, headers, inputs
 BG_CHROME = "#060809"    # tab bar and footer — darker chrome, between black and panels
+BG_THINKING = "#081c1f"  # dark cyan tint — active thinking rows
 
 
 # ─── Staleness helpers ──────────────────────────────────────────────
@@ -533,7 +534,10 @@ def _render_ws_option(
 
     # Trailing blank line for visual separation
     lines.append("")
-    return "\n".join(lines)
+    result = "\n".join(lines)
+    if best == ThreadActivity.THINKING:
+        result = f"[on {BG_THINKING}]{result}[/on {BG_THINKING}]"
+    return result
 
 
 # ─── Session Option Rendering ────────────────────────────────────────
@@ -805,7 +809,10 @@ def _render_session_option(
         msg_color = s_mid if is_user else (C_FAINT if stale else "#3b4048")
         lines.append(f"{INDENT}{prefix}[italic {msg_color}]{snippet}[/italic {msg_color}]")
 
-    return "\n".join(lines)
+    result = "\n".join(lines)
+    if act == ThreadActivity.THINKING:
+        result = f"[on {BG_THINKING}]{result}[/on {BG_THINKING}]"
+    return result
 
 
 # ─── Content search result rendering ─────────────────────────────
