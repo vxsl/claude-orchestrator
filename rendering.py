@@ -567,7 +567,7 @@ _BADGE_WIDTHS = {
 
 _BAR_CATS = [
     ("mutate", C_ORANGE),
-    ("bash",   C_MID),
+    ("bash",   C_DIM),
     ("read",   C_DIM),
     ("search", C_DIM),
     ("agent",  C_RESOLVED),
