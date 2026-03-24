@@ -289,7 +289,8 @@ class TodoScreen(_VimOptionListMixin, ModalScreen[None]):
         Binding("escape", "dismiss", "Back"),
         Binding("backspace,ctrl+h", "go_back", "^H back"),
         Binding("a", "add_todo", "Add"),
-        Binding("enter,space", "toggle_done", "Toggle done", priority=True),
+        Binding("enter", "spawn_todo", "Spawn", priority=True),
+        Binding("space", "toggle_done", "Toggle done", priority=True),
         Binding("e", "edit_todo", "Edit"),
         Binding("c", "spawn_todo", "Spawn"),
         Binding("d", "delete_todo", "Delete"),
@@ -486,7 +487,7 @@ class TodoScreen(_VimOptionListMixin, ModalScreen[None]):
 
     def _render_help(self) -> str:
         pairs = [
-            ("a", "add"), ("Enter", "done"), ("e", "edit"), ("c", "spawn"),
+            ("a", "add"), ("Enter", "spawn"), ("Space", "done"), ("e", "edit"),
             ("d", "del"), ("E", "ctx"), ("J/K", "reorder"), ("q", "back"),
         ]
         return "  ".join(f"[{C_YELLOW}]{k}[/{C_YELLOW}] {v}" for k, v in pairs)
