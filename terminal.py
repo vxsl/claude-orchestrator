@@ -379,6 +379,12 @@ class TerminalWidget(Widget, can_focus=True):
             os.waitpid(self._pid, 0)
         except (OSError, ChildProcessError):
             pass
+        # Close the PTY master fd to avoid leaking file descriptors.
+        if self._p_out is not None:
+            try:
+                self._p_out.close()
+            except OSError:
+                pass
         self._pid = None
         self._fd = None
         self._p_out = None
@@ -578,6 +584,12 @@ class TerminalWidget(Widget, can_focus=True):
                 os.waitpid(self._pid, 0)
             except (OSError, ChildProcessError):
                 pass
+        # Close the PTY master fd to avoid leaking file descriptors.
+        if self._p_out is not None:
+            try:
+                self._p_out.close()
+            except OSError:
+                pass
         self._pid = None
         self._fd = None
         self._p_out = None
@@ -606,67 +618,46 @@ class TerminalWidget(Widget, can_focus=True):
             except OSError:
                 pass
 
+    def _blocking_pty_read(self) -> bytes | None:
+        """Blocking read from the PTY master — runs in a thread pool worker.
+
+        Returns raw bytes, empty bytes on EOF, or None on error.
+        """
+        try:
+            p_out = self._p_out
+            if p_out is None:
+                return None
+            return p_out.read(16384)
+        except Exception:
+            return None
+
     async def _read_loop(self) -> None:
-        """Read PTY output and feed to terminal backend."""
+        """Read PTY output and feed to terminal backend.
+
+        Uses run_in_executor so the blocking read happens in a thread pool
+        worker instead of an add_reader callback.  This means the event loop
+        only wakes up when data actually arrives, keeping CPU idle between
+        chunks and leaving headroom for keystroke processing.
+        """
         loop = asyncio.get_running_loop()
-        queue: asyncio.Queue[bytes | None] = asyncio.Queue()
-        event = asyncio.Event()
-
-        def _on_output():
-            try:
-                raw = self._p_out.read(65536)
-                if not raw:
-                    # EOF — child process exited.  Remove the reader
-                    # immediately so the event loop stops busy-spinning
-                    # on a perpetually-readable fd.
-                    try:
-                        loop.remove_reader(self._p_out)
-                    except Exception:
-                        pass
-                    queue.put_nowait(None)
-                else:
-                    queue.put_nowait(raw)
-                event.set()
-            except Exception:
-                try:
-                    loop.remove_reader(self._p_out)
-                except Exception:
-                    pass
-                queue.put_nowait(None)
-                event.set()
-
-        loop.add_reader(self._p_out, _on_output)
         try:
             while True:
-                await event.wait()
-                event.clear()
-                # Process available chunks in small batches, yielding between
-                # each batch so keystrokes and UI events aren't starved.
-                # Rendering is handled separately by _render_tick at 20fps.
-                chunks_this_batch = 0
-                while not queue.empty():
-                    data = queue.get_nowait()
-                    if data is None:
-                        self.post_message(self.Finished())
-                        return
-                    if self._backend:
-                        self._process_output_vterm(data)
-                    else:
-                        self._process_output(data.decode(errors="replace"))
-                    chunks_this_batch += 1
-                    if chunks_this_batch >= 4:
-                        # Yield to let keystrokes and UI events through.
-                        await asyncio.sleep(0)
-                        chunks_this_batch = 0
-                # Signal render needed; _render_tick will call _refresh_dirty.
+                data = await loop.run_in_executor(
+                    None, self._blocking_pty_read
+                )
+                if not data:
+                    # EOF or error — child process exited
+                    self.post_message(self.Finished())
+                    return
+                if self._backend:
+                    self._process_output_vterm(data)
+                else:
+                    self._process_output(data.decode(errors="replace"))
                 self._has_dirty = True
+                # Yield so keystrokes and UI events aren't starved
+                await asyncio.sleep(0)
         except asyncio.CancelledError:
             pass
-        finally:
-            try:
-                loop.remove_reader(self._p_out)
-            except Exception:
-                pass
 
     def _process_output(self, data: str) -> None:
         """Feed data to pyte and detect mouse tracking changes."""
