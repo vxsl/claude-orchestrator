@@ -3006,7 +3006,6 @@ class CurrentSessionsScreen(_VimOptionListMixin, ModalScreen[None]):
         Binding("backspace,ctrl+h", "dismiss", "back"),
         Binding("enter,l", "select_session", show=False),
         Binding("r", "resume", "Resume"),
-        Binding("ctrl+@", "archive_session", "Archive", show=False),
         Binding("colon", "command_palette", ":", show=False),
         Binding("question_mark", "help", "?", show=False),
     ] + _VimOptionListMixin.VIM_BINDINGS
@@ -3212,14 +3211,16 @@ class CurrentSessionsScreen(_VimOptionListMixin, ModalScreen[None]):
         if ws and sid:
             self.app.launch_claude_session(ws, session_id=sid)
 
-    def action_archive_session(self) -> None:
-        ws, sid = self._get_selected()
-        if not ws or not sid:
-            return
-        if sid not in ws.archived_sessions:
-            ws.archived_sessions[sid] = datetime.now(timezone.utc).isoformat()
-            self.app.state.store.update(ws)
-        self.dismiss()
+    def on_key(self, event) -> None:
+        # ctrl+space — terminals send \x00, Textual may report as ctrl+@ or ctrl+space
+        if event.key in ("ctrl+@", "ctrl+space") or event.character == "\x00":
+            event.stop()
+            event.prevent_default()
+            ws, sid = self._get_selected()
+            if ws and sid and sid not in ws.archived_sessions:
+                ws.archived_sessions[sid] = datetime.now(timezone.utc).isoformat()
+                self.app.state.store.update(ws)
+            self.dismiss()
 
     def action_command_palette(self) -> None:
         self.app.action_command_palette()
