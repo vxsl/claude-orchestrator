@@ -582,9 +582,9 @@ class TodoScreen(_VimOptionListMixin, ModalScreen[None]):
         # Option count doesn't change (toggling done doesn't remove from active).
         from state import AppState
         self.ws = self.store.get(self.ws.id) or self.ws
-        new_items = AppState.active_todos(self.ws)
-        olist = self._focused_olist()
         is_archived = self._active_pane == "archived"
+        new_items = AppState.archived_todos(self.ws) if is_archived else AppState.active_todos(self.ws)
+        olist = self._focused_olist()
         for i, t in enumerate(new_items):
             prompt = _render_todo_option(t, is_archived=is_archived)
             olist.replace_option_prompt_at_index(i, prompt)

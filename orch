@@ -14,4 +14,10 @@ if [ -n "$TMUX" ]; then
 fi
 
 export TEXTUAL_COLOR_SYSTEM=truecolor
-exec -a orch python3 "$SCRIPT_DIR/orch.py" "$@"
+python3 "$SCRIPT_DIR/orch.py" "$@"
+EXIT_CODE=$?
+if [ $EXIT_CODE -ne 0 ]; then
+    echo ""
+    echo "orch exited with code $EXIT_CODE. Press Enter to close."
+    read -r
+fi
