@@ -638,7 +638,15 @@ class ClaudeSessionScreen(Screen):
         log.debug("ClaudeSessionScreen.compose: done")
 
     def on_mount(self) -> None:
-        log.debug("ClaudeSessionScreen.on_mount: starting terminals")
+        log.debug("ClaudeSessionScreen.on_mount: deferring terminal start until after layout")
+        # Defer until after the first layout pass so TerminalWidget.on_resize has fired
+        # and _ncol/_nrow are set to the real widget dimensions. Starting before layout
+        # would create the tmux session at the hardcoded 80x24 default, causing Claude
+        # to render at 80 cols until the next SIGWINCH.
+        self.call_after_refresh(self._start_terminals)
+
+    def _start_terminals(self) -> None:
+        log.debug("ClaudeSessionScreen._start_terminals: starting terminals")
         claude_tw = self.query_one("#cs-terminal", TerminalWidget)
         if self._reattach_tmux:
             # Reattach to a surviving tmux session
@@ -657,7 +665,7 @@ class ClaudeSessionScreen(Screen):
                         log.error("  FAILED to start %s: %s", tw.id, e)
         claude_tw.focus()
         self._update_pane_focus()
-        log.debug("ClaudeSessionScreen.on_mount: done")
+        log.debug("ClaudeSessionScreen._start_terminals: done")
 
     def on_unmount(self) -> None:
         if self._tigrc_path:
