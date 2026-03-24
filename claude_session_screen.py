@@ -304,7 +304,7 @@ class SessionHeaderWidget(Static):
                 else:
                     text = clean
                 is_last = i == len(msgs) - 1
-                pad = " " * max(0, available - len(text) + (0 if is_last else 1))
+                pad = " " * max(0, available - len(text) + (0 if is_last else 2))
                 style = "bold italic" if is_last else "italic"
                 all_lines.append(
                     f"[{C_DIM} on black]{_esc(prefix)}[/{C_DIM} on black]"
