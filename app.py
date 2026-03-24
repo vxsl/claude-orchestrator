@@ -587,13 +587,13 @@ class OrchestratorApp(App):
             is_permanent = tab.ws_id is None
             is_active = i == self.tabs.active_idx
             if is_active and is_permanent:
-                parts.append(f"[bold italic {C_MID} on {BG_RAISED}] {prefix}{_rich_escape(label)} [/]")
+                parts.append(f"[bold italic {C_MID} on {BG_BASE}] {prefix}{_rich_escape(label)} [/]")
             elif is_active:
-                parts.append(f"[bold {C_BLUE} on {BG_RAISED}] {prefix}{_rich_escape(label)} [/]")
+                parts.append(f"[bold {C_BLUE} on {BG_BASE}] {prefix}{_rich_escape(label)} [/]")
             elif is_permanent:
-                parts.append(f"[italic {C_FAINT}] {prefix}{_rich_escape(label)} [/]")
+                parts.append(f"[italic {C_FAINT} on {BG_RAISED}] {prefix}{_rich_escape(label)} [/]")
             else:
-                parts.append(f"[{C_DIM}] {prefix}{_rich_escape(label)} [/{C_DIM}]")
+                parts.append(f"[{C_DIM} on {BG_RAISED}] {prefix}{_rich_escape(label)} [/{C_DIM} on {BG_RAISED}]")
             if i < len(self.tabs.tabs) - 1:
                 parts.append(f"[{C_FAINT}]\u2502[/{C_FAINT}]")
         return "".join(parts)
@@ -1014,7 +1014,7 @@ class OrchestratorApp(App):
         for i, (key, label) in enumerate(filters):
             n = i + 1
             if self.state.filter_mode == key:
-                preset_parts.append(f"[bold {C_BLUE} on #0d1f35][{n}:{label}][/bold {C_BLUE} on #0d1f35]")
+                preset_parts.append(f"[bold {C_MID} on #0d1f35][{n}:{label}][/bold {C_MID} on #0d1f35]")
             else:
                 preset_parts.append(f"[{C_FAINT}]{n}:{label}[/{C_FAINT}]")
         presets = SEP.join(preset_parts)
