@@ -718,7 +718,12 @@ class OrchestratorApp(App):
     def __do_refresh_from_db_inner(self):
         _t0 = _time.monotonic() if _PERF_ENABLED else 0
         threads = discover_threads()
+        if _PERF_ENABLED:
+            _perf_log.warning("_do_refresh_from_db: discover_threads %.1fms", (_time.monotonic() - _t0) * 1000)
+        _t1 = _time.monotonic() if _PERF_ENABLED else 0
         apply_cached_names(threads)
+        if _PERF_ENABLED:
+            _perf_log.warning("_do_refresh_from_db: apply_cached_names %.1fms", (_time.monotonic() - _t1) * 1000)
 
         sessions = []
         for t in threads:
@@ -732,10 +737,12 @@ class OrchestratorApp(App):
                                   (_time.monotonic() - _t0) * 1000)
             return
 
+        _t2 = _time.monotonic() if _PERF_ENABLED else 0
         from workstream_synthesizer import get_discovered_workstreams
         discovered = get_discovered_workstreams(threads)
         if _PERF_ENABLED:
-            _perf_log.warning("_do_refresh_from_db: %.1fms (changed, updating UI)",
+            _perf_log.warning("_do_refresh_from_db: get_discovered_workstreams %.1fms", (_time.monotonic() - _t2) * 1000)
+            _perf_log.warning("_do_refresh_from_db: %.1fms total (changed, updating UI)",
                               (_time.monotonic() - _t0) * 1000)
         self.call_from_thread(self._apply_sessions, sessions, threads, discovered)
 
