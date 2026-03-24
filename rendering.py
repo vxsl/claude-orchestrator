@@ -1140,8 +1140,7 @@ def _render_todo_option(item: TodoItem, is_archived: bool = False) -> str:
         text_fmt = text_esc
     icon_color = C_GOLD if is_crystal and not is_archived else (C_DIM if (is_archived or item.done) else C_LIGHT)
     ctx_hint = f" [{C_GOLD}]\u2726[/{C_GOLD}]" if is_crystal and item.context else (f" [{C_DIM}]+ctx[/{C_DIM}]" if item.context else "")
-    tag = f" [{C_GOLD}]crystallized[/{C_GOLD}]" if is_crystal and not is_archived else ""
     age = _relative_time(item.created_at)
     line1 = f" [{icon_color}]{icon}[/{icon_color}]  {text_fmt}{ctx_hint}"
-    line2 = f"      [{C_DIM}]{age}[/{C_DIM}]{tag}"
+    line2 = f"      [{C_DIM}]{age}[/{C_DIM}]"
     return f"{line1}\n{line2}"
