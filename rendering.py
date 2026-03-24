@@ -567,7 +567,7 @@ _BADGE_WIDTHS = {
 
 _BAR_CATS = [
     ("mutate", C_ORANGE),
-    ("bash",   C_LIGHT),
+    ("bash",   C_MID),
     ("read",   C_DIM),
     ("search", C_DIM),
     ("agent",  C_PURPLE),
@@ -575,7 +575,7 @@ _BAR_CATS = [
 
 _BAR_LEGEND_LABELS = [
     ("code", C_ORANGE),
-    ("bash", C_LIGHT),
+    ("bash", C_MID),
     ("read", C_DIM),
     ("agent", C_PURPLE),
 ]
@@ -591,7 +591,7 @@ def tool_bar_legend() -> str:
 def _tool_bar(tool_counts: dict[str, int], width: int = 6) -> str:
     """Render a mini stacked bar chart of tool usage by category.
 
-    Colors: coding=orange, bash=light, research=dim, agent=purple.
+    Colors: coding=orange, bash=mid, research=dim, agent=purple.
     Returns empty string if no tool usage.
     """
     total = sum(tool_counts.values())
