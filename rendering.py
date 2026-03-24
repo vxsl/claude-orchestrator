@@ -438,7 +438,7 @@ def _render_ws_option(
             branch_markup += f"[{C_RED}]-{git_status.behind}[/{C_RED}]"
 
     if best == ThreadActivity.THINKING:
-        name_markup = f"[bold {C_CYAN}]{name_esc}[/bold {C_CYAN}]"
+        name_markup = f"[bold {C_BLUE}]{name_esc}[/bold {C_BLUE}]"
     else:
         name_markup = f"[{name_bold}{name_color}]{name_esc}[/{name_bold}{name_color}]"
     line1 = f" {icon} {name_markup}{ind_markup}{branch_markup}"
@@ -742,7 +742,7 @@ def _render_session_option(
     elif act == ThreadActivity.IDLE:
         title_fmt = f"[{s_dim}]{title_esc}[/{s_dim}]"
     elif act == ThreadActivity.THINKING:
-        title_fmt = f"[bold {C_CYAN}]{title_esc}[/bold {C_CYAN}]"
+        title_fmt = f"[bold {C_BLUE}]{title_esc}[/bold {C_BLUE}]"
     else:
         title_color = C_DIM if stale else C_LIGHT
         title_fmt = f"[{title_color}]{title_esc}[/{title_color}]"
@@ -1088,7 +1088,7 @@ def _render_notified_session_option(
 
 QUIET_SEPARATOR_LABEL = f"[{C_DIM}]──────────────────────────────────────────────[/{C_DIM}]"
 DEFERRED_SEPARATOR_LABEL = f"[{C_DEFER}]⏸ deferred ─────────────────────────────────[/{C_DEFER}]"
-THINKING_SEPARATOR_LABEL = f"[bold {C_CYAN}]◉[/bold {C_CYAN}] [{C_CYAN}]thinking ────────────────────────────────[/{C_CYAN}]"
+THINKING_SEPARATOR_LABEL = f"[bold {C_BLUE}]◉[/bold {C_BLUE}] [{C_BLUE}]thinking ────────────────────────────────[/{C_BLUE}]"
 
 
 # ─── Todo rendering ────────────────────────────────────────────────
