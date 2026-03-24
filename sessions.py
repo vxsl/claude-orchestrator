@@ -463,17 +463,15 @@ class ClaudeSession:
 
     @property
     def work_time_display(self) -> str:
-        """Total clock time Claude spent working (sum of turn_duration durationMs)."""
-        s = self.total_work_ms // 1000
-        if s == 0:
+        """Total clock time Claude spent working, rounded to whole minutes."""
+        if self.total_work_ms == 0:
             return ""
-        if s < 60:
-            return f"{s}s"
-        m = s // 60
+        m = round(self.total_work_ms / 60_000)
+        if m == 0:
+            return "1m"
         if m < 60:
-            return f"{m}m{s % 60:02d}s"
-        h = m // 60
-        return f"{h}h{m % 60:02d}m"
+            return f"{m}m"
+        return f"{round(m / 60)}h"
 
     @property
     def display_name(self) -> str:

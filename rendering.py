@@ -132,17 +132,14 @@ def _colored_tokens(session_or_thread) -> str:
 
 
 def _work_time_str(total_ms: int) -> str:
-    """Format total Claude work time from milliseconds."""
-    s = total_ms // 1000
-    if s == 0:
-        return ""
-    if s < 60:
-        return f"{s}s"
-    m = s // 60
+    """Format total Claude work time, rounded to whole minutes (or hours)."""
+    m = round(total_ms / 60_000)
+    if m == 0:
+        return "1m"
     if m < 60:
-        return f"{m}m{s % 60:02d}s"
-    h = m // 60
-    return f"{h}h{m % 60:02d}m"
+        return f"{m}m"
+    h = round(m / 60)
+    return f"{h}h"
 
 
 # ─── Context window bar ────────────────────────────────────────────
@@ -518,7 +515,7 @@ def _render_ws_option(
             parts.append(_token_color_markup(tk, total_tokens))
         total_work_ms = sum(s.total_work_ms for s in ws_sessions)
         if total_work_ms > 0:
-            parts.append(f"[{meta_dim}]⚙{_work_time_str(total_work_ms)}[/{meta_dim}]")
+            parts.append(f"[{meta_dim}]{_work_time_str(total_work_ms)} think[/{meta_dim}]")
 
     # Use best session activity time (matches sort order), fall back to updated_at
     if ws_sessions:
@@ -688,8 +685,8 @@ def _render_session_option(
         dur_str = f"{duration:<8}" if duration else ""
         dur_len = 8 if duration else 0
         work_time = s.work_time_display
-        work_str = f"⚙{work_time:<7}" if work_time else ""
-        work_len = 8 if work_time else 0
+        work_str = f"{work_time} think  " if work_time else ""
+        work_len = len(work_str) if work_time else 0
         model_len = 0 if model == "opus" else 8
         meta_left_len = 4 + model_len + 10 + 8 + dur_len + work_len
         sid_gap = max(2, LINE_WIDTH - meta_left_len - 8)
@@ -789,8 +786,8 @@ def _render_session_option(
     dur_str = f"{duration:<8}" if duration else ""
     dur_len = 8 if duration else 0
     work_time = s.work_time_display
-    work_str = f"⚙{work_time:<7}" if work_time else ""
-    work_len = 8 if work_time else 0
+    work_str = f"{work_time} think  " if work_time else ""
+    work_len = len(work_str) if work_time else 0
     model_len = 0 if model == "opus" else 8
     meta_left_len = 4 + model_len + 10 + 8 + dur_len + work_len
     sid_gap = max(2, LINE_WIDTH - meta_left_len - 8)
