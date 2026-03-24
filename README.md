@@ -8,6 +8,8 @@ Built with Python and [Textual](https://textual.textualize.io/) with embedded li
 
 <img width="3023" height="1889" alt="2026-03-24_14-08" src="https://github.com/user-attachments/assets/f5f01fb0-7669-416c-882d-c4796f0f050d" />
 
+> **Companion tool:** orch is designed to be used alongside [dev-workflow-tools](https://github.com/vxsl/dev-workflow-tools) — git/Jira/GitLab workflow scripts that power the ticket browser, branch navigator, MR shipping, and worktree enrichment. Install it at `~/bin/dev-workflow-tools` to unlock the full feature set.
+
 ## Philosophy
 
 **Thought to thread.** The gap between "I have an idea" and "Claude is working on it" should be zero friction. Three paths, all converging:
@@ -168,7 +170,7 @@ Sessions show live activity: **thinking** (animated cyan throbber), **your turn*
 
 ## Dev-Workflow Tools
 
-Orch integrates [dev-workflow-tools](~/bin/dev-workflow-tools) when available:
+Orch integrates [dev-workflow-tools](https://github.com/vxsl/dev-workflow-tools) when available (install at `~/bin/dev-workflow-tools`):
 
 - **oneshot** — staged changes → branch → commit → MR in one command
 - **publish-changes** — create GitLab MRs with Jira integration
@@ -224,7 +226,7 @@ A Rust binary (`rust/orch-session-engine/`) provides fast JSONL parsing and SQLi
 - **Textual** — TUI framework
 - **libvterm** (optional) — system library for terminal emulation. Falls back to pyte.
 - **Rust** (optional) — for the session engine. Falls back to Python.
-- **dev-workflow-tools** (optional) — `~/bin/dev-workflow-tools` for Jira/GitLab integration
+- **[dev-workflow-tools](https://github.com/vxsl/dev-workflow-tools)** (optional) — install at `~/bin/dev-workflow-tools` for Jira/GitLab integration
 
 ## Data
 
