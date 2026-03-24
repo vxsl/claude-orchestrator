@@ -235,7 +235,7 @@ class FuzzyPickerScreen(ModalScreen):
 
     BINDINGS = [
         Binding("escape", "cancel", "Cancel", priority=True),
-        Binding("backspace,ctrl+h", "go_back", "^H back", priority=True),
+        # ctrl+h handled in on_key (backspace must reach Input for deletion)
     ]
 
     DEFAULT_CSS = f"""
@@ -278,8 +278,15 @@ class FuzzyPickerScreen(ModalScreen):
         self.dismiss(None)
 
     def on_key(self, event) -> None:
-        """Cancel on backspace when input is empty."""
+        """Handle backspace/ctrl+h: ctrl+h always goes back, backspace only when input empty."""
         if event.key == "backspace":
+            # ctrl+h (char \x08) — always go back
+            if event.character == "\x08":
+                self.dismiss(None)
+                event.stop()
+                event.prevent_default()
+                return
+            # Physical backspace (char \x7f) — go back only if search is empty
             try:
                 inp = self.query_one("#fp-input", Input)
                 if not inp.value:
