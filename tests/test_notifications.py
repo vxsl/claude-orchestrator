@@ -190,6 +190,7 @@ class TestDetailScreenPanelIds:
         obj._detail_sessions = sessions or []
         obj._archived_sessions = archived or []
         obj._feed_notifications = feed or []
+        obj._sidebar_enabled = False
         # Call the real method
         obj._panel_ids = DetailScreen._panel_ids.__get__(obj)
         return obj

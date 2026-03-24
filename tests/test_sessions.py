@@ -72,7 +72,7 @@ class TestClaudeSessionDisplay:
         s = ClaudeSession(session_id="test", project_dir="d", project_path="/p",
                           last_activity=ts)
         age = s.age
-        assert "ago" in age or "just now" in age
+        assert age in ("now", "0s") or age[:-1].isdigit()  # compact format: "0s", "5s", etc.
 
 
 # ─── Project Dir Decoding ───────────────────────────────────────────
