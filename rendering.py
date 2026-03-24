@@ -401,9 +401,13 @@ def _render_ws_option(
     """
     IND = "     "
 
-    # ── Staleness: not active today → dim title/description one notch ──
-    stale = ws_sessions and not _any_session_today(ws_sessions)
-    name_color = C_MID if stale else C_LIGHT
+    # ── Staleness: not active today → dim two notches ──
+    # Stale if: has sessions but none active today, OR no sessions and ws itself not updated today
+    if ws_sessions:
+        stale = not _any_session_today(ws_sessions)
+    else:
+        stale = not _is_today(ws.updated_at)
+    name_color = C_DIM if stale else C_LIGHT
     name_bold = "" if stale else "bold "
     desc_color = C_FAINT if stale else C_DIM
     meta_dim = C_FAINT if stale else C_DIM
@@ -627,9 +631,9 @@ def _render_session_option(
     else:
         LINE_WIDTH = title_width + 20  # right-alignment anchor
 
-    # ── Staleness: not active today → dim one notch ──
+    # ── Staleness: not active today → dim two notches ──
     stale = not _is_today(s.last_activity or s.started_at or "")
-    s_mid = C_DIM if stale else C_MID       # secondary text
+    s_mid = C_FAINT if stale else C_MID     # secondary text
     s_dim = C_FAINT if stale else C_DIM     # tertiary text
 
     # Resolved state: session's last action was a git commit
@@ -656,13 +660,13 @@ def _render_session_option(
     age_str = s.age
 
     # Title styling: committed = dim, idle = dim, active = bright
-    # Stale sessions shift bright → mid
+    # Stale sessions shift bright → dim (two notches)
     if committed:
         title_fmt = f"[{s_dim}]{title_esc}[/{s_dim}]"
     elif act == ThreadActivity.IDLE:
         title_fmt = f"[{s_dim}]{title_esc}[/{s_dim}]"
     else:
-        title_color = C_MID if stale else C_LIGHT
+        title_color = C_DIM if stale else C_LIGHT
         title_fmt = f"[{title_color}]{title_esc}[/{title_color}]"
 
     # Line 1: " {icon} {title}          {badge}"
