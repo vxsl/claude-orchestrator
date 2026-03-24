@@ -510,16 +510,16 @@ class TodoScreen(_VimOptionListMixin, ModalScreen[None]):
         item = self._highlighted_item()
         if not item:
             return
+        olist = self.query_one("#todo-list", OptionList)
+        cur_idx = olist.highlighted or 0
         self._app_state.toggle_todo(self.ws.id, item.id)
         # Replace prompts in place — avoids clear_options() focus loss.
         from state import AppState
         self.ws = self.store.get(self.ws.id) or self.ws
         new_items = AppState.active_todos(self.ws)
-        olist = self.query_one("#todo-list", OptionList)
         for i, t in enumerate(new_items):
             olist.replace_option_prompt_at_index(i, _render_todo_option(t))
-        new_idx = next((i for i, t in enumerate(new_items) if t.id == item.id), 0)
-        olist.highlighted = new_idx
+        olist.highlighted = min(cur_idx, len(new_items) - 1)
         self._active_items = new_items
         self._update_header()
         self._update_context_preview()
