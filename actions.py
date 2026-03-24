@@ -720,7 +720,8 @@ def discover_worktrees(repo_paths: list[str]) -> list[dict]:
                 continue
 
             branch = wt.get("branch", "")
-            if not branch or branch in _SKIP_BRANCHES:
+            is_primary = (path == repo.rstrip("/"))
+            if not branch or (branch in _SKIP_BRANCHES and not is_primary):
                 continue
 
             ticket_key = extract_ticket_key(branch)
@@ -729,6 +730,7 @@ def discover_worktrees(repo_paths: list[str]) -> list[dict]:
                 "branch": branch,
                 "ticket_key": ticket_key,
                 "repo_path": repo,
+                "is_primary": is_primary,
             })
 
     return results

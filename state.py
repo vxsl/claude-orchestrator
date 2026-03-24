@@ -770,6 +770,8 @@ class AppState:
                 name = f"{ticket_key}: {jira_info.summary}"
             elif ticket_key:
                 name = f"{ticket_key}: {branch}"
+            elif wt.get("is_primary"):
+                name = Path(path).name  # e.g. "ul" for the main repo checkout
             else:
                 name = branch
 
