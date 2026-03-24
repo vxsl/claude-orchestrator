@@ -1225,7 +1225,15 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         # Rebuild after layout is computed so _session_line_width returns the real width.
         # On first mount the OptionList size is 0, causing half-width rendering until
         # the next timer tick. call_after_refresh defers until Textual has laid out the DOM.
-        self.call_after_refresh(self._build_session_list)
+        self.call_after_refresh(self._initial_build_and_focus)
+
+    def _initial_build_and_focus(self):
+        """Rebuild session list at real width, then ensure first item is highlighted."""
+        self._build_session_list()
+        olist = self.query_one("#detail-sessions", OptionList)
+        if olist.option_count > 0 and olist.highlighted is None:
+            olist.highlighted = 0
+        olist.focus()
 
     def on_screen_resume(self):
         """Lightweight refresh when returning to a cached screen."""
