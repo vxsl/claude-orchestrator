@@ -1241,19 +1241,20 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
             return  # on_mount handles first activation
         # Refresh workstream data (may have changed while screen was suspended)
         self.ws = self.store.get(self.ws.id) or self.ws
-        self._last_seen_cache = load_last_seen()
-        self._mark_all_seen()
-        self._load_feed()
-        self._load_detail_sessions()
-        # Sync-refresh live sessions so activity badges are correct immediately
-        # (avoids brief stale "your turn" flash when returning from session view)
-        self._sync_refresh_live()
-        self.query_one("#detail-title", Static).update(self._render_title() + "  " + self._render_meta())
-        try:
-            self.query_one("#detail-body", Static).update(self._render_body())
-        except Exception:
-            pass
-        self._update_pane_labels()
+        with self.app.batch_update():
+            self._last_seen_cache = load_last_seen()
+            self._mark_all_seen()
+            self._load_feed()
+            self._load_detail_sessions()
+            # Sync-refresh live sessions so activity badges are correct immediately
+            # (avoids brief stale "your turn" flash when returning from session view)
+            self._sync_refresh_live()
+            self.query_one("#detail-title", Static).update(self._render_title() + "  " + self._render_meta())
+            try:
+                self.query_one("#detail-body", Static).update(self._render_body())
+            except Exception:
+                pass
+            self._update_pane_labels()
         self.query_one("#detail-sessions", OptionList).focus()
         # Restart periodic refresh
         self._refresh_timer = self.set_interval(30, self._periodic_refresh)
@@ -1533,7 +1534,8 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         if len(all_elevated) != self._notified_count or olist.option_count != expected_count:
             old_sid = self._highlighted_session_id(olist)
             old_idx = olist.highlighted
-            self._build_session_list()
+            with self.app.batch_update():
+                self._build_session_list()
             self._restore_highlight_by_sid(olist, self._detail_sessions, old_sid, old_idx)
         else:
             # Structure unchanged — safe to update in place.
