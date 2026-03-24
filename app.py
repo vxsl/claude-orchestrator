@@ -2241,7 +2241,7 @@ class OrchestratorApp(App):
             repos = self.state.known_repos()
             cwd = repos[0] if repos else None
         with self.suspend():
-            subprocess.run(cmd, cwd=cwd)
+            subprocess.run(cmd + ["-f"], cwd=cwd)
         self._poll_worktrees()
 
     def action_files(self):
