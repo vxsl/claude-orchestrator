@@ -712,7 +712,7 @@ def _render_session_option(
     committed = bool(s.last_commit_sha) and not _active
 
     if archived:
-        icon = f"[{C_FAINT}]·[/{C_FAINT}]"
+        icon = f"[{C_DIM}]·[/{C_DIM}]"
         badge = ""
         badge_w = 0
     elif committed:
@@ -736,7 +736,7 @@ def _render_session_option(
     # Title styling: committed = dim, idle = dim, thinking = cyan, active = bright
     # Stale/archived sessions shift to faint
     if archived:
-        title_fmt = f"[{C_FAINT}]{title_esc}[/{C_FAINT}]"
+        title_fmt = f"[{C_DIM}]{title_esc}[/{C_DIM}]"
     elif committed:
         title_fmt = f"[{s_dim}]{title_esc}[/{s_dim}]"
     elif act == ThreadActivity.IDLE:
