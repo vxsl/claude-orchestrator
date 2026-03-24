@@ -409,7 +409,15 @@ pub fn parse_session(jsonl_path: &Path) -> Result<Session> {
 
         // Track last message role
         if msg_type == "user" || msg_type == "assistant" {
-            session.turn_complete = false;
+            // Meta/external user messages (slash commands, local-command output)
+            // don't trigger Claude to think — preserve turn_complete so the
+            // session isn't misread as THINKING.
+            let is_meta_user = msg_type == "user"
+                && (data["isMeta"].as_bool() == Some(true)
+                    || data["userType"].as_str() == Some("external"));
+            if !is_meta_user {
+                session.turn_complete = false;
+            }
 
             if msg_type == "user" {
                 session.last_stop_reason.clear();
@@ -600,7 +608,12 @@ pub fn refresh_session_tail(session: &mut Session, tail_bytes: u64) -> Result<bo
         }
 
         if msg_type == "user" || msg_type == "assistant" {
-            session.turn_complete = false;
+            let is_meta_user = msg_type == "user"
+                && (data["isMeta"].as_bool() == Some(true)
+                    || data["userType"].as_str() == Some("external"));
+            if !is_meta_user {
+                session.turn_complete = false;
+            }
             if msg_type == "user" {
                 session.last_stop_reason.clear();
                 session.last_tool_name.clear();

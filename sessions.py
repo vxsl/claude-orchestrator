@@ -678,7 +678,14 @@ def parse_session(jsonl_path: Path) -> Optional[ClaudeSession]:
 
                 # Track last message role (user or assistant)
                 if msg_type in ("user", "assistant"):
-                    session.turn_complete = False  # new message resets turn completion
+                    # Meta/external user messages (slash commands, local-command
+                    # output) don't trigger Claude to think — preserve
+                    # turn_complete so the session isn't misread as THINKING.
+                    _is_meta_user = (msg_type == "user" and
+                                     (data.get("isMeta") or
+                                      data.get("userType") == "external"))
+                    if not _is_meta_user:
+                        session.turn_complete = False
                     if msg_type == "user":
                         # Reset stale assistant-turn state so session_activity
                         # doesn't mistake a new user prompt for "your turn".
@@ -821,7 +828,11 @@ def refresh_session_tail(session: ClaudeSession, tail_bytes: int = 8192) -> bool
                 _pending_commit = False
 
             if msg_type in ("user", "assistant"):
-                session.turn_complete = False
+                _is_meta_user = (msg_type == "user" and
+                                 (data.get("isMeta") or
+                                  data.get("userType") == "external"))
+                if not _is_meta_user:
+                    session.turn_complete = False
                 if msg_type == "user":
                     session.last_stop_reason = ""
                     session.last_tool_name = ""
