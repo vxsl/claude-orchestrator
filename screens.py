@@ -1515,7 +1515,7 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
                     if i < arch_olist.option_count:
                         act = session_activity(s, self._last_seen_cache)
                         seen = _is_session_seen(s, self._last_seen_cache)
-                        prompt = _render_session_option(s, act, self._throbber_frame, ws_repo_path=self.ws.repo_path, seen=seen, line_width=alw)
+                        prompt = _render_session_option(s, act, self._throbber_frame, ws_repo_path=self.ws.repo_path, seen=seen, line_width=alw, archived=True)
                         arch_olist.replace_option_prompt_at_index(i, prompt)
 
 
@@ -1828,7 +1828,7 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
             if act in (ThreadActivity.THINKING, ThreadActivity.AWAITING_INPUT):
                 animating.append((i, act))
             seen = _is_session_seen(s, self._last_seen_cache)
-            prompt = _render_session_option(s, act, self._throbber_frame, ws_repo_path=self.ws.repo_path, seen=seen, line_width=alw)
+            prompt = _render_session_option(s, act, self._throbber_frame, ws_repo_path=self.ws.repo_path, seen=seen, line_width=alw, archived=True)
             options.append(Option(prompt, id=f"a:{s.session_id}"))
         remaining = len(self._archived_sessions) - limit
         if remaining > 0:
