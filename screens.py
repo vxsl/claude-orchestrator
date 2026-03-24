@@ -373,7 +373,7 @@ class QuickNoteScreen(ModalScreen[str | None]):
     }}
     #qnote-title {{ text-style: bold; color: {C_PURPLE}; padding-bottom: 1; }}
     #qnote-area {{ height: 7; }}
-    #qnote-hint {{ text-align: center; color: {C_DIM}; padding-top: 1; }}
+    #qnote-hint {{ text-align: center; padding-top: 1; }}
     """
 
     def __init__(self, ws: Workstream):
@@ -384,7 +384,7 @@ class QuickNoteScreen(ModalScreen[str | None]):
         with Vertical(id="qnote-container"):
             yield Label(f"Todo: {self.ws.name}", id="qnote-title")
             yield TextArea(id="qnote-area")
-            yield Static(f"[{C_DIM}]^S[/{C_DIM}] save  [{C_DIM}]Esc[/{C_DIM}] cancel", id="qnote-hint")
+            yield Static(f"[{C_GREEN}]Ctrl+S[/{C_GREEN}] save  [{C_DIM}]Esc[/{C_DIM}] cancel", id="qnote-hint")
 
     def on_mount(self):
         self.query_one("#qnote-area", TextArea).focus()
