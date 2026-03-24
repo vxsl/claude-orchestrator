@@ -17,6 +17,10 @@ export TEXTUAL_COLOR_SYSTEM=truecolor
 python3 "$SCRIPT_DIR/orch.py" "$@"
 EXIT_CODE=$?
 if [ $EXIT_CODE -ne 0 ]; then
+    # Textual leaves the terminal in alternate-screen mode on crash.
+    # Switch back to the normal screen so the traceback is visible.
+    tput rmcup 2>/dev/null || true
+    stty sane 2>/dev/null || true
     echo ""
     echo "orch exited with code $EXIT_CODE. Press Enter to close."
     read -r
