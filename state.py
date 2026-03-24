@@ -139,6 +139,7 @@ COMMAND_REGISTRY: list[CommandDef] = [
     CommandDef("files", ["file", "edit"], "Open file picker", requires_ws=True),
     CommandDef("wip", [], "Quick WIP commit", requires_ws=True),
     CommandDef("restage", [], "Unstage last 2 WIP commits", requires_ws=True),
+    CommandDef("trash", [], "View trash (deleted sessions)"),
 ]
 
 
@@ -928,7 +929,9 @@ class AppState:
         if cache_key in self._sessions_for_ws_cache:
             return self._sessions_for_ws_cache[cache_key]
 
-        hidden_sids = set(ws.archived_sessions) if not include_archived_sessions else set()
+        hidden_sids = set(ws.deleted_sessions)  # trashed sessions always hidden
+        if not include_archived_sessions:
+            hidden_sids |= set(ws.archived_sessions)
 
         effective_tids = ws.thread_ids
         if not effective_tids and self.threads:
@@ -1409,6 +1412,10 @@ class AppState:
             return {"action": "git-action", "cmd": "restage"}
         elif cmd == "wip":
             return {"action": "git-action", "cmd": "wip"}
+
+        # Trash view
+        elif cmd == "trash":
+            return {"action": "trash"}
 
         return {"action": "error", "msg": f"Unknown command: {cmd}"}
 

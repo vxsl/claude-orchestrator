@@ -94,7 +94,7 @@ from screens import (
     HelpScreen, QuickNoteScreen, TodoScreen, LinksScreen,
     AddScreen, DetailScreen, BrainDumpScreen, BrainPreviewScreen,
     AddLinkScreen, LinkSessionScreen, ConfirmScreen,
-    RepoPickerScreen, WorkstreamPickerScreen, CurrentSessionsScreen, _SENTINEL_NEW,
+    RepoPickerScreen, WorkstreamPickerScreen, CurrentSessionsScreen, TrashScreen, _SENTINEL_NEW,
 )
 
 
@@ -2092,6 +2092,8 @@ class OrchestratorApp(App):
             self._do_solve(result.get("ticket", ""))
         elif action == "worktree":
             self.action_branches()
+        elif action == "trash":
+            self.action_view_trash()
 
     # ── Dev-workflow actions ──
 
@@ -2368,6 +2370,10 @@ class OrchestratorApp(App):
 
     def action_help(self):
         self.push_screen(HelpScreen())
+
+    def action_view_trash(self):
+        """Open the global TrashScreen."""
+        self.push_screen(TrashScreen())
 
     def _on_return_from_modal(self):
         self.state.store.load()

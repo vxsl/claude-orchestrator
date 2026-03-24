@@ -785,6 +785,8 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         Binding("z", "defer_session", "Defer", show=False),
         Binding("d", "dismiss_notification", "Dismiss", show=False),
         Binding("D", "dismiss_all_notifications", "Dismiss all", show=False),
+        Binding("X", "trash_session", "Trash", show=False),
+        Binding("T", "view_trash", "Trash view", show=False),
         Binding("/", "search", "Search", show=False, priority=True),
         # Delegate to app — OptionList type-ahead consumes these before
         # they reach app-level bindings in a ModalScreen.
@@ -2529,6 +2531,32 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
             self.app.notify("Shelved", timeout=1)
         self._refresh()
 
+    def action_trash_session(self):
+        """X = move highlighted session to trash (soft delete)."""
+        olist = self._focused_olist()
+        idx = olist.highlighted
+        if idx is None:
+            return
+        try:
+            oid = olist.get_option_at_index(idx).id
+        except Exception:
+            return
+        if not oid or oid.startswith("__"):
+            return
+        # Strip archived prefix if in archived pane
+        sid = oid.removeprefix("a:") if self._active_pane == "archived" else oid
+        if sid not in self.ws.deleted_sessions:
+            self.ws.deleted_sessions[sid] = datetime.now(timezone.utc).isoformat()
+            self.ws.archived_sessions.pop(sid, None)  # remove from archived if it was there
+            self.ws.shelved_sessions.pop(sid, None)
+            self.store.update(self.ws)
+            self.app.notify("Moved to trash  (T to view)", timeout=2)
+        self._refresh()
+
+    def action_view_trash(self):
+        """T = open TrashScreen."""
+        self.app.push_screen(TrashScreen())
+
     def action_spawn(self):
         self.app.launch_claude_session(self.ws)
 
@@ -3247,6 +3275,192 @@ class CurrentSessionsScreen(_VimOptionListMixin, ModalScreen[None]):
                 ws.archived_sessions[sid] = datetime.now(timezone.utc).isoformat()
                 self.app.state.store.update(ws)
             self.dismiss()
+
+    def action_command_palette(self) -> None:
+        self.app.action_command_palette()
+
+    def action_help(self) -> None:
+        self.app.action_help()
+
+
+class TrashScreen(_VimOptionListMixin, ModalScreen[None]):
+    """Trash: all soft-deleted sessions across all workstreams."""
+
+    BINDINGS = [
+        Binding("escape", "dismiss", "Back", priority=True),
+        Binding("backspace,ctrl+h", "dismiss", "back"),
+        Binding("u", "restore_session", "Restore"),
+        Binding("D", "purge_session", "Purge"),
+        Binding("colon", "command_palette", ":", show=False),
+        Binding("question_mark", "help", "?", show=False),
+    ] + _VimOptionListMixin.VIM_BINDINGS
+
+    DEFAULT_CSS = f"""
+    TrashScreen {{ align: center middle; }}
+    #trash-container {{
+        width: 100%; height: 100%;
+        padding: 0; background: {BG_BASE};
+    }}
+    #trash-title {{
+        text-style: bold;
+        background: {BG_RAISED};
+        padding: 0 2;
+    }}
+    #trash-sessions {{
+        height: 1fr;
+        margin: 0 1; padding: 0;
+        border: none;
+        background: {BG_BASE};
+    }}
+    #trash-sessions > .option-list--option-highlighted {{
+        background: #101010;
+    }}
+    #trash-empty {{
+        padding: 1 3;
+        color: {C_DIM};
+    }}
+    #trash-help {{
+        height: 1;
+        padding: 0 2;
+        background: {BG_CHROME};
+        color: {C_DIM};
+        dock: bottom;
+    }}
+    """
+
+    _option_list_id = "trash-sessions"
+
+    def __init__(self):
+        super().__init__()
+        self._entries: list[tuple] = []  # (Workstream, ClaudeSession)
+        self._ws_map: dict[str, object] = {}  # session_id -> Workstream
+
+    def compose(self) -> ComposeResult:
+        from textual.containers import Vertical as V
+        with V(id="trash-container"):
+            yield Static("", id="detail-tab-bar")
+            yield Static(
+                f"[bold {C_YELLOW}]Trash[/bold {C_YELLOW}]  [{C_DIM}]soft-deleted sessions[/{C_DIM}]",
+                id="trash-title",
+            )
+            yield OptionList(id="trash-sessions")
+            yield Static(f"[{C_DIM}]Trash is empty[/{C_DIM}]", id="trash-empty")
+            yield Static(
+                "  ".join(f"[{C_YELLOW}]{k}[/{C_YELLOW}] {v}" for k, v in [
+                    ("↑↓/jk", "nav"), ("u", "restore"), ("D", "purge forever"), ("^H/esc", "back"),
+                ]),
+                id="trash-help",
+            )
+
+    def on_mount(self) -> None:
+        self._load()
+
+    def on_screen_resume(self) -> None:
+        self._load()
+
+    def _load(self) -> None:
+        app = self.app
+        if not hasattr(app, "state"):
+            return
+        all_sessions = {s.session_id: s for s in app.state.sessions}
+        entries = []
+        for ws in app.state.store.workstreams:
+            for sid, deleted_at in ws.deleted_sessions.items():
+                s = all_sessions.get(sid)
+                if s:
+                    entries.append((ws, s, deleted_at))
+        # Sort by deleted_at descending (most recently deleted first)
+        entries.sort(key=lambda x: x[2] or "", reverse=True)
+        self._entries = [(ws, s) for ws, s, _ in entries]
+        self._ws_map = {s.session_id: ws for ws, s in self._entries}
+        self._build_list()
+
+    def _build_list(self) -> None:
+        try:
+            olist = self.query_one("#trash-sessions", OptionList)
+            empty = self.query_one("#trash-empty", Static)
+        except Exception:
+            return
+
+        if not self._entries:
+            olist.display = False
+            empty.display = True
+            return
+
+        olist.display = True
+        empty.display = False
+
+        try:
+            lw = olist.size.width - 4
+        except Exception:
+            lw = 80
+
+        options = []
+        ws_groups: dict[str, list] = {}
+        ws_order: list[str] = []
+        ws_map_by_id: dict[str, object] = {}
+        for ws, s in self._entries:
+            if ws.id not in ws_groups:
+                ws_groups[ws.id] = []
+                ws_order.append(ws.id)
+                ws_map_by_id[ws.id] = ws
+            ws_groups[ws.id].append(s)
+
+        last_seen = {}
+        for ws_id in ws_order:
+            ws = ws_map_by_id[ws_id]
+            group = ws_groups[ws_id]
+            icon = getattr(ws, "icon", "") or "◆"
+            ws_label = f"[{C_DIM}]{icon} {_rich_escape(ws.name)}[/{C_DIM}]"
+            options.append(Option(ws_label, id=f"__ws__{ws_id}", disabled=True))
+            for s in group:
+                prompt = _render_session_option(
+                    s, ThreadActivity.IDLE, 0,
+                    ws_repo_path=ws.repo_path or "",
+                    seen=True,
+                    line_width=lw,
+                )
+                options.append(Option(prompt, id=s.session_id))
+
+        old_idx = olist.highlighted
+        olist.clear_options()
+        olist.add_options(options)
+        if old_idx is not None and old_idx < olist.option_count:
+            olist.highlighted = old_idx
+
+    def _get_selected(self):
+        try:
+            olist = self.query_one("#trash-sessions", OptionList)
+            if olist.highlighted is None or not olist.option_count:
+                return None, None
+            opt = olist.get_option_at_index(olist.highlighted)
+            sid = opt.id
+            if not sid or sid.startswith("__"):
+                return None, None
+            ws = self._ws_map.get(sid)
+            return ws, sid
+        except Exception:
+            return None, None
+
+    def action_restore_session(self) -> None:
+        """u = restore session from trash back to active."""
+        ws, sid = self._get_selected()
+        if not ws or not sid:
+            return
+        ws.deleted_sessions.pop(sid, None)
+        self.app.state.store.update(ws)
+        self.app.notify("Restored", timeout=1)
+        self._load()
+
+    def action_purge_session(self) -> None:
+        """D = permanently remove from trash (no recovery)."""
+        ws, sid = self._get_selected()
+        if not ws or not sid:
+            return
+        ws.deleted_sessions.pop(sid, None)
+        self.app.state.store.update(ws)
+        self.app.notify("Purged", timeout=1)
+        self._load()
 
     def action_command_palette(self) -> None:
         self.app.action_command_palette()
