@@ -934,8 +934,9 @@ class OrchestratorApp(App):
             for s in ws_sessions[:8]  # cap to avoid huge tuples
         )
         git_fp = (git_st.branch, git_st.is_dirty, git_st.ahead) if git_st else None
+        from datetime import date as _date
         return (ws.id, ws.name, ws.archived, ws.category, len(ws_sessions),
-                sess_fp, has_tmux, git_fp, lw)
+                sess_fp, has_tmux, git_fp, lw, _date.today())
 
     def _do_refresh_ws_table(self):
         """Actually rebuild the workstreams table (called via debounce timer)."""
