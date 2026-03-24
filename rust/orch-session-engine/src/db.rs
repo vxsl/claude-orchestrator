@@ -16,11 +16,19 @@ pub fn open_db(path: &Path) -> Result<Connection> {
         PRAGMA synchronous = NORMAL;
         PRAGMA busy_timeout = 5000;
         PRAGMA cache_size = -8000;
+        PRAGMA wal_autocheckpoint = 100;
         ",
     )?;
     create_tables(&conn)?;
     migrate(&conn)?;
     Ok(conn)
+}
+
+/// Run a passive WAL checkpoint to keep the WAL file small.
+/// Passive = non-blocking: skips frames that active readers hold.
+/// Called after writes so the WAL doesn't accumulate beyond ~400KB.
+pub fn checkpoint(conn: &Connection) {
+    let _ = conn.execute_batch("PRAGMA wal_checkpoint(PASSIVE);");
 }
 
 /// Add columns/tables that didn't exist in older schema versions.
@@ -166,6 +174,7 @@ pub fn write_sessions(
 
     bump_generation(&tx)?;
     tx.commit()?;
+    checkpoint(conn);
     Ok(())
 }
 
@@ -350,5 +359,6 @@ pub fn write_threads(conn: &Connection, threads: &[ThreadCluster]) -> Result<()>
     }
 
     tx.commit()?;
+    checkpoint(conn);
     Ok(())
 }

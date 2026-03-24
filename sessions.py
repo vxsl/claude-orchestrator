@@ -36,11 +36,13 @@ def _default_db_path() -> Path:
 _rust_db_conn: Optional[sqlite3.Connection] = None
 _rust_db_generation: int = -1
 
-# Session cache: avoid re-reading 400+ rows on every refresh tick.
-# TTL-based: data is at most _SESSION_CACHE_TTL_S seconds stale.
+# Session cache: keyed by DB generation counter.
+# Re-reads only when the Rust daemon bumps the generation (i.e., data changed).
+# Falls back to TTL if the generation check fails (e.g., meta table missing).
 _sessions_cache: Optional[list] = None  # list[ClaudeSession]
+_sessions_cache_generation: int = -1    # generation when cache was populated
 _sessions_cache_time: float = 0.0
-_SESSION_CACHE_TTL_S: float = 0.5  # 500ms — Python refreshes at ≤1s rate anyway
+_SESSION_CACHE_TTL_S: float = 5.0  # fallback TTL — only used if generation check fails
 
 
 def _get_rust_db() -> Optional[sqlite3.Connection]:
@@ -120,8 +122,9 @@ def _hydrate_session(row: dict) -> ClaudeSession:
 
 def invalidate_session_cache() -> None:
     """Force the next discover_sessions() call to re-read from SQLite."""
-    global _sessions_cache_time
+    global _sessions_cache_time, _sessions_cache_generation
     _sessions_cache_time = 0.0
+    _sessions_cache_generation = -1
 
 
 def _discover_sessions_from_db(
@@ -133,12 +136,12 @@ def _discover_sessions_from_db(
 
     Returns None if the DB is unavailable (caller should fall back to Python).
 
-    Caches results for up to _SESSION_CACHE_TTL_S seconds to avoid re-reading
-    400+ rows on every refresh tick. The Rust daemon is the source of truth;
-    Python's refresh is rate-limited to ≤1s anyway, so 500ms TTL is safe.
+    Uses the DB generation counter as the cache key: re-reads sessions only
+    when the Rust daemon has written new data (bumped the generation).
+    Falls back to a TTL check if the generation query fails.
     The cache is bypassed for filtered/limited queries (non-default args).
     """
-    global _sessions_cache, _sessions_cache_time
+    global _sessions_cache, _sessions_cache_generation, _sessions_cache_time
 
     conn = _get_rust_db()
     if conn is None:
@@ -147,9 +150,17 @@ def _discover_sessions_from_db(
     # Cache only for the hot path: full unfiltered read
     use_cache = (limit == 0 and not project_filter and min_messages == 1)
 
-    if use_cache:
+    if use_cache and _sessions_cache is not None:
+        # Fast path: check if generation changed (single cheap query)
+        try:
+            row = conn.execute("SELECT value FROM meta WHERE key='generation'").fetchone()
+            if row and int(row[0]) == _sessions_cache_generation:
+                return _sessions_cache  # data unchanged — skip full read
+        except sqlite3.Error:
+            pass
+        # Fallback: TTL check if generation unavailable
         age = time.monotonic() - _sessions_cache_time
-        if age < _SESSION_CACHE_TTL_S and _sessions_cache is not None:
+        if age < _SESSION_CACHE_TTL_S:
             return _sessions_cache
 
     try:
@@ -170,6 +181,12 @@ def _discover_sessions_from_db(
         if use_cache:
             _sessions_cache = sessions
             _sessions_cache_time = time.monotonic()
+            try:
+                row = conn.execute("SELECT value FROM meta WHERE key='generation'").fetchone()
+                if row:
+                    _sessions_cache_generation = int(row[0])
+            except sqlite3.Error:
+                pass
 
         return sessions
     except sqlite3.Error:

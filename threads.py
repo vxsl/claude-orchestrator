@@ -20,6 +20,12 @@ from sessions import (
     _strip_xml_wrappers,
 )
 
+# Thread result cache — invalidated when the DB generation changes.
+# The sessions cache already guards the expensive part; this caches the
+# thread-building step (JSON parsing + object construction, ~0.5ms).
+_threads_cache: Optional[list] = None  # list[Thread]
+_threads_cache_generation: int = -1
+
 
 # ─── Thread activity states ──────────────────────────────────────────
 
@@ -398,11 +404,32 @@ def _discover_threads_from_db(
     """Read pre-computed thread clusters from the Rust engine's SQLite DB.
 
     Returns None if unavailable; returns [] only when the DB genuinely has no threads.
+
+    Caches results by DB generation: skips the threads query entirely when the
+    Rust daemon hasn't written new data since our last read.  Sessions are
+    already cached at the same generation level, so a cache hit here costs ~0µs.
     """
+    global _threads_cache, _threads_cache_generation
     from sessions import _get_rust_db
     conn = _get_rust_db()
     if conn is None:
         return None
+
+    # Check generation — if unchanged, return the previously built Thread objects.
+    # This is safe because the session objects they reference are also cached at
+    # the same generation (sessions._sessions_cache_generation == ours).
+    try:
+        row = conn.execute("SELECT value FROM meta WHERE key='generation'").fetchone()
+        current_gen = int(row[0]) if row else -1
+    except Exception:
+        current_gen = -1
+
+    if _threads_cache is not None and current_gen == _threads_cache_generation and current_gen != -1:
+        # Update _last_seen references so freshness checks are current
+        for t in _threads_cache:
+            t._last_seen = last_seen
+        return _threads_cache
+
     try:
         rows = conn.execute(
             "SELECT thread_id, name, project_path, session_ids"
@@ -440,6 +467,9 @@ def _discover_threads_from_db(
     # Re-sort: live first, then by last activity
     threads.sort(key=lambda t: t.last_activity or "", reverse=True)
     threads.sort(key=lambda t: t.is_live, reverse=True)
+
+    _threads_cache = threads
+    _threads_cache_generation = current_gen
     return threads
 
 
