@@ -1124,12 +1124,14 @@ class OrchestratorApp(App):
         last_seen = self.state.get_last_seen()
         lw = self._olist_line_width(table)
 
-        # Build all options, skipping expensive rendering for unchanged items
+        # Build all options, skipping expensive rendering for unchanged items.
+        # Track which IDs were re-rendered so we don't need get_option_at_index
+        # comparisons in the update loop — cache-hit items are guaranteed unchanged.
         render_cache = getattr(self, '_ws_render_cache', {})
         options = []
         today_flags = []
         new_cache = {}
-        n_rendered = 0
+        rerendered_ids: set[str] = set()
         for ws in items:
             ws_sessions = self.state.sessions_for_ws(ws)
             git_st = None
@@ -1148,7 +1150,7 @@ class OrchestratorApp(App):
                     line_width=lw,
                     git_status=git_st,
                 )
-                n_rendered += 1
+                rerendered_ids.add(ws.id)
             new_cache[ws.id] = (fp, prompt)
             options.append(Option(prompt, id=ws.id))
             today_flags.append(
@@ -1156,8 +1158,9 @@ class OrchestratorApp(App):
             )
         self._ws_render_cache = new_cache
         if _PERF_ENABLED:
-            _perf_log.warning("_do_refresh_ws_table: build_options %.1fms (%d rendered/%d cached)",
-                              (_time.monotonic() - _t0) * 1000, n_rendered, len(items) - n_rendered)
+            _perf_log.warning("_do_refresh_ws_table: build_options %.1fms (%d re-rendered/%d cached)",
+                              (_time.monotonic() - _t0) * 1000,
+                              len(rerendered_ids), len(items) - len(rerendered_ids))
 
         # Insert "earlier" divider between today and non-today items
         sep_idx = next((i for i, t in enumerate(today_flags) if not t), None)
@@ -1183,22 +1186,14 @@ class OrchestratorApp(App):
         n_replaced = 0
         with self.batch_update():
             if new_ids == cached_ids and len(final_options) == table.option_count:
-                # Structure unchanged — only replace options whose content changed
+                # Structure unchanged — only replace options that were re-rendered.
+                # Cache-hit items have the same prompt as before; no get_option_at_index needed.
                 for i, opt in enumerate(final_options):
-                    if getattr(opt, 'id', None) is None:
-                        continue  # separator, content never changes
-                    cached_prompt = render_cache.get(opt.id)
-                    old_fp_prompt = render_cache.get(opt.id)  # already updated in new_cache
-                    # Compare against what we had before this cycle
-                    prev_cached = render_cache.get(opt.id) if render_cache is not new_cache else None
-                    try:
-                        existing = table.get_option_at_index(i)
-                        if existing.prompt != opt.prompt:
-                            table.replace_option_prompt_at_index(i, opt.prompt)
-                            n_replaced += 1
-                    except Exception:
-                        table.replace_option_prompt_at_index(i, opt.prompt)
-                        n_replaced += 1
+                    ws_id = getattr(opt, 'id', None)
+                    if ws_id is None or ws_id not in rerendered_ids:
+                        continue  # separator or fingerprint-unchanged — skip
+                    table.replace_option_prompt_at_index(i, opt.prompt)
+                    n_replaced += 1
                 self._ws_table_ids = new_ids
             else:
                 # Structure changed — full rebuild
