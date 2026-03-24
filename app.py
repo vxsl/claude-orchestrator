@@ -218,6 +218,7 @@ class OrchestratorApp(App):
         self.state = AppState(Store())
         self.tabs = TabManager()
         self._throbber_timer = None
+        self._throbber_paused = False
         self._session_watcher: SessionWatcher | None = None
         self._session_bridge: SessionBridge | None = None
         self._refresh_pending = False  # debounce flag for _refresh_ws_table
@@ -392,12 +393,24 @@ class OrchestratorApp(App):
     def _tick_throbber(self):
         """Advance the throbber frame and refresh preview if any sessions are thinking."""
         preview = self.state.preview_sessions
-        if preview and any(
+        thinking = preview and any(
             session_activity(s, self.state.last_seen_cache) == ThreadActivity.THINKING
             for s in preview
-        ):
+        )
+        if thinking:
             self.state.throbber_frame += 1
-            self._refresh_preview_sessions()
+            self._refresh_preview_sessions(throbber_tick=True)
+        else:
+            # Nothing to animate — pause until a THINKING session appears.
+            if self._throbber_timer and not self._throbber_paused:
+                self._throbber_timer.pause()
+                self._throbber_paused = True
+
+    def _resume_throbber(self):
+        """Resume the throbber if it was paused (called when a session starts thinking)."""
+        if self._throbber_timer and self._throbber_paused:
+            self._throbber_timer.resume()
+            self._throbber_paused = False
 
     def _start_git_polling(self):
         self._poll_git_status()
@@ -806,6 +819,8 @@ class OrchestratorApp(App):
             self._preview_ws_id = None  # force preview refresh on liveness change
             with self.batch_update():
                 self._refresh_ws_table_debounced()
+        # Resume throbber in case a session just became THINKING
+        self._resume_throbber()
         # Always notify screens so DetailScreen picks up liveness changes
         for screen in self.screen_stack:
             screen.post_message(SessionsChanged())
@@ -912,30 +927,61 @@ class OrchestratorApp(App):
         self.state.last_seen_cache = self.state.get_last_seen()
         if ws_sessions:
             olist.display = True
+            self._resume_throbber()
             self._refresh_preview_sessions()
         else:
             olist.display = False
 
-    def _refresh_preview_sessions(self):
+    def _refresh_preview_sessions(self, throbber_tick: bool = False):
         olist = self.query_one("#preview-sessions", OptionList)
         highlighted = olist.highlighted
+        sessions = self.state.preview_sessions
+        frame = self.state.throbber_frame
+        last_seen = self.state.last_seen_cache
+
+        # Per-session render cache: {session_id: (fingerprint, prompt)}
+        # Fingerprint covers all inputs that affect the render except throbber_frame
+        # (which only matters for THINKING sessions).
+        render_cache: dict = getattr(self, '_preview_session_render_cache', {})
+        new_cache: dict = {}
+
         options = []
+        rerendered: set[int] = set()  # indices of options that changed this tick
         sep_inserted = False
-        for i, s in enumerate(self.state.preview_sessions):
-            act = session_activity(s, self.state.last_seen_cache)
-            seen = _is_session_seen(s, self.state.last_seen_cache)
+        sep_offset = 0  # number of separators inserted before each index
+
+        for i, s in enumerate(sessions):
+            act = session_activity(s, last_seen)
+            seen = _is_session_seen(s, last_seen)
+            is_thinking = (act == ThreadActivity.THINKING)
+
+            # Fingerprint: throbber_frame included only for THINKING sessions
+            fp = (s.session_id, act, seen, frame if is_thinking else 0)
+            cached = render_cache.get(s.session_id)
+            if cached and cached[0] == fp:
+                prompt = cached[1]
+            else:
+                prompt = _render_session_option(
+                    s, act, frame, title_width=35, seen=seen
+                )
+                opt_idx = i + sep_offset + (1 if sep_inserted else 0)
+                rerendered.add(opt_idx)
+            new_cache[s.session_id] = (fp, prompt)
+
             if not sep_inserted and i > 0 and not _is_today(s.last_activity or s.started_at or ""):
                 options.append(_divider_option(38))
                 sep_inserted = True
-            options.append(Option(
-                _render_session_option(s, act, self.state.throbber_frame, title_width=35, seen=seen),
-                id=str(i),
-            ))
-        # Use in-place updates when the session list structure is unchanged —
-        # clear_options() + add_options() remounts every option widget and
-        # triggers a full CSS matching pass, which is expensive at 10fps.
+                sep_offset += 1
+
+            options.append(Option(prompt, id=str(i)))
+
+        self._preview_session_render_cache = new_cache
+
+        # In-place updates when structure is unchanged — avoids full remount.
         if olist.option_count == len(options):
             for idx, opt in enumerate(options):
+                if idx not in rerendered:
+                    continue  # fingerprint-cached — no need to update
                 try:
                     existing = olist.get_option_at_index(idx)
                     if existing.prompt != opt.prompt:
@@ -1022,6 +1068,12 @@ class OrchestratorApp(App):
         if self.state.search_text:
             presets += f"  [{C_DIM}]·[/{C_DIM}]  [{C_DIM}]search:[/{C_DIM}] [{C_YELLOW}]{_rich_escape(self.state.search_text)}[/{C_YELLOW}]"
 
+        # Home tab shown to the left of presets
+        home_tab = self.tabs.tabs[0]
+        home_icon = home_tab.icon + " " if home_tab.icon else ""
+        home_str = f"[bold italic {C_MID} on {BG_BASE}] {home_icon}{_rich_escape(home_tab.label)} [/]"
+        DIVIDER = f"  [{C_FAINT}]\u2502[/{C_FAINT}]  "
+
         # All non-home tabs (Sessions + open workstreams) shown at right
         other_tabs = [t for t in self.tabs.tabs if t.id != "home"]
         if other_tabs:
@@ -1033,10 +1085,10 @@ class OrchestratorApp(App):
                     tab_parts.append(f"[bold {C_BLUE}]● {_rich_escape(lbl)}[/bold {C_BLUE}]")
                 else:
                     tab_parts.append(f"[{C_DIM}]○ {_rich_escape(lbl)}[/{C_DIM}]")
-            tabs_str = f"  [{C_FAINT}]│[/{C_FAINT}]  " + f"  [{C_FAINT}]│[/{C_FAINT}]  ".join(tab_parts)
-            return f" {presets}{tabs_str}"
+            tabs_str = DIVIDER + DIVIDER.join(tab_parts)
+            return f"{home_str}{DIVIDER}{presets}{tabs_str}"
 
-        return f" {presets}"
+        return f"{home_str}{DIVIDER}{presets}"
 
     def _render_summary_bar(self) -> str:
         count = self._active_table().option_count
