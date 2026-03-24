@@ -319,7 +319,7 @@ class HelpScreen(FuzzyPickerScreen):
     """
 
     def __init__(self, context: str = "home"):
-        self._context = context
+        self._help_ctx = context
         titles = {
             "home": "Workstreams",
             "detail": "Workstream Detail",
@@ -342,7 +342,7 @@ class HelpScreen(FuzzyPickerScreen):
             "todo": self._todo_items,
             "sessions": self._sessions_items,
             "trash": self._trash_items,
-        }.get(self._context, self._home_items)
+        }.get(self._help_ctx, self._home_items)
         return getter()
 
     def _on_selected(self, item_id: str) -> None:
