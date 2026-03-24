@@ -600,13 +600,8 @@ class OrchestratorApp(App):
             from claude_session_screen import ClaudeSessionScreen as CSS
             if isinstance(self.screen, CSS):
                 css_ws_id = self.screen._ws.id
-                sid = self.screen._session_id
-                sess = self.state.get_session(sid)
-                if sess and sess.title:
-                    raw = sess.title[:14] + "\u2026" if len(sess.title) > 14 else sess.title
-                else:
-                    raw = sid[:8]
-                css_sess_label = raw
+                # Prefer the thread-namer cached title (_initial_title), fall back to session ID
+                css_sess_label = self.screen._initial_title or self.screen._session_id[:8]
         except Exception:
             pass
 
@@ -617,9 +612,7 @@ class OrchestratorApp(App):
             is_active = i == self.tabs.active_idx
             has_session = (not is_permanent) and (tab.ws_id == css_ws_id) and css_sess_label
 
-            ws_label = tab.label[:16] + "\u2026" if (has_session and len(tab.label) > 16) else (
-                tab.label[:20] + "\u2026" if len(tab.label) > 20 else tab.label
-            )
+            ws_label = tab.label
 
             if has_session:
                 sep = f"[{C_FAINT}] \u203a [/{C_FAINT}]"
