@@ -11,4 +11,5 @@ if [ -n "$TMUX" ]; then
     tmux bind -n C-h if-shell '[ "#{window_index}" = "0" ]' 'send-keys C-h' 'select-window -t orch:0' 2>/dev/null
 fi
 
+export TEXTUAL_COLOR_SYSTEM=truecolor
 exec -a orch python3 "$SCRIPT_DIR/orch.py" "$@"

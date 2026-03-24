@@ -70,7 +70,7 @@ BG_BASE = "#000000"      # true black — matches terminal
 BG_SURFACE = "#060606"   # barely lifted — focused panels
 BG_RAISED = "#0d1117"    # bars, headers, inputs
 BG_CHROME = "#060809"    # tab bar and footer — darker chrome, between black and panels
-BG_THINKING = "#0d1f3c"  # dark navy blue — active thinking rows
+BG_THINKING = "#1a3a6e"  # dark navy blue — active thinking rows
 
 
 # ─── Staleness helpers ──────────────────────────────────────────────
