@@ -73,7 +73,7 @@ from description_refresher import refresh_descriptions
 
 from rendering import (
     C_BLUE, C_CYAN, C_DIM, C_FAINT, C_GREEN, C_PURPLE, C_RED, C_YELLOW,
-    BG_BASE,
+    BG_BASE, BG_CHROME,
     _token_color, _token_color_markup,
     _category_markup,
     _is_session_seen, _is_today, _any_session_today,
@@ -147,7 +147,7 @@ class OrchestratorApp(App):
         height: auto; max-height: 4; padding: 0 1; background: {BG_BASE}; dock: top;
     }}
     #summary-bar {{
-        height: 1; padding: 0 1; background: {BG_BASE}; color: {C_DIM}; dock: bottom;
+        height: 1; padding: 0 1; background: {BG_CHROME}; color: {C_DIM}; dock: bottom;
     }}
     #main-content {{ height: 1fr; }}
     #ws-table {{
@@ -201,7 +201,7 @@ class OrchestratorApp(App):
                 "scrollbar-background-hover": "#0d1117",
                 "scrollbar-background-active": "#0d1117",
                 "scrollbar-corner-color": "#000000",
-                "footer-background": "#000000",
+                "footer-background": BG_CHROME,
                 "footer-foreground": "#6e7681",
                 "block-cursor-text-style": "bold",
                 "border": "#161b22",
@@ -226,6 +226,7 @@ class OrchestratorApp(App):
         self._tab_switch_in_progress: bool = False  # suppress _on_detail_dismissed during tab switch
         self._last_liveness_check: float = 0.0  # rate limiter for liveness checks
         self._liveness_deferred: bool = False  # trailing-edge pending flag
+        self._ws_pending_session: dict[str, str] = {}  # ws_id -> session_id for reuse on "c"
 
     def on_key(self, event) -> None:
         if event.key in ("ctrl+j", "ctrl+k"):
@@ -1528,10 +1529,16 @@ class OrchestratorApp(App):
         # blocking the event loop (tmux subprocess.run can hang for up to 3s).
         reattach = False
         effective_sid = session_id
-        if session_id:
-            self._detached_sessions.pop(session_id, None)
+
+        # If no explicit session_id, reuse any pending new session for this workstream
+        # so that pressing "c", going back, then pressing "c" again returns to the same thread.
+        if session_id is None and ws.id:
+            effective_sid = self._ws_pending_session.get(ws.id)
+
+        if effective_sid:
+            self._detached_sessions.pop(effective_sid, None)
             reattach = await asyncio.get_running_loop().run_in_executor(
-                None, TerminalWidget.tmux_session_alive, session_id
+                None, TerminalWidget.tmux_session_alive, effective_sid
             )
 
         screen = ClaudeSessionScreen(
@@ -1539,6 +1546,10 @@ class OrchestratorApp(App):
             session_id=effective_sid, prompt=prompt, cwd=cwd,
             reattach_tmux=reattach,
         )
+
+        # Remember the session ID so "c" returns to the same thread next time
+        if session_id is None and ws.id:
+            self._ws_pending_session[ws.id] = screen._session_id
 
         def _on_dismiss(result):
             if isinstance(result, dict) and result.get("detached"):
@@ -1567,6 +1578,9 @@ class OrchestratorApp(App):
                     timeout=5,
                 )
                 self._inject_session(result)
+                # Session completed naturally — clear the pending slot so next "c" is fresh
+                if ws.id and self._ws_pending_session.get(ws.id) == screen._session_id:
+                    del self._ws_pending_session[ws.id]
             self._refresh_ws_table()
             if callback:
                 callback(result)

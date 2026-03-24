@@ -398,6 +398,69 @@ def open_link(link, ws: Workstream | None = None, app=None):
             )
 
 
+# ─── Tig Tigrc Generation ───────────────────────────────────────────
+
+import tempfile
+
+
+def generate_tig_tigrc(subtle: bool = False) -> str:
+    """Generate a temp tigrc for an embedded tig widget.
+
+    Reads the user's existing tigrc and appends orch-sidebar overrides.
+    When subtle=True, applies a muted color theme matching the orch palette.
+    Caller is responsible for deleting the returned path on cleanup.
+    """
+    user_tigrc = os.environ.get("TIGRC_USER", str(Path.home() / ".tigrc"))
+    content = ""
+    if os.path.isfile(user_tigrc):
+        try:
+            content = Path(user_tigrc).read_text()
+        except Exception:
+            pass
+
+    content += """
+# orch-sidebar overrides
+set refresh-mode = periodic
+set refresh-interval = 3
+set main-view = line-number:no id:no date:no author:no commit-title:yes,overflow=no
+set line-graphics = ascii
+set status-view-show-untracked-dirs = no
+set show-changes = no
+"""
+    if subtle:
+        content += """
+# Muted color theme — default bg so Textual widget background shows through
+color default          color241  color234
+color cursor           color245  color236  bold
+color title-focus      color241  default   bold
+color title-blur       color238  default
+color header           color238  default
+color stat-head        color234  color234
+color section          color241  default
+color main-commit      color241  default
+color main-head        color183  default   bold
+color main-refs        color139  default
+color diff-header      color238  default
+color diff-index       color236  default
+color diff-chunk       color241  default
+color diff-add         color71   default
+color diff-del         color210  default
+color "diff ---"       color236  default
+color "diff +++"       color236  default
+color "@@"             color241  default
+color stat-staged      color71   default
+color stat-unstaged    color210  default
+color stat-untracked   color241  default
+color help-group       color241  default   bold
+color help-action      color241  default
+"""
+
+    fd, path = tempfile.mkstemp(suffix=".tigrc", prefix="orch-")
+    os.write(fd, content.encode())
+    os.close(fd)
+    return path
+
+
 # ─── File Picker ─────────────────────────────────────────────────────
 
 def open_file_picker(cwd: str) -> None:

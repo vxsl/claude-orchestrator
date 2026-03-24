@@ -42,7 +42,7 @@ from sessions import ClaudeSession
 from threads import Thread, ThreadActivity, session_activity, load_last_seen, mark_thread_seen
 from rendering import (
     C_BLUE, C_CYAN, C_DIM, C_FAINT, C_GOLD, C_GREEN, C_LIGHT, C_ORANGE, C_PURPLE, C_RED, C_YELLOW,
-    BG_BASE, BG_RAISED, BG_SURFACE,
+    BG_BASE, BG_CHROME, BG_RAISED, BG_SURFACE,
     CATEGORY_THEME,
     LINK_TYPE_ICONS, LINK_ORDER, LINK_KINDS,
     THROBBER_FRAMES,
@@ -52,14 +52,15 @@ from rendering import (
     _short_model, _short_project,
     _render_session_option, _session_title,
     _render_todo_option, _render_notification_option,
-    _render_notified_session_option, QUIET_SEPARATOR_LABEL,
+    _render_notified_session_option, QUIET_SEPARATOR_LABEL, DEFERRED_SEPARATOR_LABEL,
     _render_content_search_result, tool_bar_legend,
     TODO_UNDONE_ICON, TODO_DONE_ICON,
     _rich_escape,
 )
 from actions import (
-    ws_directories, ws_working_dir, open_file_picker, open_link,
+    ws_directories, ws_working_dir, open_file_picker, open_link, generate_tig_tigrc,
 )
+from terminal import TerminalWidget
 from notifications import Notification, dismiss_notification, dismiss_all_for_dirs
 from state import fuzzy_match, content_search, SessionSearchResult
 from widgets import FuzzyPicker, FuzzyPickerScreen
@@ -351,7 +352,7 @@ class TodoScreen(_VimOptionListMixin, ModalScreen[None]):
     #todo-help {{
         height: 1;
         padding: 0 2;
-        background: {BG_BASE};
+        background: {BG_CHROME};
         color: {C_DIM};
         dock: bottom;
     }}
@@ -877,6 +878,7 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         Binding("h", "go_back", show=False),
         Binding("enter,l", "select_session", show=False),
         Binding("y", "yank_resume_cmd", "Yank cmd"),
+        Binding("z", "defer_session", "Defer", show=False),
         Binding("d", "dismiss_notification", "Dismiss", show=False),
         Binding("D", "dismiss_all_notifications", "Dismiss all", show=False),
         Binding("/", "search", "Search", show=False, priority=True),
@@ -895,16 +897,18 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
     #detail-tab-bar {{
         height: 1;
         padding: 0 1;
-        background: {BG_RAISED};
+        background: {BG_CHROME};
     }}
-    #detail-header {{
-        height: auto;
-        padding: 1 3;
+    #detail-title {{
+        text-style: bold;
         background: {BG_RAISED};
+        padding: 0 2;
     }}
-    #detail-title {{ text-style: bold; }}
-    #detail-meta {{ color: {C_DIM}; }}
-    #detail-desc {{ padding-top: 1; }}
+    #detail-desc {{
+        color: {C_DIM};
+        background: {BG_RAISED};
+        padding: 0 2;
+    }}
     #detail-lists {{
         height: auto; max-height: 50%;
     }}
@@ -954,6 +958,7 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
     }}
     #detail-lower {{
         height: 1fr;
+        background: {BG_RAISED};
     }}
     #detail-scroll {{
         width: 3fr;
@@ -962,6 +967,18 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
     #detail-scroll.pane-focused {{
         border: round {C_BLUE};
         background: {BG_SURFACE};
+    }}
+    .detail-tig-wrap {{
+        height: 1fr;
+        border: blank;
+        background: {BG_RAISED};
+    }}
+    .detail-tig-wrap.pane-focused {{
+        border: round {C_BLUE};
+        background: {BG_RAISED};
+    }}
+    #detail-tig-status, #detail-tig-log {{
+        height: 1fr;
     }}
     #detail-body {{
         padding: 1 3;
@@ -994,7 +1011,7 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
     #detail-help {{
         height: 1;
         padding: 0 2;
-        background: {BG_RAISED};
+        background: {BG_CHROME};
         color: {C_DIM};
         dock: bottom;
     }}
@@ -1008,6 +1025,7 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         self.store = store
         self._detail_sessions: list[ClaudeSession] = []
         self._archived_sessions: list[ClaudeSession] = []
+        self._deferred_set: set[str] = set(ws.deferred_sessions)
         self._feed_notifications: list[Notification] = []
         self._session_notifications: dict[str, Notification] = {}  # session_id -> latest notif
         self._throbber_frame: int = 0
@@ -1028,15 +1046,40 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         self._loading_timer = None
         self._refresh_timer = None
         self._mounted_once: bool = False  # skip first on_screen_resume (on_mount handles it)
+        # Tig sidebar
+        self._cwd = ws_working_dir(ws)
+        self._tigrc_path: str | None = None
+        self._tig_env: dict[str, str] = {}
+        self._sidebar_enabled = self._detect_git_sidebar()
+        if self._sidebar_enabled:
+            self._tigrc_path = generate_tig_tigrc(subtle=True)
+            self._tig_env = {"TIGRC_USER": self._tigrc_path, "GIT_OPTIONAL_LOCKS": "0"}
+
+    def _detect_git_sidebar(self) -> bool:
+        """Return True if the workstream has a git repo we can show tig for."""
+        import shutil
+        if not shutil.which("tig"):
+            return False
+        if not self.ws.repo_path and not ws_directories(self.ws):
+            return False
+        try:
+            result = subprocess.run(
+                ["git", "-C", self._cwd, "rev-parse", "--git-dir"],
+                capture_output=True, timeout=3,
+            )
+            return result.returncode == 0
+        except Exception:
+            return False
 
     def compose(self) -> ComposeResult:
         with Vertical(id="detail-container"):
             yield Static("", id="detail-tab-bar")
-            with Vertical(id="detail-header"):
-                yield Static(self._render_title(), id="detail-title")
-                yield Static(self._render_meta(), id="detail-meta")
-                if self.ws.description:
-                    yield Static(self.ws.description, id="detail-desc")
+            yield Static(
+                self._render_title() + "  " + self._render_meta(),
+                id="detail-title",
+            )
+            if self.ws.description:
+                yield Static(self.ws.description, id="detail-desc")
 
             with Horizontal(id="detail-lists"):
                 with Vertical(id="detail-sessions-pane", classes="detail-list-pane"):
@@ -1050,8 +1093,26 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
                     yield Static(f"[{C_DIM}]Empty[/{C_DIM}]", id="detail-no-archived")
 
             with Horizontal(id="detail-lower"):
-                with VerticalScroll(id="detail-scroll"):
-                    yield Static(self._render_body(), id="detail-body")
+                if self._sidebar_enabled:
+                    with Vertical(id="detail-tig-status-wrap", classes="detail-tig-wrap"):
+                        yield TerminalWidget(
+                            command="tig status",
+                            env=self._tig_env,
+                            cwd=self._cwd,
+                            passthrough_keys={"ctrl+j", "ctrl+k", "ctrl+h", "backspace"},
+                            id="detail-tig-status",
+                        )
+                    with Vertical(id="detail-tig-log-wrap", classes="detail-tig-wrap"):
+                        yield TerminalWidget(
+                            command="tig",
+                            env=self._tig_env,
+                            cwd=self._cwd,
+                            passthrough_keys={"ctrl+j", "ctrl+k", "ctrl+h", "backspace"},
+                            id="detail-tig-log",
+                        )
+                else:
+                    with VerticalScroll(id="detail-scroll"):
+                        yield Static(self._render_body(), id="detail-body")
                 # Feed pane kept in DOM but hidden — notifications now inline in session list
                 with Vertical(id="detail-feed-pane"):
                     yield Static(self._render_feed_label(), id="detail-feed-label", classes="detail-feed-label")
@@ -1066,8 +1127,17 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         self._load_feed()  # must run before _load_detail_sessions so notification map is ready
         self._load_detail_sessions()
         # Update header with session stats now that _detail_sessions is populated
-        self.query_one("#detail-meta", Static).update(self._render_meta())
-        self.query_one("#detail-body", Static).update(self._render_body())
+        self.query_one("#detail-title", Static).update(self._render_title() + "  " + self._render_meta())
+        try:
+            self.query_one("#detail-body", Static).update(self._render_body())
+        except Exception:
+            pass  # body not present when tig sidebar is active
+        if self._sidebar_enabled:
+            for tw in self.query(TerminalWidget):
+                try:
+                    tw.start()
+                except Exception as e:
+                    log.error("DetailScreen: failed to start tig terminal %s: %s", tw.id, e)
         self.query_one("#detail-sessions", OptionList).focus()
         self._update_pane_labels()
         self._refresh_timer = self.set_interval(30, self._periodic_refresh)
@@ -1088,9 +1158,11 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         # Sync-refresh live sessions so activity badges are correct immediately
         # (avoids brief stale "your turn" flash when returning from session view)
         self._sync_refresh_live()
-        self.query_one("#detail-title", Static).update(self._render_title())
-        self.query_one("#detail-meta", Static).update(self._render_meta())
-        self.query_one("#detail-body", Static).update(self._render_body())
+        self.query_one("#detail-title", Static).update(self._render_title() + "  " + self._render_meta())
+        try:
+            self.query_one("#detail-body", Static).update(self._render_body())
+        except Exception:
+            pass
         self._update_pane_labels()
         self.query_one("#detail-sessions", OptionList).focus()
         # Restart periodic refresh
@@ -1102,8 +1174,27 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
             self._refresh_timer.stop()
             self._refresh_timer = None
 
+    def on_unmount(self):
+        if self._sidebar_enabled:
+            for tw in self.query(TerminalWidget):
+                try:
+                    tw.stop()
+                except Exception:
+                    pass
+        if self._tigrc_path:
+            try:
+                os.unlink(self._tigrc_path)
+            except OSError:
+                pass
+
     def _mark_all_seen(self):
-        """Mark all sessions in this workstream as seen right now — batched."""
+        """Mark non-pending sessions in this workstream as seen right now — batched.
+
+        Sessions that are waiting for a response (AWAITING_INPUT / RESPONSE_READY)
+        are intentionally skipped so their green badge stays visible until the
+        user actually opens/responds to them.
+        """
+        from threads import session_activity, ThreadActivity, save_last_seen
         app = self.app
         if hasattr(app, 'state'):
             sessions = app.state.sessions_for_ws(self.ws, include_archived_sessions=True)
@@ -1114,9 +1205,10 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         # Batch: single read + single write instead of N reads + N writes
         data = load_last_seen()
         now = datetime.now(timezone.utc).isoformat()
+        pending = {ThreadActivity.AWAITING_INPUT, ThreadActivity.RESPONSE_READY}
         for s in sessions:
-            data[s.session_id] = now
-        from threads import save_last_seen
+            if session_activity(s) not in pending:
+                data[s.session_id] = now
         save_last_seen(data)
         self._last_seen_cache = data
 
@@ -1213,6 +1305,8 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         "archived": "#detail-archived-pane",
         "body": "#detail-scroll",
         "feed": "#detail-feed-pane",
+        "tig-status": "#detail-tig-status-wrap",
+        "tig-log": "#detail-tig-log-wrap",
     }
 
     def _sessions_loading(self) -> bool:
@@ -1317,16 +1411,27 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
                 else:
                     quiet.append(s)
         notified.sort(key=lambda s: self._session_notifications[s.session_id].dt, reverse=True)
-        _sort_by_activity = lambda s: s.last_activity or ""
-        elevated.sort(key=_sort_by_activity, reverse=True)
-        quiet.sort(key=_sort_by_activity, reverse=True)
+        elevated.sort(key=lambda s: s.last_activity or "", reverse=True)
+        def _quiet_sort_key(s):
+            act = session_activity(s, self._last_seen_cache)
+            if act == ThreadActivity.THINKING:
+                return (1, s.started_at or "")
+            return (0, s.last_activity or "")
+        quiet.sort(key=_quiet_sort_key, reverse=True)
+        quiet_active = [s for s in quiet if s.session_id not in self._deferred_set]
+        quiet_deferred = [s for s in quiet if s.session_id in self._deferred_set]
         all_elevated = notified + elevated
 
         # If the notified/elevated/quiet structure changed, the in-place index
         # mapping is invalid (separator may have moved or appeared/disappeared).
         # Fall back to a full rebuild to avoid stale/duplicate entries.
-        has_separator = bool(all_elevated and quiet)
-        expected_count = len(self._detail_sessions) + (1 if has_separator else 0)
+        has_separator = bool(all_elevated and (quiet_active or quiet_deferred))
+        has_deferred_sep = bool(quiet_deferred)
+        expected_count = (
+            len(self._detail_sessions)
+            + (1 if has_separator else 0)
+            + (1 if has_deferred_sep else 0)
+        )
         olist = self.query_one("#detail-sessions", OptionList)
         if len(all_elevated) != self._notified_count or olist.option_count != expected_count:
             old_sid = self._highlighted_session_id(olist)
@@ -1365,15 +1470,25 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
                     idx += 1
 
                 if has_separator:
-                    idx += 1  # skip separator
+                    idx += 1  # skip quiet separator
 
-                for s in quiet:
+                for s in quiet_active:
                     if idx < olist.option_count:
                         act = session_activity(s, self._last_seen_cache)
                         seen = _is_session_seen(s, self._last_seen_cache)
                         prompt = _render_session_option(s, act, self._throbber_frame, ws_repo_path=self.ws.repo_path, seen=seen, line_width=lw)
                         olist.replace_option_prompt_at_index(idx, prompt)
                     idx += 1
+
+                if has_deferred_sep:
+                    idx += 1  # skip deferred separator
+                    for s in quiet_deferred:
+                        if idx < olist.option_count:
+                            act = session_activity(s, self._last_seen_cache)
+                            seen = _is_session_seen(s, self._last_seen_cache)
+                            prompt = _render_session_option(s, act, self._throbber_frame, ws_repo_path=self.ws.repo_path, seen=seen, line_width=lw, deferred=True)
+                            olist.replace_option_prompt_at_index(idx, prompt)
+                        idx += 1
 
                 alw = self._session_line_width("#detail-archived")
                 arch_olist = self.query_one("#detail-archived", OptionList)
@@ -1421,12 +1536,14 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
             hidden = set(self.ws.archived_sessions)
             self._all_sessions = [s for s in all_sessions if s.session_id not in hidden]
             self._all_archived = [s for s in all_sessions if s.session_id in hidden]
-            log.debug("load_detail: active=%d archived=%d",
-                      len(self._all_sessions), len(self._all_archived))
+            self._deferred_set = set(self.ws.deferred_sessions)
+            log.debug("load_detail: active=%d archived=%d deferred=%d",
+                      len(self._all_sessions), len(self._all_archived), len(self._deferred_set))
         else:
             from actions import find_sessions_for_ws
             self._all_sessions = find_sessions_for_ws(self.ws, getattr(app, 'sessions', []))
             self._all_archived = []
+            self._deferred_set = set(self.ws.deferred_sessions)
 
         # If search is active, just update backing data silently — don't
         # rebuild the results list mid-search (it resets scroll/highlight and
@@ -1569,10 +1686,21 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
                     quiet.append(s)
 
         # Sort each group by recency (newest first)
+        # THINKING sessions float to the top of quiet (tier 1) and sort by
+        # started_at so they don't jitter while the agent streams new messages.
+        # Non-thinking sessions stay in tier 0, sorted by last_activity.
         notified.sort(key=lambda s: self._session_notifications[s.session_id].dt, reverse=True)
-        _sort_by_activity = lambda s: s.last_activity or ""
-        elevated.sort(key=_sort_by_activity, reverse=True)
-        quiet.sort(key=_sort_by_activity, reverse=True)
+        elevated.sort(key=lambda s: s.last_activity or "", reverse=True)
+        def _quiet_sort_key(s):
+            act = session_activity(s, self._last_seen_cache)
+            if act == ThreadActivity.THINKING:
+                return (1, s.started_at or "")
+            return (0, s.last_activity or "")
+        quiet.sort(key=_quiet_sort_key, reverse=True)
+
+        # Split quiet into active and deferred; deferred sink to the bottom
+        quiet_active = [s for s in quiet if s.session_id not in self._deferred_set]
+        quiet_deferred = [s for s in quiet if s.session_id in self._deferred_set]
 
         # Build all options before touching widget tree
         all_elevated = notified + elevated
@@ -1607,12 +1735,12 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
             options.append(Option(prompt, id=s.session_id))
             idx += 1
 
-        if all_elevated and quiet:
+        if all_elevated and (quiet_active or quiet_deferred):
             options.append(Option(QUIET_SEPARATOR_LABEL, id="__separator__", disabled=True))
             idx += 1
 
         earlier_sep_inserted = False
-        for qi, s in enumerate(quiet):
+        for qi, s in enumerate(quiet_active):
             act = session_activity(s, self._last_seen_cache)
             if act in (ThreadActivity.THINKING, ThreadActivity.AWAITING_INPUT):
                 animating.append((idx, act))
@@ -1627,11 +1755,21 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
             options.append(Option(prompt, id=s.session_id))
             idx += 1
 
+        if quiet_deferred:
+            options.append(Option(DEFERRED_SEPARATOR_LABEL, id="__sep_deferred__", disabled=True))
+            idx += 1
+            for s in quiet_deferred:
+                act = session_activity(s, self._last_seen_cache)
+                seen = _is_session_seen(s, self._last_seen_cache)
+                prompt = _render_session_option(s, act, self._throbber_frame, ws_repo_path=self.ws.repo_path, seen=seen, line_width=lw, deferred=True)
+                options.append(Option(prompt, id=s.session_id))
+                idx += 1
+
         olist.clear_options()
         olist.add_options(options)
         self._animating_sessions = animating
-        log.debug("build_session_list: %d notified + %d elevated + %d quiet, option_count=%d",
-                  len(notified), len(elevated), len(quiet), olist.option_count)
+        log.debug("build_session_list: %d notified + %d elevated + %d quiet (%d deferred), option_count=%d",
+                  len(notified), len(elevated), len(quiet), len(quiet_deferred), olist.option_count)
 
     _ARCHIVED_PAGE_SIZE = 30
 
@@ -1774,7 +1912,10 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         panels = ["detail-sessions"]
         if self._archived_sessions:
             panels.append("detail-archived")
-        panels.append("detail-scroll")
+        if self._sidebar_enabled:
+            panels.extend(["detail-tig-status", "detail-tig-log"])
+        else:
+            panels.append("detail-scroll")
         # Feed pane no longer in cycle — notifications are inline in sessions
         return panels
 
@@ -1783,6 +1924,8 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         "detail-archived": "archived",
         "detail-scroll": "body",
         "detail-feed": "feed",
+        "detail-tig-status": "tig-status",
+        "detail-tig-log": "tig-log",
     }
     _PANEL_NAME_TO_ID = {v: k for k, v in _PANEL_ID_TO_NAME.items()}
 
@@ -1973,6 +2116,7 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
             ("n", "+todo"), ("e", "todos"), ("L", "+link"),
             ("o", "open"), ("x", "archive ws"),
             ("space", "archive/restore"),
+            ("z", "defer/undefer"),
             ("p", "peek"), ("y", "yank cmd"),
             ("^j/^k", "panels"), ("/", "search"),
             ("^H", "back"),
@@ -2301,9 +2445,11 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
 
     def _refresh(self):
         with self.app.batch_update():
-            self.query_one("#detail-title", Static).update(self._render_title())
-            self.query_one("#detail-meta", Static).update(self._render_meta())
-            self.query_one("#detail-body", Static).update(self._render_body())
+            self.query_one("#detail-title", Static).update(self._render_title() + "  " + self._render_meta())
+            try:
+                self.query_one("#detail-body", Static).update(self._render_body())
+            except Exception:
+                pass  # body not present when tig sidebar is active
             self._load_detail_sessions()
             self._load_feed()
 
@@ -2383,6 +2529,33 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
             if sid not in self.ws.archived_sessions:
                 self.ws.archived_sessions[sid] = datetime.now(timezone.utc).isoformat()
                 self.store.update(self.ws)
+        self._refresh()
+
+    def action_defer_session(self):
+        """z = defer/un-defer the highlighted session."""
+        if self._active_pane != "sessions":
+            return
+        olist = self._focused_olist()
+        idx = olist.highlighted
+        if idx is None:
+            return
+        try:
+            oid = olist.get_option_at_index(idx).id
+        except Exception:
+            return
+        if not oid or oid.startswith("__"):
+            return
+        sid = oid
+        if sid in self.ws.deferred_sessions:
+            del self.ws.deferred_sessions[sid]
+            self._deferred_set.discard(sid)
+            self.store.update(self.ws)
+            self.app.notify("Undeferred", timeout=1)
+        else:
+            self.ws.deferred_sessions[sid] = datetime.now(timezone.utc).isoformat()
+            self._deferred_set.add(sid)
+            self.store.update(self.ws)
+            self.app.notify("Deferred", timeout=1)
         self._refresh()
 
     def action_spawn(self):

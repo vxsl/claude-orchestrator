@@ -43,11 +43,13 @@ C_MID = "#b1bac4"        # secondary text (terminal normal white)
 C_DIM = "#6e7681"        # subdued (terminal bright-black)
 C_FAINT = "#484f58"      # near-invisible — IDs, decorative
 C_RESOLVED = "#7a8a9e"  # muted blue-gray — committed/resolved sessions
+C_DEFER = "#7a5218"    # dim amber — deferred sessions (paused/waiting)
 
 # ─── Background Palette ──────────────────────────────────────────────
 BG_BASE = "#000000"      # true black — matches terminal
 BG_SURFACE = "#060606"   # barely lifted — focused panels
 BG_RAISED = "#0d1117"    # bars, headers, inputs
+BG_CHROME = "#060809"    # tab bar and footer — darker chrome, between black and panels
 
 
 # ─── Staleness helpers ──────────────────────────────────────────────
@@ -628,7 +630,7 @@ def _file_touchpoints(files: list[str]) -> str:
 def _render_session_option(
     s: ClaudeSession, act: ThreadActivity, throbber_frame: int = 0,
     title_width: int = 48, ws_repo_path: str = "", seen: bool = False,
-    line_width: int = 0,
+    line_width: int = 0, deferred: bool = False,
 ) -> str:
     """Render a session as a formatted multi-line OptionList entry.
 
@@ -644,6 +646,56 @@ def _render_session_option(
         title_width = max(20, LINE_WIDTH - 20)
     else:
         LINE_WIDTH = title_width + 20  # right-alignment anchor
+
+    # ── Deferred: amber-tinted and de-emphasized — overrides stale/committed styling ──
+    if deferred:
+        icon = f"[{C_DEFER}]⏸[/{C_DEFER}]"
+        badge = f"[{C_DEFER}]deferred[/{C_DEFER}]"
+        badge_w = 8
+        model = _short_model(s.model)
+        title_raw = _session_title(s)[:title_width]
+        title_pad = " " * (title_width - len(title_raw))
+        title_esc = _rich_escape(title_raw)
+        sid = s.session_id[:8]
+        tokens_plain = s.tokens_display
+        msgs_str = f"{s.message_count}↑{s.assistant_message_count}↓"
+        duration = s.duration_display
+        age_str = s.age
+        title_fmt = f"[{C_DEFER}]{title_esc}[/{C_DEFER}]"
+        prefix_w = 3
+        age_col = f"{age_str:>4}"
+        age_w = 2 + 4
+        fill = max(2, LINE_WIDTH - prefix_w - title_width - age_w - badge_w)
+        line1 = f" {icon} {title_fmt}{title_pad}  [{C_FAINT}]{age_col}[/{C_FAINT}]{' ' * fill}{badge}"
+        model_part = "" if model == "opus" else f"[{C_FAINT}]{model:<8}[/{C_FAINT}]"
+        tok_pad = " " * max(1, 8 - len(tokens_plain))
+        dur_str = f"{duration:<8}" if duration else ""
+        dur_len = 8 if duration else 0
+        model_len = 0 if model == "opus" else 8
+        meta_left_len = 4 + model_len + 10 + 8 + dur_len
+        sid_gap = max(2, LINE_WIDTH - meta_left_len - 8)
+        line2 = (
+            f"{INDENT}{model_part}[{C_FAINT}]{msgs_str:<10}[/{C_FAINT}]"
+            f"[{C_FAINT}]{tokens_plain}{tok_pad}{dur_str}[/{C_FAINT}]"
+            f"{' ' * sid_gap}[{C_FAINT}]{sid}[/{C_FAINT}]"
+        )
+        ctx_bar = _context_bar_compact(s.context_tokens, s.context_window_size)
+        bar = _tool_bar(s.tool_counts)
+        files = _file_touchpoints(s.files_mutated)
+        left = "  ".join(p for p in (ctx_bar, bar, files) if p)
+        if not left:
+            left = f"[{C_FAINT}]{'─' * 6}[/{C_FAINT}]"
+        line3 = f"{INDENT}{left}"
+        if s.last_message_text:
+            max_snippet = title_width + 12
+            snippet_raw = s.last_message_text[:max_snippet]
+            if len(s.last_message_text) > max_snippet:
+                snippet_raw += "…"
+            role_label = "a" if s.last_message_role == "assistant" else "u"
+            line4 = f"{INDENT}[{C_FAINT}]{role_label}: {_rich_escape(snippet_raw)}[/{C_FAINT}]"
+        else:
+            line4 = f"{INDENT}[{C_FAINT}]─[/{C_FAINT}]"
+        return "\n".join([line1, line2, line3, line4])
 
     # ── Staleness: not active today → dim two notches ──
     stale = not _is_today(s.last_activity or s.started_at or "")
@@ -666,6 +718,7 @@ def _render_session_option(
         badge_w = _BADGE_WIDTHS.get(act, 0)
     model = _short_model(s.model)
     title_raw = _session_title(s)[:title_width]
+    title_pad = " " * (title_width - len(title_raw))  # pad to fixed column
     title_esc = _rich_escape(title_raw)
     sid = s.session_id[:8]
     tokens_plain = s.tokens_display
@@ -683,22 +736,25 @@ def _render_session_option(
         title_color = C_DIM if stale else C_LIGHT
         title_fmt = f"[{title_color}]{title_esc}[/{title_color}]"
 
-    # Line 1: " {icon} {title}          {badge}"
+    # Line 1: " {icon} {title......}  {age}  {badge}"
+    # title_pad ensures age always starts at the same column
     prefix_w = 3  # visible: space + icon + space
+    age_col = f"{age_str:>4}"
+    age_w = 2 + 4  # "  " + age_col
     if badge:
-        fill = max(2, LINE_WIDTH - prefix_w - len(title_raw) - badge_w)
-        line1 = f" {icon} {title_fmt}{' ' * fill}{badge}"
+        fill = max(2, LINE_WIDTH - prefix_w - title_width - age_w - badge_w)
+        line1 = f" {icon} {title_fmt}{title_pad}  [{s_dim}]{age_col}[/{s_dim}]{' ' * fill}{badge}"
     else:
-        line1 = f" {icon} {title_fmt}"
+        line1 = f" {icon} {title_fmt}{title_pad}  [{s_dim}]{age_col}[/{s_dim}]"
 
-    # Line 2: only show model if not opus; stats dim, tokens colored, age mid, sid faint
+    # Line 2: only show model if not opus; stats dim, tokens colored, sid faint
     model_part = "" if model == "opus" else f"[{C_BLUE}]{model:<8}[/{C_BLUE}]"
     tokens_fmt = _colored_tokens(s)
     tok_pad = " " * max(1, 8 - len(tokens_plain))
     dur_str = f"{duration:<8}" if duration else ""
     dur_len = 8 if duration else 0
     model_len = 0 if model == "opus" else 8
-    meta_left_len = 4 + model_len + 10 + 8 + dur_len + len(age_str)
+    meta_left_len = 4 + model_len + 10 + 8 + dur_len
     sid_gap = max(2, LINE_WIDTH - meta_left_len - 8)
 
     line2 = (
@@ -706,7 +762,6 @@ def _render_session_option(
         f"{tokens_fmt}"
         f"[{s_dim}]{tok_pad}"
         f"{dur_str}[/{s_dim}]"
-        f"[{s_mid}]{age_str}[/{s_mid}]"
         f"{' ' * sid_gap}[{C_FAINT}]{sid}[/{C_FAINT}]"
     )
 
@@ -1021,6 +1076,7 @@ def _render_notified_session_option(
 # ─── Quiet session separator ──────────────────────────────────────
 
 QUIET_SEPARATOR_LABEL = f"[{C_DIM}]──────────────────────────────────────────────[/{C_DIM}]"
+DEFERRED_SEPARATOR_LABEL = f"[{C_DEFER}]⏸ deferred ─────────────────────────────────[/{C_DEFER}]"
 
 
 # ─── Todo rendering ────────────────────────────────────────────────

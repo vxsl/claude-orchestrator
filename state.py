@@ -458,7 +458,7 @@ def content_search(
     results.sort(key=lambda r: r.total_score, reverse=True)
     return results
 from threads import Thread, ThreadActivity, session_activity, load_last_seen, mark_thread_seen
-from rendering import _best_activity, _all_sessions_seen
+from rendering import _best_activity, _all_sessions_seen, _is_today
 
 
 class AppState:
@@ -558,6 +558,8 @@ class AppState:
                     scored.append((w, best))
             scored.sort(key=lambda t: t[1], reverse=True)
             discovered = [w for w, _ in scored]
+            # When searching, fuzzy rank is the sort — just concatenate
+            return manual + discovered
 
         # Apply category filter to discovered
         if self.filter_mode == "work":
@@ -565,7 +567,8 @@ class AppState:
         elif self.filter_mode == "personal":
             discovered = [w for w in discovered if w.category == Category.PERSONAL]
 
-        # Sort discovered: unread responses float to top, then by last user message time
+        # Combine and sort unified list
+        combined = manual + discovered
         last_seen = self.get_last_seen()
 
         def _has_unread(ws: Workstream) -> bool:
@@ -577,10 +580,30 @@ class AppState:
                 return not _all_sessions_seen(sessions, last_seen)
             return False
 
-        discovered.sort(key=lambda w: w.last_user_activity or w.updated_at or "", reverse=True)
-        discovered.sort(key=lambda w: 0 if _has_unread(w) else 1)
+        def _best_session_ts(ws: Workstream) -> str:
+            """Best activity timestamp: latest session activity, last_user_activity, or updated_at."""
+            sessions = self.sessions_for_ws(ws)
+            if sessions:
+                ts = max((s.last_activity or s.started_at or "" for s in sessions), default="")
+                if ts:
+                    return ts
+            return ws.last_user_activity or ws.updated_at or ""
 
-        return manual + discovered
+        # Sort by the chosen sort mode, using live session timestamps
+        if self.sort_mode in ("updated", "activity"):
+            combined.sort(key=_best_session_ts, reverse=True)
+        elif self.sort_mode == "created":
+            combined.sort(key=lambda w: w.created_at, reverse=True)
+        elif self.sort_mode == "category":
+            combined.sort(key=lambda w: (w.category.value, _best_session_ts(w)), reverse=True)
+        elif self.sort_mode == "name":
+            combined.sort(key=lambda w: w.name.lower())
+
+        # Float unread/thinking to top — only today's items, so stale "your turn"
+        # responses from days ago don't leapfrog recently-active workstreams.
+        combined.sort(key=lambda w: 0 if (_has_unread(w) and _is_today(_best_session_ts(w))) else 1)
+
+        return combined
 
     # ── Workstream selection ──
 
