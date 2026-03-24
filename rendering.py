@@ -668,7 +668,6 @@ def _render_session_option(
         sid = s.session_id[:8]
         tokens_plain = s.tokens_display
         msgs_str = f"{s.message_count}↑{s.assistant_message_count}↓"
-        duration = s.duration_display
         age_str = s.age
         title_fmt = f"[{C_SHELF}]{title_esc}[/{C_SHELF}]"
         prefix_w = 3
@@ -742,7 +741,6 @@ def _render_session_option(
     sid = s.session_id[:8]
     tokens_plain = s.tokens_display
     msgs_str = f"{s.message_count}↑{s.assistant_message_count}↓"
-    duration = s.duration_display
     age_str = s.age
 
     # Title styling: committed = green, idle = dim, thinking = blue, done = green, active = bright
@@ -906,7 +904,6 @@ def _render_content_search_result(
     model = _short_model(s.model)
     hits_str = f"{result.hit_count} hit{'s' if result.hit_count != 1 else ''}"
     msgs_str = f"{s.message_count}↑{s.assistant_message_count}↓"
-    duration = s.duration_display
     age_str = s.age
     sid = s.session_id[:8]
 
@@ -915,18 +912,17 @@ def _render_content_search_result(
     fill = max(2, LINE_WIDTH - prefix_w - len(title_raw) - len(hits_str))
     line1 = f" \u2738 {title}{' ' * fill}[{C_YELLOW}]{hits_str}[/{C_YELLOW}]"
 
-    # Line 2: only show model if not opus; stats dim, age mid, sid faint
+    # Line 2: only show model if not opus; stats dim, sid faint
     model_part = "" if model == "opus" else f"[{C_MID}]{model:<8}[/{C_MID}]"
-    dur_str = f"{duration:<8}" if duration else ""
-    dur_len = 8 if duration else 0
+    work_time = s.work_time_display
+    work_str = f"[italic]{work_time} think[/italic]  " if work_time else ""
     model_len = 0 if model == "opus" else 8
-    meta_left_len = 4 + model_len + 10 + dur_len + len(age_str)
+    meta_left_len = 4 + model_len + 10 + (len(work_time) + 8 if work_time else 0)
     sid_gap = max(2, LINE_WIDTH - meta_left_len - 8)
 
     line2 = (
         f"{INDENT}{model_part}[{C_DIM}]{msgs_str:<10}"
-        f"{dur_str}[/{C_DIM}]"
-        f"[{C_MID}]{age_str}[/{C_MID}]"
+        f"{work_str}[/{C_DIM}]"
         f"{' ' * sid_gap}[{C_FAINT}]{sid}[/{C_FAINT}]"
     )
 
@@ -1027,7 +1023,6 @@ def _render_notified_session_option(
     sid = s.session_id[:8]
     tokens_plain = s.tokens_display
     msgs_str = f"{s.message_count}↑{s.assistant_message_count}↓"
-    duration = s.duration_display
     age_str = s.age
 
     # Title green for done (your-turn) sessions, bright otherwise
@@ -1047,17 +1042,16 @@ def _render_notified_session_option(
     model_part = "" if model == "opus" else f"[{C_MID}]{model:<8}[/{C_MID}]"
     tokens_fmt = _colored_tokens(s)
     tok_pad = " " * max(1, 8 - len(tokens_plain))
-    dur_str = f"{duration:<8}" if duration else ""
-    dur_len = 8 if duration else 0
+    work_time = s.work_time_display
+    work_str = f"[italic]{work_time} think[/italic]  " if work_time else ""
+    work_len = len(work_time) + 8 if work_time else 0  # "Xm think  "
     model_len = 0 if model == "opus" else 8
-    meta_left_len = 4 + model_len + 10 + 8 + dur_len + len(age_str)
+    meta_left_len = 4 + model_len + 10 + 8 + work_len
     sid_gap = max(2, LINE_WIDTH - meta_left_len - 8)
     line2_base = (
         f"{INDENT}{model_part}[{C_DIM}]{msgs_str:<10}[/{C_DIM}]"
         f"{tokens_fmt}"
-        f"[{C_DIM}]{tok_pad}"
-        f"{dur_str}[/{C_DIM}]"
-        f"[{C_MID}]{age_str}[/{C_MID}]"
+        f"[{C_DIM}]{tok_pad}{work_str}[/{C_DIM}]"
     )
     line2 = line2_base + (f"{' ' * sid_gap}[{C_FAINT}]{sid}[/{C_FAINT}]" if badge else "")
 
