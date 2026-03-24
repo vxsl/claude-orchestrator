@@ -1117,7 +1117,7 @@ def THINKING_SEPARATOR_LABEL(width: int = 60) -> str:
 # ─── Todo rendering ────────────────────────────────────────────────
 
 TODO_UNDONE_ICON = "\u25cb"   # ○
-TODO_DONE_ICON = "\u25cf"     # ●
+TODO_DONE_ICON = "\u2713"     # ✓
 TODO_ARCHIVED_ICON = "\u25cc"  # ◌
 TODO_CRYSTAL_ICON = "\u25c8"  # ◈
 
@@ -1131,14 +1131,14 @@ def _render_todo_option(item: TodoItem, is_archived: bool = False) -> str:
         text_fmt = f"[{C_DIM}]{text_esc}[/{C_DIM}]"
     elif item.done:
         icon = TODO_DONE_ICON
-        text_fmt = f"[{C_GREEN}]{text_esc}[/{C_GREEN}]"
+        text_fmt = f"[{C_DIM}]{text_esc}[/{C_DIM}]"
     elif is_crystal:
         icon = TODO_CRYSTAL_ICON
         text_fmt = f"[bold {C_GOLD}]{text_esc}[/bold {C_GOLD}]"
     else:
         icon = TODO_UNDONE_ICON
         text_fmt = text_esc
-    icon_color = C_GOLD if is_crystal and not is_archived else (C_DIM if is_archived else C_LIGHT)
+    icon_color = C_GOLD if is_crystal and not is_archived else (C_DIM if (is_archived or item.done) else C_LIGHT)
     ctx_hint = f" [{C_GOLD}]\u2726[/{C_GOLD}]" if is_crystal and item.context else (f" [{C_DIM}]+ctx[/{C_DIM}]" if item.context else "")
     tag = f" [{C_GOLD}]crystallized[/{C_GOLD}]" if is_crystal and not is_archived else ""
     age = _relative_time(item.created_at)
