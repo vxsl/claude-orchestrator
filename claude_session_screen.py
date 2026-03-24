@@ -288,14 +288,18 @@ class SessionHeaderWidget(Static):
             prefix = "you said: "
             w = max(20, self._width - 4)  # content width (subtract padding)
             clean = last_msg.replace("\n", " ").strip()
-            line_a = (prefix + clean)[:w]
-            remainder = (prefix + clean)[w:]
-            all_lines.append(f"[bold italic {C_MID}]{_esc(line_a)}[/bold italic {C_MID}]")
+            first_line_chars = max(1, w - len(prefix))
+            line_a_text = clean[:first_line_chars]
+            remainder = clean[first_line_chars:]
+            all_lines.append(
+                f"[{C_DIM} on black]{_esc(prefix)}[/{C_DIM} on black]"
+                f"[bold italic {C_MID} on black]{_esc(line_a_text)}[/bold italic {C_MID} on black]"
+            )
             if remainder:
                 line_b = remainder[:w]
                 if len(remainder) > w:
                     line_b += "…"
-                all_lines.append(f"[bold italic {C_MID}]{_esc(line_b)}[/bold italic {C_MID}]")
+                all_lines.append(f"[bold italic {C_MID} on black]{_esc(line_b)}[/bold italic {C_MID} on black]")
 
         self.app.call_from_thread(self.update, "\n".join(all_lines))
 
