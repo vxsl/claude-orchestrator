@@ -36,6 +36,12 @@ def _default_db_path() -> Path:
 _rust_db_conn: Optional[sqlite3.Connection] = None
 _rust_db_generation: int = -1
 
+# Session cache: avoid re-reading 400+ rows on every refresh tick.
+# TTL-based: data is at most _SESSION_CACHE_TTL_S seconds stale.
+_sessions_cache: Optional[list] = None  # list[ClaudeSession]
+_sessions_cache_time: float = 0.0
+_SESSION_CACHE_TTL_S: float = 0.5  # 500ms — Python refreshes at ≤1s rate anyway
+
 
 def _get_rust_db() -> Optional[sqlite3.Connection]:
     """Get a read-only connection to the Rust engine's SQLite DB, or None."""
@@ -112,6 +118,12 @@ def _hydrate_session(row: dict) -> ClaudeSession:
     )
 
 
+def invalidate_session_cache() -> None:
+    """Force the next discover_sessions() call to re-read from SQLite."""
+    global _sessions_cache_time
+    _sessions_cache_time = 0.0
+
+
 def _discover_sessions_from_db(
     limit: int = 0,
     project_filter: str = "",
@@ -120,10 +132,25 @@ def _discover_sessions_from_db(
     """Try to read sessions from the Rust engine's SQLite DB.
 
     Returns None if the DB is unavailable (caller should fall back to Python).
+
+    Caches results for up to _SESSION_CACHE_TTL_S seconds to avoid re-reading
+    400+ rows on every refresh tick. The Rust daemon is the source of truth;
+    Python's refresh is rate-limited to ≤1s anyway, so 500ms TTL is safe.
+    The cache is bypassed for filtered/limited queries (non-default args).
     """
+    global _sessions_cache, _sessions_cache_time
+
     conn = _get_rust_db()
     if conn is None:
         return None
+
+    # Cache only for the hot path: full unfiltered read
+    use_cache = (limit == 0 and not project_filter and min_messages == 1)
+
+    if use_cache:
+        age = time.monotonic() - _sessions_cache_time
+        if age < _SESSION_CACHE_TTL_S and _sessions_cache is not None:
+            return _sessions_cache
 
     try:
         query = "SELECT * FROM sessions WHERE message_count >= ?"
@@ -139,6 +166,11 @@ def _discover_sessions_from_db(
         cursor = conn.execute(query, params)
         sessions = [_hydrate_session(dict(row)) for row in cursor]
         conn.row_factory = None
+
+        if use_cache:
+            _sessions_cache = sessions
+            _sessions_cache_time = time.monotonic()
+
         return sessions
     except sqlite3.Error:
         return None

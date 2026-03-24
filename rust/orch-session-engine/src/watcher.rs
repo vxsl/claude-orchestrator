@@ -1,6 +1,6 @@
 //! Daemon mode — watch files via inotify, maintain SQLite, notify via pipe.
 
-use crate::{db, discovery, parser};
+use crate::{db, discovery, parser, threading};
 use anyhow::Result;
 use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use std::collections::{HashMap, HashSet};
@@ -38,10 +38,13 @@ pub fn run_daemon(db_path: &str, pipe_path: &str) -> Result<()> {
     let sessions = discovery::discover_all(&projects_dir)?;
     let live_ids = discovery::get_live_session_ids(&sessions_dir)?;
     db::write_sessions(&conn, &sessions, &live_ids)?;
+    let threads = threading::compute_threads(&sessions);
+    db::write_threads(&conn, &threads)?;
     eprintln!(
-        "orch-session-engine: synced {} sessions ({} live)",
+        "orch-session-engine: synced {} sessions ({} live) → {} threads",
         sessions.len(),
-        live_ids.len()
+        live_ids.len(),
+        threads.len(),
     );
     notify_pipe(pipe_path);
 
@@ -108,6 +111,7 @@ pub fn run_daemon(db_path: &str, pipe_path: &str) -> Result<()> {
         }
 
         let mut changed = false;
+        let mut sessions_changed = false;
 
         // Handle JSONL changes: re-parse only the changed files
         for path in &jsonl_changed {
@@ -130,6 +134,7 @@ pub fn run_daemon(db_path: &str, pipe_path: &str) -> Result<()> {
                                 || live_ids.contains(&session.session_id);
                             db::upsert_session(&conn, &session, is_live, new_mtime)?;
                             changed = true;
+                            sessions_changed = true;
                         }
                     }
                     Err(_) => continue,
@@ -153,6 +158,8 @@ pub fn run_daemon(db_path: &str, pipe_path: &str) -> Result<()> {
             let live_ids =
                 discovery::get_live_session_ids(&sessions_dir).unwrap_or_default();
             db::write_sessions(&conn, &sessions, &live_ids)?;
+            let threads = threading::compute_threads(&sessions);
+            db::write_threads(&conn, &threads)?;
             for s in &sessions {
                 let path = PathBuf::from(&s.jsonl_path);
                 if let Ok(mtime) = get_mtime(&path) {
@@ -161,6 +168,17 @@ pub fn run_daemon(db_path: &str, pipe_path: &str) -> Result<()> {
             }
             last_full_sync = Instant::now();
             changed = true;
+            sessions_changed = false; // full sync already rebuilt threads
+        }
+
+        // After incremental JSONL changes, recompute threads from full sessions table
+        if sessions_changed {
+            if let Ok(all_sessions) = load_all_sessions(&conn) {
+                let threads = threading::compute_threads(&all_sessions);
+                let _ = db::write_threads(&conn, &threads);
+            }
+            // Bump generation so Python knows something changed
+            let _ = db::bump_generation_pub(&conn);
         }
 
         if changed {
@@ -224,6 +242,43 @@ fn update_all_liveness(conn: &rusqlite::Connection, live_ids: &HashSet<String>) 
         }
     }
     Ok(any_changed)
+}
+
+/// Load all sessions from SQLite for thread recomputation after incremental updates.
+fn load_all_sessions(conn: &rusqlite::Connection) -> Result<Vec<parser::Session>> {
+    use std::collections::HashMap;
+    let mut stmt = conn.prepare(
+        "SELECT session_id, project_path, title, started_at, last_activity,
+                message_count, git_branch, first_message, all_session_ids,
+                last_message_role, last_stop_reason, turn_complete, last_tool_name,
+                is_live
+         FROM sessions WHERE message_count >= 1",
+    )?;
+    let sessions: Vec<parser::Session> = stmt
+        .query_map([], |row| {
+            let all_ids_json: String = row.get(8).unwrap_or_default();
+            Ok(parser::Session {
+                session_id: row.get(0)?,
+                project_path: row.get(1)?,
+                title: row.get(2).unwrap_or_default(),
+                started_at: row.get(3).unwrap_or_default(),
+                last_activity: row.get(4).unwrap_or_default(),
+                message_count: row.get(5).unwrap_or(0),
+                git_branch: row.get(6).unwrap_or_default(),
+                first_message: row.get(7).unwrap_or_default(),
+                all_session_ids: serde_json::from_str(&all_ids_json).unwrap_or_default(),
+                last_message_role: row.get(9).unwrap_or_default(),
+                last_stop_reason: row.get(10).unwrap_or_default(),
+                turn_complete: row.get::<_, i32>(11).unwrap_or(0) != 0,
+                last_tool_name: row.get(12).unwrap_or_default(),
+                is_live: row.get::<_, i32>(13).unwrap_or(0) != 0,
+                tool_counts: HashMap::new(),
+                ..Default::default()
+            })
+        })?
+        .filter_map(|r| r.ok())
+        .collect();
+    Ok(sessions)
 }
 
 fn setup_pipe(pipe_path: &str) -> Result<()> {

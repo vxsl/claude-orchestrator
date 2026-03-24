@@ -1,6 +1,7 @@
 mod db;
 mod discovery;
 mod parser;
+mod threading;
 mod watcher;
 
 use anyhow::Result;

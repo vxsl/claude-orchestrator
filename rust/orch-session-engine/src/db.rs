@@ -1,6 +1,7 @@
 //! SQLite persistence layer — WAL mode for concurrent read/write.
 
 use crate::parser::Session;
+use crate::threading::ThreadCluster;
 use anyhow::Result;
 use rusqlite::{params, Connection};
 use std::collections::HashSet;
@@ -22,11 +23,22 @@ pub fn open_db(path: &Path) -> Result<Connection> {
     Ok(conn)
 }
 
-/// Add columns that didn't exist in older schema versions.
+/// Add columns/tables that didn't exist in older schema versions.
 fn migrate(conn: &Connection) -> Result<()> {
     let _ = conn.execute(
         "ALTER TABLE sessions ADD COLUMN total_work_ms INTEGER NOT NULL DEFAULT 0",
         [],
+    );
+    // threads table may not exist on older DBs
+    let _ = conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS threads (
+            thread_id    TEXT PRIMARY KEY,
+            name         TEXT NOT NULL DEFAULT '',
+            project_path TEXT NOT NULL DEFAULT '',
+            session_ids  TEXT NOT NULL DEFAULT '[]',
+            last_activity TEXT NOT NULL DEFAULT ''
+        );
+        CREATE INDEX IF NOT EXISTS idx_threads_activity ON threads(last_activity);",
     );
     Ok(())
 }
@@ -71,6 +83,17 @@ fn create_tables(conn: &Connection) -> Result<()> {
         CREATE INDEX IF NOT EXISTS idx_sessions_activity ON sessions(last_activity);
         CREATE INDEX IF NOT EXISTS idx_sessions_live ON sessions(is_live);
 
+        -- Pre-computed thread clusters (updated by Rust after every session write).
+        CREATE TABLE IF NOT EXISTS threads (
+            thread_id    TEXT PRIMARY KEY,
+            name         TEXT NOT NULL DEFAULT '',
+            project_path TEXT NOT NULL DEFAULT '',
+            session_ids  TEXT NOT NULL DEFAULT '[]',
+            last_activity TEXT NOT NULL DEFAULT ''
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_threads_activity ON threads(last_activity);
+
         -- Generation counter: bumped on every write, Python polls this.
         CREATE TABLE IF NOT EXISTS meta (
             key   TEXT PRIMARY KEY,
@@ -80,6 +103,11 @@ fn create_tables(conn: &Connection) -> Result<()> {
         ",
     )?;
     Ok(())
+}
+
+/// Bump the generation counter (public — for incremental updates in watcher).
+pub fn bump_generation_pub(conn: &Connection) -> Result<()> {
+    bump_generation(conn)
 }
 
 /// Bump the generation counter (called after writes).
@@ -281,5 +309,46 @@ pub fn update_liveness(
         ],
     )?;
     bump_generation(conn)?;
+    Ok(())
+}
+
+/// Replace all thread clusters with the freshly computed set.
+///
+/// Called by the watcher after every session write so Python reads
+/// pre-computed clusters instead of re-clustering in Python.
+pub fn write_threads(conn: &Connection, threads: &[ThreadCluster]) -> Result<()> {
+    let tx = conn.unchecked_transaction()?;
+
+    let new_ids: std::collections::HashSet<&str> =
+        threads.iter().map(|t| t.thread_id.as_str()).collect();
+
+    // Remove stale threads
+    let existing: Vec<String> = {
+        let mut stmt = tx.prepare("SELECT thread_id FROM threads")?;
+        stmt.query_map([], |row| row.get(0))?
+            .filter_map(|r| r.ok())
+            .collect()
+    };
+    for id in &existing {
+        if !new_ids.contains(id.as_str()) {
+            tx.execute("DELETE FROM threads WHERE thread_id = ?", params![id])?;
+        }
+    }
+
+    for t in threads {
+        let session_ids = serde_json::to_string(&t.session_ids)?;
+        tx.execute(
+            "INSERT INTO threads (thread_id, name, project_path, session_ids, last_activity)
+             VALUES (?1, ?2, ?3, ?4, ?5)
+             ON CONFLICT(thread_id) DO UPDATE SET
+                name          = excluded.name,
+                project_path  = excluded.project_path,
+                session_ids   = excluded.session_ids,
+                last_activity = excluded.last_activity",
+            params![t.thread_id, t.name, t.project_path, session_ids, t.last_activity],
+        )?;
+    }
+
+    tx.commit()?;
     Ok(())
 }

@@ -390,17 +390,65 @@ def _derive_thread_name(sessions: list[ClaudeSession],
     return ""
 
 
+def _discover_threads_from_db(
+    sessions: list[ClaudeSession],
+    last_seen: dict[str, str],
+) -> Optional[list[Thread]]:
+    """Read pre-computed thread clusters from the Rust engine's SQLite DB.
+
+    Returns None if unavailable; returns [] only when the DB genuinely has no threads.
+    """
+    from sessions import _get_rust_db
+    conn = _get_rust_db()
+    if conn is None:
+        return None
+    try:
+        rows = conn.execute(
+            "SELECT thread_id, name, project_path, session_ids"
+            " FROM threads ORDER BY last_activity DESC"
+        ).fetchall()
+    except Exception:
+        return None
+
+    if not rows:
+        return None  # DB not yet populated by daemon
+
+    # Build session_id → ClaudeSession lookup (including alias IDs)
+    by_id: dict[str, ClaudeSession] = {s.session_id: s for s in sessions}
+    for s in sessions:
+        for alias in s.all_session_ids:
+            by_id.setdefault(alias, s)
+
+    threads: list[Thread] = []
+    for thread_id, name, project_path, sids_json in rows:
+        try:
+            sids: list[str] = json.loads(sids_json) if sids_json else []
+        except (json.JSONDecodeError, TypeError):
+            sids = []
+        cluster = [by_id[sid] for sid in sids if sid in by_id]
+        if not cluster:
+            continue
+        threads.append(Thread(
+            thread_id=thread_id,
+            name=name,
+            project_path=project_path,
+            sessions=cluster,
+            _last_seen=last_seen,
+        ))
+
+    # Re-sort: live first, then by last activity
+    threads.sort(key=lambda t: t.last_activity or "", reverse=True)
+    threads.sort(key=lambda t: t.is_live, reverse=True)
+    return threads
+
+
 def discover_threads(min_messages: int = 1) -> list[Thread]:
     """Discover and cluster all Claude sessions into threads.
 
-    This is the main entry point. It:
-    1. Discovers all sessions
-    2. Groups by project path
-    3. Sorts each group chronologically
-    4. Merges adjacent sessions using time + branch heuristics
-    5. Derives names for each thread
+    Fast path: reads pre-computed clusters from the Rust engine's SQLite
+    `threads` table — no Python clustering, no file I/O.
 
-    Returns threads sorted by last activity (most recent first).
+    Falls back to pure-Python clustering when the Rust daemon is not running.
     """
     sessions = discover_sessions(min_messages=min_messages)
     if not sessions:
@@ -408,39 +456,35 @@ def discover_threads(min_messages: int = 1) -> list[Thread]:
 
     last_seen = load_last_seen()
 
-    # Group sessions by project path.
-    # Normalize .claude/worktrees/agent-*/ paths to the parent project so
-    # subagent sessions fold into the main workstream instead of spawning
-    # orphan "worktree-agent-XXXX" workstreams.
-    # Skip sessions with the virtual /subagents path — these are Agent-tool
-    # subprocesses with no real project_path; they'd form orphan workstreams.
+    # Fast path: Rust-precomputed thread clusters.
+    # An empty result with non-empty sessions means a session/DB mismatch
+    # (e.g. test fixtures or a stale DB) — fall back to Python in that case.
+    db_threads = _discover_threads_from_db(sessions, last_seen)
+    if db_threads:
+        return db_threads
+
+    # ── Python fallback (Rust daemon not running or DB not yet populated) ──
+
     by_project: dict[str, list[ClaudeSession]] = {}
     for s in sessions:
         path = s.project_path
         if path == "/subagents":
             continue
-        # .claude/worktrees/agent-XXXX → parent project
         if "/.claude/worktrees/" in path:
             parent = path.split("/.claude/worktrees/")[0]
             if parent:
                 path = parent
         by_project.setdefault(path, []).append(s)
 
-    # Use cached git_branch/first_message from parse_session (no file I/O)
-    branches: dict[str, str] = {}
-    messages: dict[str, str] = {}
-    for s in sessions:
-        branches[s.session_id] = s.git_branch or _extract_git_branch(s)
-        messages[s.session_id] = s.first_message or _extract_first_message(s)
+    # Rust always populates git_branch/first_message; no file I/O needed.
+    branches: dict[str, str] = {s.session_id: s.git_branch for s in sessions}
+    messages: dict[str, str] = {s.session_id: s.first_message for s in sessions}
 
     threads: list[Thread] = []
 
     for project_path, proj_sessions in by_project.items():
-        # Sort chronologically
         proj_sessions.sort(key=lambda s: s.started_at or s.last_activity or "")
 
-        # Greedy merge: walk through sorted sessions, extend current cluster
-        # or start a new one
         clusters: list[list[ClaudeSession]] = []
         current: list[ClaudeSession] = []
 
@@ -448,12 +492,9 @@ def discover_threads(min_messages: int = 1) -> list[Thread]:
             if not current:
                 current = [s]
                 continue
-
-            # Check if this session should merge with the current cluster
             last_in_cluster = current[-1]
             branch_last = branches.get(last_in_cluster.session_id, "")
             branch_s = branches.get(s.session_id, "")
-
             if _should_merge(last_in_cluster, s, branch_last, branch_s):
                 current.append(s)
             else:
@@ -463,11 +504,9 @@ def discover_threads(min_messages: int = 1) -> list[Thread]:
         if current:
             clusters.append(current)
 
-        # Create Thread objects from clusters
         for cluster in clusters:
-            thread_id = cluster[0].session_id  # Use first session ID
+            thread_id = cluster[0].session_id
             name = _derive_thread_name(cluster, branches, messages)
-
             threads.append(Thread(
                 thread_id=thread_id,
                 name=name,
@@ -476,8 +515,6 @@ def discover_threads(min_messages: int = 1) -> list[Thread]:
                 _last_seen=last_seen,
             ))
 
-    # Sort by last activity, most recent first. Live threads always on top.
     threads.sort(key=lambda t: t.last_activity or "", reverse=True)
     threads.sort(key=lambda t: t.is_live, reverse=True)
-
     return threads
