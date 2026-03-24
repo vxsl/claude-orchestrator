@@ -9,6 +9,8 @@ SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
 # on window 0, passes through so the TUI can use it.
 if [ -n "$TMUX" ]; then
     tmux bind -n C-h if-shell '[ "#{window_index}" = "0" ]' 'send-keys C-h' 'select-window -t orch:0' 2>/dev/null
+    # Disable tmux prefix in the orch session so ctrl+b passes through to the TUI
+    tmux set-option prefix None 2>/dev/null || true
 fi
 
 export TEXTUAL_COLOR_SYSTEM=truecolor
