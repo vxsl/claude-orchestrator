@@ -233,7 +233,7 @@ class OrchestratorApp(App):
         if event.key in ("ctrl+b", "ctrl+x"):
             event.prevent_default()
             event.stop()
-            if event.key == "ctrl+x":
+            if event.key == "ctrl+b":
                 self.action_next_tab()
             else:
                 self.action_prev_tab()
