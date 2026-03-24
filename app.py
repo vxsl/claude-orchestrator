@@ -373,7 +373,7 @@ class OrchestratorApp(App):
         self.set_timer(15, self._start_session_polling)
         self.set_timer(20, self._start_liveness_backstop)
 
-        self._throbber_timer = self.set_interval(0.1, self._tick_throbber)
+        self._throbber_timer = self.set_interval(0.15, self._tick_throbber)
 
         ws_table.focus()
 
@@ -912,10 +912,22 @@ class OrchestratorApp(App):
                 _render_session_option(s, act, self.state.throbber_frame, title_width=35, seen=seen),
                 id=str(i),
             ))
-        olist.clear_options()
-        olist.add_options(options)
-        if highlighted is not None and highlighted < len(options):
-            olist.highlighted = highlighted
+        # Use in-place updates when the session list structure is unchanged —
+        # clear_options() + add_options() remounts every option widget and
+        # triggers a full CSS matching pass, which is expensive at 10fps.
+        if olist.option_count == len(options):
+            for idx, opt in enumerate(options):
+                try:
+                    existing = olist.get_option_at_index(idx)
+                    if existing.prompt != opt.prompt:
+                        olist.replace_option_prompt_at_index(idx, opt.prompt)
+                except Exception:
+                    olist.replace_option_prompt_at_index(idx, opt.prompt)
+        else:
+            olist.clear_options()
+            olist.add_options(options)
+            if highlighted is not None and highlighted < len(options):
+                olist.highlighted = highlighted
 
     @on(OptionList.OptionHighlighted, "#ws-table")
     def on_ws_highlighted(self, event: OptionList.OptionHighlighted):

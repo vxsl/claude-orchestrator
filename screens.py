@@ -1145,7 +1145,7 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         self.query_one("#detail-sessions", OptionList).focus()
         self._update_pane_labels()
         self._refresh_timer = self.set_interval(30, self._periodic_refresh)
-        self._throbber_timer = self.set_interval(0.1, self._tick_throbber)
+        self._throbber_timer = self.set_interval(0.15, self._tick_throbber)
         self._mounted_once = True
         if self._sessions_loading():
             self._loading_timer = self.set_interval(0.12, self._tick_loading)
@@ -3178,7 +3178,7 @@ class CurrentSessionsScreen(_VimOptionListMixin, ModalScreen[None]):
         self._last_seen_cache = load_last_seen()
         self._load_sessions()
         self._refresh_timer = self.set_interval(5.0, self._load_sessions)
-        self._throbber_timer = self.set_interval(0.1, self._tick_throbber)
+        self._throbber_timer = self.set_interval(0.15, self._tick_throbber)
 
     def on_screen_resume(self) -> None:
         self._last_seen_cache = load_last_seen()
@@ -3264,12 +3264,26 @@ class CurrentSessionsScreen(_VimOptionListMixin, ModalScreen[None]):
                 options.append(Option(prompt, id=s.session_id))
                 idx += 1
 
-        old_idx = olist.highlighted
-        olist.clear_options()
-        olist.add_options(options)
         self._animating_sessions = animating
-        if old_idx is not None and old_idx < olist.option_count:
-            olist.highlighted = old_idx
+
+        # Use in-place updates when structure is unchanged — clear_options() +
+        # add_options() remounts every option widget and triggers a full CSS
+        # matching pass per option, which is very expensive at 10fps.
+        old_idx = olist.highlighted
+        if olist.option_count == len(options):
+            with self.app.batch_update():
+                for i, opt in enumerate(options):
+                    try:
+                        existing = olist.get_option_at_index(i)
+                        if existing.prompt != opt.prompt:
+                            olist.replace_option_prompt_at_index(i, opt.prompt)
+                    except Exception:
+                        olist.replace_option_prompt_at_index(i, opt.prompt)
+        else:
+            olist.clear_options()
+            olist.add_options(options)
+            if old_idx is not None and old_idx < olist.option_count:
+                olist.highlighted = old_idx
 
     def _get_selected(self):
         """Return (Workstream, session_id) for the highlighted row, or (None, None)."""
