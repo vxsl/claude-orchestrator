@@ -1093,12 +1093,13 @@ class AppState:
 
     @staticmethod
     def active_todos(ws: Workstream) -> list[TodoItem]:
-        """Non-archived todos: crystallized first, then undone, then done."""
+        """Non-archived todos: crystallized first, then undone, then done. Each group newest first."""
         active = [t for t in ws.todos if not t.archived]
         crystallized = [t for t in active if not t.done and getattr(t, "origin", "manual") == "crystallized"]
         undone = [t for t in active if not t.done and getattr(t, "origin", "manual") != "crystallized"]
         done = [t for t in active if t.done]
-        return crystallized + undone + done
+        key = lambda t: getattr(t, "created_at", "")
+        return sorted(crystallized, key=key, reverse=True) + sorted(undone, key=key, reverse=True) + sorted(done, key=key, reverse=True)
 
     @staticmethod
     def archived_todos(ws: Workstream) -> list[TodoItem]:
