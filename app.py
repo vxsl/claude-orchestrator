@@ -252,6 +252,11 @@ class OrchestratorApp(App):
         self._ws_pending_session: dict[str, str] = {}  # ws_id -> session_id for reuse on "c"
 
     def on_key(self, event) -> None:
+        # Swallow tab / shift+tab so they don't cycle focus among widgets
+        if event.key in ("tab", "shift+tab"):
+            event.prevent_default()
+            event.stop()
+            return
         if event.key in ("ctrl+b", "ctrl+x"):
             event.prevent_default()
             event.stop()
