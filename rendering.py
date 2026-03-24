@@ -748,13 +748,14 @@ def _render_session_option(
     if archived:
         title_fmt = f"[{C_DIM}]{title_esc}[/{C_DIM}]"
     elif committed:
-        title_fmt = f"[{C_GREEN}]{title_esc}[/{C_GREEN}]"
+        title_color = s_dim if seen else C_GREEN
+        title_fmt = f"[{title_color}]{title_esc}[/{title_color}]"
     elif act == ThreadActivity.IDLE:
         title_fmt = f"[{s_dim}]{title_esc}[/{s_dim}]"
     elif act == ThreadActivity.THINKING:
         title_fmt = f"[bold {C_BLUE}]{title_esc}[/bold {C_BLUE}]"
     elif act in (ThreadActivity.AWAITING_INPUT, ThreadActivity.RESPONSE_READY):
-        title_color = C_DIM if stale else C_GREEN
+        title_color = s_dim if seen else (C_DIM if stale else C_GREEN)
         title_fmt = f"[{title_color}]{title_esc}[/{title_color}]"
     else:
         title_color = C_DIM if stale else C_LIGHT
@@ -1027,7 +1028,7 @@ def _render_notified_session_option(
 
     # Title green for done (your-turn) sessions, bright otherwise
     your_turn = act in (ThreadActivity.AWAITING_INPUT, ThreadActivity.RESPONSE_READY)
-    title_fmt = f"[{C_GREEN}]{title_esc}[/{C_GREEN}]" if your_turn else f"[{C_LIGHT}]{title_esc}[/{C_LIGHT}]"
+    title_fmt = f"[{C_GREEN}]{title_esc}[/{C_GREEN}]" if (your_turn and not seen) else f"[{C_LIGHT}]{title_esc}[/{C_LIGHT}]"
 
     # Line 1: badge if present, else sid fills the right slot
     prefix_w = 3
