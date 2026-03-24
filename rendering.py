@@ -47,6 +47,7 @@ C_DIM = "#6e7681"        # subdued (terminal bright-black)
 C_FAINT = "#484f58"      # near-invisible — IDs, decorative
 C_RESOLVED = "#7a8a9e"  # muted blue-gray — committed/resolved sessions
 C_SHELF = "#7a5218"    # dim amber — shelved sessions (set aside)
+C_OPUS = "#c9a06c"     # warm bronze-gold — opus model badge (shiny but muted)
 
 # ─── Background Palette ──────────────────────────────────────────────
 BG_BASE = "#000000"      # true black — matches terminal
@@ -672,12 +673,13 @@ def _render_session_option(
         age_w = 2 + 4
         fill = max(2, LINE_WIDTH - prefix_w - title_width - age_w - badge_w)
         line1 = f" {icon} {title_fmt}{title_pad}  [{C_FAINT}]{age_col}[/{C_FAINT}]{' ' * fill}{badge}"
-        model_part = "" if model == "opus" else f"[{C_FAINT}]{model:<8}[/{C_FAINT}]"
+        model_color = C_FAINT  # shelved: everything faint
+        model_part = f"[{model_color}]{model:<8}[/{model_color}]"
         tok_pad = " " * max(1, 8 - len(tokens_plain))
         work_time = s.work_time_display
         work_str = f"[italic]{work_time} think[/italic]  " if work_time else ""
         work_len = len(work_str) if work_time else 0
-        model_len = 0 if model == "opus" else 8
+        model_len = 8
         meta_left_len = 4 + model_len + 10 + 8 + work_len
         sid_gap = max(2, LINE_WIDTH - meta_left_len - 8)
         line2 = (
@@ -770,16 +772,21 @@ def _render_session_option(
         fill = max(2, LINE_WIDTH - prefix_w - title_width - age_w - 8)
         line1 = f" {icon} {title_fmt}{title_pad}  [{s_dim}]{age_col}[/{s_dim}]{' ' * fill}[{C_FAINT}]{sid}[/{C_FAINT}]"
 
-    # Line 2: only show model if not opus; stats dim, tokens colored
+    # Line 2: model + stats dim, tokens colored
     # sid shown here only when a badge occupies line 1's right slot
-    model_color = C_FAINT if archived else C_MID
-    model_part = "" if model == "opus" else f"[{model_color}]{model:<8}[/{model_color}]"
+    if archived:
+        model_color = C_FAINT
+    elif model == "opus":
+        model_color = C_OPUS
+    else:
+        model_color = C_MID
+    model_part = f"[{model_color}]{model:<8}[/{model_color}]"
     tokens_fmt = f"[{C_FAINT}]{tokens_plain}[/{C_FAINT}]" if archived else _colored_tokens(s)
     tok_pad = " " * max(1, 8 - len(tokens_plain))
     work_time = s.work_time_display
     work_str = f"[italic]{work_time} think[/italic]  " if work_time else ""
     work_len = len(work_str) if work_time else 0
-    model_len = 0 if model == "opus" else 8
+    model_len = 8
     meta_left_len = 4 + model_len + 10 + 8 + work_len
     sid_gap = max(2, LINE_WIDTH - meta_left_len - 8)
 
@@ -910,11 +917,12 @@ def _render_content_search_result(
     fill = max(2, LINE_WIDTH - prefix_w - len(title_raw) - len(hits_str))
     line1 = f" \u2738 {title}{' ' * fill}[{C_YELLOW}]{hits_str}[/{C_YELLOW}]"
 
-    # Line 2: only show model if not opus; stats dim, sid faint
-    model_part = "" if model == "opus" else f"[{C_MID}]{model:<8}[/{C_MID}]"
+    # Line 2: model + stats dim, sid faint
+    model_color = C_OPUS if model == "opus" else C_MID
+    model_part = f"[{model_color}]{model:<8}[/{model_color}]"
     work_time = s.work_time_display
     work_str = f"[italic]{work_time} think[/italic]  " if work_time else ""
-    model_len = 0 if model == "opus" else 8
+    model_len = 8
     meta_left_len = 4 + model_len + 10 + (len(work_time) + 8 if work_time else 0)
     sid_gap = max(2, LINE_WIDTH - meta_left_len - 8)
 
@@ -1037,13 +1045,14 @@ def _render_notified_session_option(
         line1 = f" {icon} {title_fmt}{' ' * fill}[{C_FAINT}]{sid}[/{C_FAINT}]"
 
     # Line 2: sid shown here only when badge occupies line 1's right slot
-    model_part = "" if model == "opus" else f"[{C_MID}]{model:<8}[/{C_MID}]"
+    model_color = C_OPUS if model == "opus" else C_MID
+    model_part = f"[{model_color}]{model:<8}[/{model_color}]"
     tokens_fmt = _colored_tokens(s)
     tok_pad = " " * max(1, 8 - len(tokens_plain))
     work_time = s.work_time_display
     work_str = f"[italic]{work_time} think[/italic]  " if work_time else ""
     work_len = len(work_time) + 8 if work_time else 0  # "Xm think  "
-    model_len = 0 if model == "opus" else 8
+    model_len = 8
     meta_left_len = 4 + model_len + 10 + 8 + work_len
     sid_gap = max(2, LINE_WIDTH - meta_left_len - 8)
     line2_base = (
