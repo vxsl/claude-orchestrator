@@ -70,7 +70,7 @@ BG_BASE = "#000000"      # true black — matches terminal
 BG_SURFACE = "#060606"   # barely lifted — focused panels
 BG_RAISED = "#0d1117"    # bars, headers, inputs
 BG_CHROME = "#060809"    # tab bar and footer — darker chrome, between black and panels
-BG_THINKING = "color(18)"  # 256-color navy (#000087) — direct palette index, no quantization
+BG_THINKING = "#0d1f3c"  # dark navy blue — active thinking rows
 
 
 # ─── Staleness helpers ──────────────────────────────────────────────
@@ -733,10 +733,16 @@ def _render_session_option(
     _active = act in (ThreadActivity.THINKING, ThreadActivity.AWAITING_INPUT)
     committed = bool(s.last_commit_sha) and not _active
 
+    # "your turn" activity: show session ID on line 1 instead of badge
+    your_turn = act in (ThreadActivity.AWAITING_INPUT, ThreadActivity.RESPONSE_READY)
     if committed:
         icon = f"[{C_RESOLVED}]✓[/{C_RESOLVED}]"
         badge = f"[{C_RESOLVED}]committed[/{C_RESOLVED}]"
         badge_w = 9
+    elif your_turn:
+        icon = _activity_icon(act, throbber_frame, seen=seen)
+        badge = ""
+        badge_w = 0
     else:
         icon = _activity_icon(act, throbber_frame, seen=seen)
         badge = _activity_badge(act, seen=seen)
@@ -761,18 +767,22 @@ def _render_session_option(
         title_color = C_DIM if stale else C_LIGHT
         title_fmt = f"[{title_color}]{title_esc}[/{title_color}]"
 
-    # Line 1: " {icon} {title......}  {age}  {badge}"
+    # Line 1: " {icon} {title......}  {age}  {badge|sid}"
     # title_pad ensures age always starts at the same column
     prefix_w = 3  # visible: space + icon + space
     age_col = f"{age_str:>4}"
     age_w = 2 + 4  # "  " + age_col
-    if badge:
+    if your_turn:
+        fill = max(2, LINE_WIDTH - prefix_w - title_width - age_w - 8)
+        line1 = f" {icon} {title_fmt}{title_pad}  [{s_dim}]{age_col}[/{s_dim}]{' ' * fill}[{C_FAINT}]{sid}[/{C_FAINT}]"
+    elif badge:
         fill = max(2, LINE_WIDTH - prefix_w - title_width - age_w - badge_w)
         line1 = f" {icon} {title_fmt}{title_pad}  [{s_dim}]{age_col}[/{s_dim}]{' ' * fill}{badge}"
     else:
         line1 = f" {icon} {title_fmt}{title_pad}  [{s_dim}]{age_col}[/{s_dim}]"
 
     # Line 2: only show model if not opus; stats dim, tokens colored, sid faint
+    # (sid omitted when shown on line 1 for your-turn sessions)
     model_part = "" if model == "opus" else f"[{C_BLUE}]{model:<8}[/{C_BLUE}]"
     tokens_fmt = _colored_tokens(s)
     tok_pad = " " * max(1, 8 - len(tokens_plain))
@@ -782,13 +792,21 @@ def _render_session_option(
     meta_left_len = 4 + model_len + 10 + 8 + dur_len
     sid_gap = max(2, LINE_WIDTH - meta_left_len - 8)
 
-    line2 = (
-        f"{INDENT}{model_part}[{s_dim}]{msgs_str:<10}[/{s_dim}]"
-        f"{tokens_fmt}"
-        f"[{s_dim}]{tok_pad}"
-        f"{dur_str}[/{s_dim}]"
-        f"{' ' * sid_gap}[{C_FAINT}]{sid}[/{C_FAINT}]"
-    )
+    if your_turn:
+        line2 = (
+            f"{INDENT}{model_part}[{s_dim}]{msgs_str:<10}[/{s_dim}]"
+            f"{tokens_fmt}"
+            f"[{s_dim}]{tok_pad}"
+            f"{dur_str}[/{s_dim}]"
+        )
+    else:
+        line2 = (
+            f"{INDENT}{model_part}[{s_dim}]{msgs_str:<10}[/{s_dim}]"
+            f"{tokens_fmt}"
+            f"[{s_dim}]{tok_pad}"
+            f"{dur_str}[/{s_dim}]"
+            f"{' ' * sid_gap}[{C_FAINT}]{sid}[/{C_FAINT}]"
+        )
 
     lines = [line1, line2]
 
