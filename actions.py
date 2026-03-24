@@ -268,6 +268,15 @@ def launch_orch_claude(
         )
         log.debug("launch_orch_claude: link-window rc=%d stderr=%s",
                   link_result.returncode, (link_result.stderr or "").strip())
+
+        # Wait for orch-claude to finish creating all panes before switching
+        # focus — avoids the half-width flash the user sees mid-layout.
+        subprocess.run(
+            ["tmux", "wait-for", f"orch-layout-ready-{window_id}"],
+            capture_output=True, timeout=10,
+        )
+        log.debug("launch_orch_claude: layout-ready signal received for %s", window_id)
+
         sel_result = subprocess.run(
             ["tmux", "select-window", "-t", window_id],
             capture_output=True, text=True, timeout=5,

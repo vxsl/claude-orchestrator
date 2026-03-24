@@ -172,6 +172,12 @@ tmux set-option -w @orch_session_id "$SESSION_ID" 2>/dev/null || true
 
 # ─── Capture main pane ID and bind action keys ──────────────────
 MAIN_PANE=$(tmux display-message -p '#{pane_id}')
+
+# ─── Signal layout ready (unblocks select-window in actions.py) ──
+# actions.py waits on this channel before switching focus so the user
+# never sees the window mid-layout (half-width flash).
+WINDOW_ID=$(tmux display-message -p '#{window_id}')
+tmux wait-for -S "orch-layout-ready-${WINDOW_ID}" 2>/dev/null || true
 tmux set-option -w @orch_main_pane "$MAIN_PANE" 2>/dev/null || true
 
 # ─── Failsafe cleanup hook ─────────────────────────────────────
