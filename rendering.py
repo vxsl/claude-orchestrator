@@ -513,10 +513,6 @@ def _render_ws_option(
             else:
                 tk = str(total_tokens)
             parts.append(_token_color_markup(tk, total_tokens))
-        total_work_ms = sum(s.total_work_ms for s in ws_sessions)
-        if total_work_ms > 0:
-            parts.append(f"[{meta_dim}][italic]{_work_time_str(total_work_ms)} think[/italic][/{meta_dim}]")
-
     # Use best session activity time (matches sort order), fall back to updated_at
     if ws_sessions:
         effective_ts = max((s.last_activity or s.started_at or "" for s in ws_sessions), default="")
