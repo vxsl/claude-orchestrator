@@ -717,8 +717,8 @@ def _render_session_option(
         badge = ""
         badge_w = 0
     elif committed:
-        icon = f"[{C_RESOLVED}]✓[/{C_RESOLVED}]"
-        badge = f"[{C_RESOLVED}]committed[/{C_RESOLVED}]"
+        icon = f"[{C_PURPLE}]✓[/{C_PURPLE}]"
+        badge = f"[{C_PURPLE}]committed[/{C_PURPLE}]"
         badge_w = 9
     else:
         icon = _activity_icon(act, throbber_frame, seen=seen)
@@ -809,7 +809,7 @@ def _render_session_option(
         commit_msg = _rich_escape(s.last_commit_summary[:max_msg])
         if len(s.last_commit_summary) > max_msg:
             commit_msg += "…"
-        lines.append(f"{INDENT}[{C_RESOLVED}]{sha_short}[/{C_RESOLVED}] [{s_dim}]{commit_msg}[/{s_dim}]")
+        lines.append(f"{INDENT}[{C_PURPLE}]{sha_short}[/{C_PURPLE}] [{s_dim}]{commit_msg}[/{s_dim}]")
     elif s.last_message_text:
         is_user = s.last_message_role == "user"
         if is_user:
