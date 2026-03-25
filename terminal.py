@@ -1021,11 +1021,6 @@ class TerminalWidget(Widget, can_focus=True):
 
         if event.key in self._passthrough_keys:
             return  # Let it bubble to parent screen
-        # Textual reports ctrl+h as key="backspace" character="\x08",
-        # distinct from physical backspace which has character="\x7f".
-        if event.key == "backspace" and event.character == "\x08" and "ctrl+h" in self._passthrough_keys:
-            return  # ctrl+h passthrough
-
         event.stop()
         event.prevent_default()
 
