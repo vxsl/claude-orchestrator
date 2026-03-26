@@ -1596,14 +1596,6 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
                 if has_separator:
                     idx += 1  # skip quiet separator
 
-                for s in quiet_other:
-                    if idx < olist.option_count:
-                        act = session_activity(s, self._last_seen_cache)
-                        seen = _is_session_seen(s, self._last_seen_cache)
-                        prompt = _render_session_option(s, act, self._throbber_frame, ws_repo_path=self.ws.repo_path, seen=seen, line_width=lw)
-                        olist.replace_option_prompt_at_index(idx, prompt)
-                    idx += 1
-
                 if has_thinking_sep:
                     idx += 1  # skip thinking separator
                     for s in quiet_thinking:
@@ -1613,6 +1605,14 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
                             prompt = _render_session_option(s, act, self._throbber_frame, ws_repo_path=self.ws.repo_path, seen=seen, line_width=lw)
                             olist.replace_option_prompt_at_index(idx, prompt)
                         idx += 1
+
+                for s in quiet_other:
+                    if idx < olist.option_count:
+                        act = session_activity(s, self._last_seen_cache)
+                        seen = _is_session_seen(s, self._last_seen_cache)
+                        prompt = _render_session_option(s, act, self._throbber_frame, ws_repo_path=self.ws.repo_path, seen=seen, line_width=lw)
+                        olist.replace_option_prompt_at_index(idx, prompt)
+                    idx += 1
 
                 if has_shelved_sep:
                     idx += 1  # skip shelved separator
@@ -1833,7 +1833,7 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         quiet.sort(key=lambda s: s.last_activity or "", reverse=True)
 
         # Split quiet into other, thinking, and shelved sections
-        # Order: other (top) → thinking → shelved (bottom)
+        # Order: thinking (top) → other → shelved (bottom)
         quiet_active = [s for s in quiet if s.session_id not in self._shelved_set]
         quiet_shelved = [s for s in quiet if s.session_id in self._shelved_set]
         quiet_thinking = [s for s in quiet_active if session_activity(s, self._last_seen_cache) == ThreadActivity.THINKING]
@@ -1877,6 +1877,17 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
             options.append(Option(QUIET_SEPARATOR_LABEL(lw), id="__separator__", disabled=True))
             idx += 1
 
+        if quiet_thinking:
+            options.append(Option(THINKING_SEPARATOR_LABEL(lw), id="__sep_thinking__", disabled=True))
+            idx += 1
+            for s in quiet_thinking:
+                act = session_activity(s, self._last_seen_cache)
+                animating.append((idx, act))
+                seen = _is_session_seen(s, self._last_seen_cache)
+                prompt = _render_session_option(s, act, self._throbber_frame, ws_repo_path=self.ws.repo_path, seen=seen, line_width=lw)
+                options.append(Option(prompt, id=s.session_id))
+                idx += 1
+
         earlier_sep_inserted = False
         for qi, s in enumerate(quiet_other):
             act = session_activity(s, self._last_seen_cache)
@@ -1892,17 +1903,6 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
             prompt = _render_session_option(s, act, self._throbber_frame, ws_repo_path=self.ws.repo_path, seen=seen, line_width=lw)
             options.append(Option(prompt, id=s.session_id))
             idx += 1
-
-        if quiet_thinking:
-            options.append(Option(THINKING_SEPARATOR_LABEL(lw), id="__sep_thinking__", disabled=True))
-            idx += 1
-            for s in quiet_thinking:
-                act = session_activity(s, self._last_seen_cache)
-                animating.append((idx, act))
-                seen = _is_session_seen(s, self._last_seen_cache)
-                prompt = _render_session_option(s, act, self._throbber_frame, ws_repo_path=self.ws.repo_path, seen=seen, line_width=lw)
-                options.append(Option(prompt, id=s.session_id))
-                idx += 1
 
         if quiet_shelved:
             options.append(Option(SHELVED_SEPARATOR_LABEL(lw), id="__sep_shelved__", disabled=True))
