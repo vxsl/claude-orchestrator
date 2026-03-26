@@ -639,8 +639,23 @@ class AppState:
 
         Returns count of workstreams updated.
         """
+        from actions import extract_ticket_key
+
         count = 0
         all_ws = list(self.store.workstreams) + list(self.discovered_ws)
+
+        # Build ticket_key -> worktree path mapping from all existing worktree links
+        ticket_worktree: dict[str, str] = {}
+        for ws in all_ws:
+            for link in ws.links:
+                if link.kind == "worktree":
+                    expanded = os.path.expanduser(link.value).rstrip("/")
+                    if os.path.isdir(expanded):
+                        # Extract ticket key from worktree label or directory name
+                        tk = extract_ticket_key(link.label or "") or extract_ticket_key(Path(expanded).name)
+                        if tk:
+                            ticket_worktree[tk] = expanded
+
         for ws in all_ws:
             if ws.repo_path:
                 continue
@@ -659,7 +674,14 @@ class AppState:
                     break
             if ws.repo_path:
                 continue
-            # 2. Infer from matched sessions' project_path (must be a git repo, not home dir)
+            # 2. Match by ticket key in workstream name against known worktrees
+            tk = extract_ticket_key(ws.name) or (ws.ticket_key or "")
+            if tk and tk in ticket_worktree:
+                ws.repo_path = ticket_worktree[tk]
+                self._infer_category_from_remote(ws)
+                count += 1
+                continue
+            # 3. Infer from matched sessions' project_path (must be a git repo, not home dir)
             home = str(Path.home())
             sessions = self.sessions_for_ws(ws)
             if sessions:
