@@ -72,10 +72,7 @@ def bench_state_operations():
     print(f"  Total sessions: {len(sessions)}")
     print(f"  Total workstreams: {len(store.active)}")
 
-    from workstream_synthesizer import get_discovered_workstreams
-    discovered = get_discovered_workstreams(threads)
-    state.update_sessions(sessions, threads, discovered)
-    print(f"  Discovered workstreams: {len(discovered)}")
+    state.update_sessions(sessions, threads)
 
     # Benchmark get_unified_items
     bench("state.get_unified_items()", lambda: state.get_unified_items())

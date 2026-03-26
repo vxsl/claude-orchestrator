@@ -178,13 +178,6 @@ class TestWorkstreamLookup:
         found = populated_state.get_ws("nonexistent")
         assert found is None
 
-    def test_get_ws_finds_discovered(self, populated_state):
-        disc = Workstream(id="disc001", name="Discovered")
-        populated_state.discovered_ws = [disc]
-        found = populated_state.get_ws("disc001")
-        assert found is not None
-        assert found.name == "Discovered"
-
     def test_get_session(self, state):
         s1 = _make_session("s1")
         s2 = _make_session("s2")
@@ -472,8 +465,7 @@ class TestSessionManagement:
     def test_update_sessions(self, state):
         sessions = [_make_session("s1"), _make_session("s2")]
         threads = []
-        discovered = []
-        state.update_sessions(sessions, threads, discovered)
+        state.update_sessions(sessions, threads)
         assert len(state.sessions) == 2
         assert len(state.threads) == 0
 
@@ -481,7 +473,7 @@ class TestSessionManagement:
         """Live session missing from disk data (min_messages=1 filter) is kept."""
         live = ClaudeSession(session_id="live", project_dir="d", project_path="/p", is_live=True)
         state.sessions = [live]
-        state.update_sessions([_make_session("old")], [], [])
+        state.update_sessions([_make_session("old")], [])
         assert any(s.session_id == "live" for s in state.sessions)
 
     def test_update_sessions_injects_live_session_into_matching_thread(self, state):
@@ -489,7 +481,7 @@ class TestSessionManagement:
         live = ClaudeSession(session_id="live", project_dir="d", project_path="/p", is_live=True)
         state.sessions = [live]
         disk_thread = Thread(thread_id="t1", name="p", project_path="/p", sessions=[])
-        state.update_sessions([], [disk_thread], [])
+        state.update_sessions([], [disk_thread])
         assert any(s.session_id == "live" for s in disk_thread.sessions)
 
     def test_find_ws_for_session_by_link(self, state):
@@ -646,29 +638,6 @@ class TestUnifiedItems:
     def test_includes_manual_workstreams(self, populated_state):
         items = populated_state.get_unified_items()
         assert len(items) == 6
-
-    def test_includes_discovered_workstreams(self, populated_state):
-        disc = Workstream(id="disc001", name="Discovered",
-                          category=Category.WORK)
-        populated_state.discovered_ws = [disc]
-        items = populated_state.get_unified_items()
-        assert len(items) == 7
-
-    def test_search_filters_discovered(self, populated_state):
-        disc = Workstream(id="disc001", name="Special Discovery")
-        populated_state.discovered_ws = [disc]
-        populated_state.set_search("special")
-        items = populated_state.get_unified_items()
-        # Only the discovered one should match
-        assert any(w.name == "Special Discovery" for w in items)
-
-    def test_category_filter_applies_to_discovered(self, populated_state):
-        disc = Workstream(id="disc001", name="Personal disc",
-                          category=Category.PERSONAL)
-        populated_state.discovered_ws = [disc]
-        populated_state.set_filter("work")
-        items = populated_state.get_unified_items()
-        assert not any(w.id == "disc001" for w in items)
 
 
 # ─── Command Execution ───────────────────────────────────────────────

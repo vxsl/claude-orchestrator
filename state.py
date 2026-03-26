@@ -487,7 +487,7 @@ class AppState:
         self.search_text: str = ""
         self.sessions: list[ClaudeSession] = []
         self.threads: list[Thread] = []
-        self.discovered_ws: list[Workstream] = []
+        self.discovered_ws: list[Workstream] = []  # deprecated, kept for compat
         self.preview_visible: bool = True
         self.tmux_paths: set[str] = set()
         self.tmux_names: set[str] = set()
@@ -555,32 +555,8 @@ class AppState:
         return self.last_seen_cache
 
     def get_unified_items(self) -> list[Workstream]:
-        """Build unified list: manual workstreams + AI-discovered workstreams."""
-        manual = self.get_filtered_streams()
-        discovered = list(self.discovered_ws)
-
-        # Apply search filter to discovered
-        if self.search_text:
-            scored = []
-            for w in discovered:
-                s1 = fuzzy_match(self.search_text, w.name)
-                s2 = fuzzy_match(self.search_text, w.description)
-                best = max(s for s in (s1, s2) if s is not None) if any(s is not None for s in (s1, s2)) else None
-                if best is not None:
-                    scored.append((w, best))
-            scored.sort(key=lambda t: t[1], reverse=True)
-            discovered = [w for w, _ in scored]
-            # When searching, fuzzy rank is the sort — just concatenate
-            return manual + discovered
-
-        # Apply category filter to discovered
-        if self.filter_mode == "work":
-            discovered = [w for w in discovered if w.category == Category.WORK]
-        elif self.filter_mode == "personal":
-            discovered = [w for w in discovered if w.category == Category.PERSONAL]
-
-        # Combine and sort unified list
-        combined = manual + discovered
+        """Build unified list of workstreams for display."""
+        combined = self.get_filtered_streams()
         last_seen = self.get_last_seen()
 
         def _has_unread(ws: Workstream) -> bool:
@@ -621,10 +597,7 @@ class AppState:
 
     def get_ws(self, ws_id: str) -> Workstream | None:
         """Look up a workstream by ID in both store and discovered."""
-        ws = self.store.get(ws_id)
-        if ws:
-            return ws
-        return next((w for w in self.discovered_ws if w.id == ws_id), None)
+        return self.store.get(ws_id)
 
     def get_session(self, session_id: str) -> ClaudeSession | None:
         return next((s for s in self.sessions if s.session_id == session_id), None)
@@ -642,7 +615,7 @@ class AppState:
         from actions import extract_ticket_key
 
         count = 0
-        all_ws = list(self.store.workstreams) + list(self.discovered_ws)
+        all_ws = list(self.store.workstreams)
 
         # Build ticket_key -> worktree path mapping from all existing worktree links
         ticket_worktree: dict[str, str] = {}
@@ -1205,7 +1178,7 @@ class AppState:
     # ── Session management ──
 
     def update_sessions(self, sessions: list[ClaudeSession],
-                        threads: list[Thread], discovered: list[Workstream]):
+                        threads: list[Thread]):
         """Apply new session/thread data from background discovery."""
         # Re-merge live sessions absent from disk: discover_threads uses min_messages=1
         # so a newly-started session is excluded until the daemon indexes its first message.
@@ -1221,7 +1194,6 @@ class AppState:
                         break
         self.sessions = sessions
         self.threads = threads
-        self.discovered_ws = discovered
         self.sessions_loaded = True
         self.invalidate_caches()
         self.infer_repo_paths()

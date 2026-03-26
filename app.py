@@ -66,9 +66,6 @@ from threads import Thread, ThreadActivity, session_activity, mark_thread_seen, 
 from thread_namer import apply_cached_names, name_uncached_threads, title_sessions, get_session_title, refresh_thread_titles
 from session_bridge import SessionBridge
 from watcher import SessionWatcher
-from workstream_synthesizer import (
-    synthesize_workstreams, get_discovered_workstreams,
-)
 from description_refresher import refresh_descriptions
 
 from rendering import (
@@ -334,10 +331,6 @@ class OrchestratorApp(App):
     @property
     def threads(self):
         return self.state.threads
-
-    @property
-    def discovered_ws(self):
-        return self.state.discovered_ws
 
     @property
     def preview_visible(self):
@@ -905,14 +898,10 @@ class OrchestratorApp(App):
                                   (_time.monotonic() - _t0) * 1000)
             return
 
-        _t2 = _time.monotonic() if _PERF_ENABLED else 0
-        from workstream_synthesizer import get_discovered_workstreams
-        discovered = get_discovered_workstreams(threads)
         if _PERF_ENABLED:
-            _perf_log.warning("_do_refresh_from_db: get_discovered_workstreams %.1fms", (_time.monotonic() - _t2) * 1000)
             _perf_log.warning("_do_refresh_from_db: %.1fms total (changed, updating UI)",
                               (_time.monotonic() - _t0) * 1000)
-        self.call_from_thread(self._apply_sessions, sessions, threads, discovered)
+        self.call_from_thread(self._apply_sessions, sessions, threads)
 
     def _on_liveness_file_change(self):
         """Watcher callback for session .json changes (start/stop).
@@ -1454,8 +1443,7 @@ class OrchestratorApp(App):
                 self.call_from_thread(self._notify_sessions_changed)
             return
 
-        discovered = get_discovered_workstreams(threads)
-        self.call_from_thread(self._apply_sessions, sessions, threads, discovered)
+        self.call_from_thread(self._apply_sessions, sessions, threads)
 
     @work(thread=True, exclusive=True, group="sessions")
     def _do_load_sessions(self):
@@ -1467,9 +1455,8 @@ class OrchestratorApp(App):
             sessions.extend(t.sessions)
         sessions.sort(key=lambda s: s.last_activity or "", reverse=True)
 
-        discovered = get_discovered_workstreams(threads)
         # Phase 1: get data visible fast
-        self.call_from_thread(self._apply_sessions, sessions, threads, discovered)
+        self.call_from_thread(self._apply_sessions, sessions, threads)
 
         # Phase 2: AI-powered naming/titling/synthesis (slow, runs in background)
         any_ai_changes = False
@@ -1482,10 +1469,6 @@ class OrchestratorApp(App):
         untitled = [s for s in sessions if not get_session_title(s)]
         if untitled:
             title_sessions(untitled)
-            any_ai_changes = True
-
-        new_count = synthesize_workstreams(threads, self.state.store.active)
-        if new_count > 0:
             any_ai_changes = True
 
         titles_updated = refresh_thread_titles(threads)
@@ -1502,12 +1485,11 @@ class OrchestratorApp(App):
 
         # Single callback for all AI-powered updates (was 3-5 separate callbacks)
         if any_ai_changes:
-            discovered = get_discovered_workstreams(threads)
-            self.call_from_thread(self._apply_ai_updates, threads, discovered)
+            self.call_from_thread(self._apply_ai_updates, threads)
 
     def _apply_sessions(self, sessions: list[ClaudeSession],
-                        threads: list[Thread], discovered: list[Workstream]):
-        self.state.update_sessions(sessions, threads, discovered)
+                        threads: list[Thread]):
+        self.state.update_sessions(sessions, threads)
         if not self._detail_screen_active:
             self._preview_ws_id = None
             self._refresh_ws_table_debounced()
@@ -1526,20 +1508,9 @@ class OrchestratorApp(App):
                 ws.description = new_desc
                 self.state.store.update(ws)
 
-    def _apply_synthesis(self, threads: list[Thread], discovered: list[Workstream]):
+    def _apply_ai_updates(self, threads: list[Thread]):
+        """Single callback for all AI-powered session/thread updates."""
         self.state.threads = threads
-        self.state.discovered_ws = discovered
-        if not self._detail_screen_active:
-            self._refresh_ws_table_debounced()
-
-    def _apply_ai_updates(self, threads: list[Thread], discovered: list[Workstream]):
-        """Single callback for all AI-powered session/thread updates.
-
-        Replaces 3-5 separate call_from_thread callbacks that were flooding
-        the main thread's message queue during initial load.
-        """
-        self.state.threads = threads
-        self.state.discovered_ws = discovered
         if not self._detail_screen_active:
             self._refresh_ws_table_debounced()
         for screen in self.screen_stack:
@@ -2364,7 +2335,7 @@ class OrchestratorApp(App):
         from actions import get_worktree_git_status
         # Collect all unique repo paths
         repo_paths: set[str] = set()
-        for ws in list(self.state.store.active) + list(self.state.discovered_ws):
+        for ws in self.state.store.active:
             if ws.repo_path:
                 repo_paths.add(ws.repo_path)
 

@@ -295,9 +295,7 @@ def app_with_store(tmp_path):
         store.add(ws)
 
     with patch("app.discover_threads", return_value=[]), \
-         patch("app.get_discovered_workstreams", return_value=[]), \
-         patch("app.name_uncached_threads", return_value=0), \
-         patch("app.synthesize_workstreams", return_value=0):
+         patch("app.name_uncached_threads", return_value=0):
         app = OrchestratorApp()
         app.state.store = Store(path=store_path)
         yield app
@@ -1167,9 +1165,7 @@ def app_with_sessions(tmp_path):
     ]
 
     with patch("app.discover_threads", return_value=[]), \
-         patch("app.get_discovered_workstreams", return_value=[]), \
-         patch("app.name_uncached_threads", return_value=0), \
-         patch("app.synthesize_workstreams", return_value=0):
+         patch("app.name_uncached_threads", return_value=0):
         app = OrchestratorApp()
         app.state.store = Store(path=store_path)
         # Inject sessions into state
