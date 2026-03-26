@@ -1191,9 +1191,9 @@ class OrchestratorApp(App):
                 lbl = (t.label[:14] + "\u2026") if len(t.label) > 14 else t.label
                 is_active = t.id == self.tabs.active_tab.id
                 if is_active:
-                    tab_parts.append(f"[bold {C_BLUE}]● {_rich_escape(lbl)}[/bold {C_BLUE}]")
+                    tab_parts.append(f"[bold {C_BLUE}]{_rich_escape(lbl)}[/bold {C_BLUE}]")
                 else:
-                    tab_parts.append(f"[{C_DIM}]○ {_rich_escape(lbl)}[/{C_DIM}]")
+                    tab_parts.append(f"[{C_DIM}]{_rich_escape(lbl)}[/{C_DIM}]")
             line1 = home_str + DIVIDER + DIVIDER.join(tab_parts)
         else:
             line1 = home_str
