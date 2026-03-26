@@ -150,7 +150,7 @@ class OrchestratorApp(App):
         height: auto; max-height: 4; padding: 0 2; background: {BG_RAISED}; dock: top;
     }}
     #filter-bar {{
-        height: 1; padding: 0 1; background: {BG_CHROME}; dock: top;
+        height: auto; padding: 0 1; background: {BG_CHROME}; dock: top;
     }}
     #summary-bar {{
         height: 1; padding: 0 2; background: {BG_CHROME}; color: {C_DIM}; dock: bottom;
@@ -1178,31 +1178,11 @@ class OrchestratorApp(App):
         return f"{line1}\n{line2}"
 
     def _render_filter_bar(self) -> str:
-        # ── Line 1: filter presets ──
-        filters = [
-            ("active", "Active"), ("work", "Work"), ("personal", "Personal"),
-            ("all", "All"), ("stale", "Stale"), ("archived", "Archived"),
-        ]
-        parts = []
-        for i, (key, label) in enumerate(filters):
-            n = i + 1
-            if self.state.filter_mode == key:
-                parts.append(f"[bold {C_MID}] {n}:{label} [/bold {C_MID}]")
-            else:
-                parts.append(f"[{C_FAINT}] {n}:{label} [/{C_FAINT}]")
-        line1 = "".join(parts)
-
-        if self.state.search_text:
-            line1 += f"  [{C_DIM}]search:[/{C_DIM}] [{C_YELLOW}]{_rich_escape(self.state.search_text)}[/{C_YELLOW}]"
-
-        # ── Line 2: open tabs ──
-        DIVIDER = f"  [{C_FAINT}]│[/{C_FAINT}]  "
+        # ── Line 1: tabs (same as original) ──
         home_tab = self.tabs.tabs[0]
         home_icon = home_tab.icon + " " if home_tab.icon else ""
-        if self.tabs.active_tab.id == home_tab.id:
-            home_str = f"[bold italic {C_MID}] {home_icon}{_rich_escape(home_tab.label)} [/]"
-        else:
-            home_str = f"[{C_DIM}] {home_icon}{_rich_escape(home_tab.label)} [/{C_DIM}]"
+        home_str = f"[bold italic {C_MID} on {BG_BASE}] {home_icon}{_rich_escape(home_tab.label)} [/]"
+        DIVIDER = f"  [{C_FAINT}]\u2502[/{C_FAINT}]  "
 
         other_tabs = [t for t in self.tabs.tabs if t.id != "home"]
         if other_tabs:
@@ -1214,9 +1194,27 @@ class OrchestratorApp(App):
                     tab_parts.append(f"[bold {C_BLUE}]● {_rich_escape(lbl)}[/bold {C_BLUE}]")
                 else:
                     tab_parts.append(f"[{C_DIM}]○ {_rich_escape(lbl)}[/{C_DIM}]")
-            line2 = home_str + DIVIDER + DIVIDER.join(tab_parts)
+            line1 = home_str + DIVIDER + DIVIDER.join(tab_parts)
         else:
-            line2 = home_str
+            line1 = home_str
+
+        # ── Line 2: filter presets ──
+        filters = [
+            ("active", "Active"), ("work", "Work"), ("personal", "Personal"),
+            ("all", "All"), ("stale", "Stale"), ("archived", "Archived"),
+        ]
+        SEP = f" [{C_FAINT}]·[/{C_FAINT}] "
+        preset_parts = []
+        for i, (key, label) in enumerate(filters):
+            n = i + 1
+            if self.state.filter_mode == key:
+                preset_parts.append(f"[bold {C_MID} on #0d1f35]{n}:{label}[/bold {C_MID} on #0d1f35]")
+            else:
+                preset_parts.append(f"[{C_FAINT}]{n}:{label}[/{C_FAINT}]")
+        line2 = f" {SEP.join(preset_parts)}"
+
+        if self.state.search_text:
+            line2 += f"  [{C_DIM}]·[/{C_DIM}]  [{C_DIM}]search:[/{C_DIM}] [{C_YELLOW}]{_rich_escape(self.state.search_text)}[/{C_YELLOW}]"
 
         return f"{line1}\n{line2}"
 
