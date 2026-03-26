@@ -1294,11 +1294,12 @@ class OrchestratorApp(App):
             olist.highlighted = 0
 
     @staticmethod
-    def _ws_fingerprint(ws, ws_sessions, has_tmux, git_st, lw) -> tuple:
+    def _ws_fingerprint(ws, ws_sessions, has_tmux, git_st, lw, last_seen=None) -> tuple:
         """Cheap fingerprint capturing all inputs to _render_ws_option."""
         sess_fp = tuple(
             (s.session_id, s.is_live, s.last_message_role, s.last_activity,
-             s.last_commit_sha, s.message_count)
+             s.last_commit_sha, s.message_count,
+             (last_seen or {}).get(s.session_id, ''))
             for s in ws_sessions[:8]  # cap to avoid huge tuples
         )
         git_fp = (git_st.branch, git_st.is_dirty, git_st.ahead) if git_st else None
@@ -1336,7 +1337,7 @@ class OrchestratorApp(App):
             if repo:
                 git_st = self.state.git_status_cache.get(repo)
             has_tmux = self.state.ws_has_tmux(ws)
-            fp = self._ws_fingerprint(ws, ws_sessions, has_tmux, git_st, lw)
+            fp = self._ws_fingerprint(ws, ws_sessions, has_tmux, git_st, lw, last_seen)
             cached = render_cache.get(ws.id)
             if cached and cached[0] == fp:
                 prompt = cached[1]
