@@ -446,8 +446,9 @@ def _render_ws_option(
         stale = not _any_session_today(ws_sessions)
     else:
         stale = not _is_today(ws.updated_at)
+    recent = _any_session_recent(ws_sessions)
     name_color = C_DIM if stale else C_LIGHT
-    name_bold = "" if stale else "bold "
+    name_bold = "" if stale or not recent else "bold "
     desc_color = C_FAINT if stale else C_DIM
     meta_dim = C_FAINT if stale else C_DIM
 
@@ -478,7 +479,6 @@ def _render_ws_option(
         if git_status.behind:
             branch_markup += f"[{C_RED}]-{git_status.behind}[/{C_RED}]"
 
-    recent = _any_session_recent(ws_sessions)
     if best == ThreadActivity.THINKING and recent:
         name_markup = f"[bold {C_BLUE}]{name_esc}[/bold {C_BLUE}]"
     elif best in (ThreadActivity.AWAITING_INPUT, ThreadActivity.RESPONSE_READY) and not all_seen and recent:
