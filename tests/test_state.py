@@ -477,6 +477,21 @@ class TestSessionManagement:
         assert len(state.sessions) == 2
         assert len(state.threads) == 0
 
+    def test_update_sessions_preserves_live_session_absent_from_disk(self, state):
+        """Live session missing from disk data (min_messages=1 filter) is kept."""
+        live = ClaudeSession(session_id="live", project_dir="d", project_path="/p", is_live=True)
+        state.sessions = [live]
+        state.update_sessions([_make_session("old")], [], [])
+        assert any(s.session_id == "live" for s in state.sessions)
+
+    def test_update_sessions_injects_live_session_into_matching_thread(self, state):
+        """Live session is added to matching disk thread so sessions_for_ws finds it."""
+        live = ClaudeSession(session_id="live", project_dir="d", project_path="/p", is_live=True)
+        state.sessions = [live]
+        disk_thread = Thread(thread_id="t1", name="p", project_path="/p", sessions=[])
+        state.update_sessions([], [disk_thread], [])
+        assert any(s.session_id == "live" for s in disk_thread.sessions)
+
     def test_find_ws_for_session_by_link(self, state):
         ws = Workstream(name="test")
         ws.add_link("claude-session", "abc123", "session")

@@ -1183,6 +1183,18 @@ class AppState:
     def update_sessions(self, sessions: list[ClaudeSession],
                         threads: list[Thread], discovered: list[Workstream]):
         """Apply new session/thread data from background discovery."""
+        # Re-merge live sessions absent from disk: discover_threads uses min_messages=1
+        # so a newly-started session is excluded until the daemon indexes its first message.
+        disk_ids = {s.session_id for s in sessions}
+        for s in self.sessions:
+            if s.is_live and s.session_id not in disk_ids:
+                sessions = [s] + sessions
+                sp = s.project_path.rstrip("/")
+                for t in threads:
+                    if t.project_path.rstrip("/") == sp:
+                        if s.session_id not in {ts.session_id for ts in t.sessions}:
+                            t.sessions.insert(0, s)
+                        break
         self.sessions = sessions
         self.threads = threads
         self.discovered_ws = discovered
