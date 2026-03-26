@@ -32,6 +32,7 @@ OptionList > .option-list--option {
 }
 OptionList > .option-list--option-highlighted {
     background: #101010;
+    text-style: none;
 }
 OptionList > .option-list--option-hover {
     background: #080808;
