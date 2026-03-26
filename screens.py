@@ -1311,13 +1311,8 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
                 pass
 
     def _mark_all_seen(self):
-        """Mark non-pending sessions in this workstream as seen right now — batched.
-
-        Sessions that are waiting for a response (AWAITING_INPUT / RESPONSE_READY)
-        are intentionally skipped so their green badge stays visible until the
-        user actually opens/responds to them.
-        """
-        from threads import session_activity, ThreadActivity, save_last_seen
+        """Mark all sessions in this workstream as seen right now — batched."""
+        from threads import save_last_seen
         app = self.app
         if hasattr(app, 'state'):
             sessions = app.state.sessions_for_ws(self.ws, include_archived_sessions=True)
@@ -1328,10 +1323,8 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         # Batch: single read + single write instead of N reads + N writes
         data = load_last_seen()
         now = datetime.now(timezone.utc).isoformat()
-        pending = {ThreadActivity.AWAITING_INPUT, ThreadActivity.RESPONSE_READY}
         for s in sessions:
-            if session_activity(s) not in pending:
-                data[s.session_id] = now
+            data[s.session_id] = now
         save_last_seen(data)
         self._last_seen_cache = data
 
