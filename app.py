@@ -745,14 +745,12 @@ class OrchestratorApp(App):
                         f"[bold {C_DIM} on {BG_RAISED}] {prefix}{_rich_escape(ws_label)}[/bold {C_DIM} on {BG_RAISED}]"
                         f"[bold on {BG_RAISED}]{sep}[{C_FAINT}]{_rich_escape(css_sess_label)}[/{C_FAINT}] [/bold on {BG_RAISED}]"
                     )
-            elif is_active and is_permanent:
-                content = f"[bold italic {C_MID} on {BG_RAISED}] {prefix}{_rich_escape(ws_label)} [/]"
-            elif is_active:
-                content = f"[bold {C_BLUE} on {BG_RAISED}] {prefix}{_rich_escape(ws_label)} [/]"
             elif is_permanent:
-                content = f"[bold italic {C_FAINT} on {BG_RAISED}] {prefix}{_rich_escape(ws_label)} [/]"
+                color = C_MID if is_active else C_FAINT
+                content = f"[bold italic {color} on {BG_RAISED}] {prefix}{_rich_escape(ws_label)} [/bold italic {color} on {BG_RAISED}]"
             else:
-                content = f"[bold {C_DIM} on {BG_RAISED}] {prefix}{_rich_escape(ws_label)} [/]"
+                color = C_BLUE if is_active else C_DIM
+                content = f"[bold {color} on {BG_RAISED}] {prefix}{_rich_escape(ws_label)} [/bold {color} on {BG_RAISED}]"
 
             parts.append(content)
             if i < len(self.tabs.tabs) - 1:
