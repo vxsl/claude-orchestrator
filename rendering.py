@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import functools
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from rich.text import Text
@@ -73,6 +73,25 @@ def _is_today(ts: str) -> bool:
 def _any_session_today(sessions: list) -> bool:
     """True if any session in the list was active today."""
     return any(_is_today(s.last_activity or s.started_at or "") for s in sessions)
+
+
+def _any_session_recent(sessions: list, hours: float = 2) -> bool:
+    """True if any session had activity within the last *hours* hours."""
+    if not sessions:
+        return False
+    now = datetime.now().astimezone()
+    cutoff = now - timedelta(hours=hours)
+    for s in sessions:
+        ts = s.last_activity or s.started_at or ""
+        if not ts:
+            continue
+        try:
+            dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+            if dt.astimezone(now.tzinfo) >= cutoff:
+                return True
+        except (ValueError, TypeError):
+            continue
+    return False
 
 
 # When stale (not active today), shift colors one notch dimmer.
@@ -459,9 +478,10 @@ def _render_ws_option(
         if git_status.behind:
             branch_markup += f"[{C_RED}]-{git_status.behind}[/{C_RED}]"
 
-    if best == ThreadActivity.THINKING:
+    recent = _any_session_recent(ws_sessions)
+    if best == ThreadActivity.THINKING and recent:
         name_markup = f"[bold {C_BLUE}]{name_esc}[/bold {C_BLUE}]"
-    elif best in (ThreadActivity.AWAITING_INPUT, ThreadActivity.RESPONSE_READY) and not all_seen:
+    elif best in (ThreadActivity.AWAITING_INPUT, ThreadActivity.RESPONSE_READY) and not all_seen and recent:
         name_markup = f"[bold {C_GREEN}]{name_esc}[/bold {C_GREEN}]"
     else:
         name_markup = f"[{name_bold}{name_color}]{name_esc}[/{name_bold}{name_color}]"
