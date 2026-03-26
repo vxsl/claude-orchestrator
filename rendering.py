@@ -59,13 +59,13 @@ BG_CHROME = "#060809"    # tab bar and footer — darker chrome, between black a
 # ─── Staleness helpers ──────────────────────────────────────────────
 
 def _is_today(ts: str) -> bool:
-    """True if the ISO timestamp falls on today (local time)."""
+    """True if the ISO timestamp is less than 24 hours old."""
     if not ts:
         return False
     try:
         dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
         now = datetime.now().astimezone()
-        return dt.astimezone(now.tzinfo).date() == now.date()
+        return (now - dt.astimezone(now.tzinfo)).total_seconds() < 86400
     except (ValueError, TypeError):
         return False
 
