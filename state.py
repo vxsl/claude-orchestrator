@@ -952,7 +952,8 @@ class AppState:
             explicit_sids = {link.value for link in ws.links if link.kind == "claude-session"}
             matched = set()
             for t in self.threads:
-                if t.project_path.rstrip("/") in ws_dirs:
+                tp = t.project_path.rstrip("/")
+                if tp in ws_dirs or any(tp.startswith(d + "/") for d in ws_dirs):
                     matched.add(t.thread_id)
                 elif explicit_sids:
                     for s in t.sessions:

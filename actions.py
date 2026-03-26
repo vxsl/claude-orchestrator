@@ -318,7 +318,7 @@ def find_sessions_for_ws(ws: Workstream, all_sessions: list[ClaudeSession]) -> l
             if s.session_id in seen:
                 continue
             sp = s.project_path.rstrip("/")
-            if sp in ws_dirs:
+            if sp in ws_dirs or any(sp.startswith(d + "/") for d in ws_dirs):
                 found.append(s)
                 seen.add(s.session_id)
 
