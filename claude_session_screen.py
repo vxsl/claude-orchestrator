@@ -717,10 +717,13 @@ class ClaudeSessionScreen(Screen):
             event.prevent_default()
             self.action_zoom_panel()
             return
-        # ctrl+h (Textual key="ctrl+h"): go back. Note: vterm backspace arrives
-        # as key="backspace" character="\x08" — that is NOT caught here and is
-        # forwarded to the PTY by TerminalWidget so backspace works correctly.
-        if event.key == "ctrl+h":
+        # ctrl+h → go back.
+        # Two representations depending on terminal:
+        #   key="ctrl+h"  — alacritty/kitty extended keyboard protocol
+        #   key="backspace", character="\x08" — classic terminals (\x08 = ctrl+h)
+        # Physical backspace sends \x7f (character="\x7f") and is NOT caught here;
+        # TerminalWidget forwards it to the PTY so it works correctly in the session.
+        if event.key == "ctrl+h" or (event.key == "backspace" and event.character == "\x08"):
             event.stop()
             event.prevent_default()
             self.action_go_back()

@@ -1021,6 +1021,12 @@ class TerminalWidget(Widget, can_focus=True):
 
         if event.key in self._passthrough_keys:
             return  # Let it bubble to parent screen
+        # Some terminals (e.g. alacritty without kitty protocol) send \x08 for
+        # ctrl+h, which Textual reports as key="backspace" character="\x08".
+        # Physical backspace sends \x7f (character="\x7f"). If ctrl+h is a
+        # passthrough key, let the \x08-as-backspace variant bubble too.
+        if event.key == "backspace" and event.character == "\x08" and "ctrl+h" in self._passthrough_keys:
+            return  # ctrl+h arriving as \x08 — let it bubble
         event.stop()
         event.prevent_default()
 

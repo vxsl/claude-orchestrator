@@ -235,7 +235,12 @@ class FuzzyPickerScreen(ModalScreen):
 
     BINDINGS = [
         Binding("escape", "cancel", "Cancel", priority=True),
-        # ctrl+h handled in on_key (backspace must reach Input for deletion)
+        # backspace/ctrl+h: go_back when input is empty or when ctrl+h is explicit.
+        # The on_key below handles the nuanced \x08 vs \x7f distinction; these
+        # bindings exist so ModalScreen key routing (which doesn't bubble to App)
+        # still catches ctrl+h from alacritty (key="ctrl+h") and backspace.
+        Binding("backspace", "go_back", show=False),
+        Binding("ctrl+h", "go_back", show=False),
     ]
 
     DEFAULT_CSS = f"""
@@ -278,15 +283,25 @@ class FuzzyPickerScreen(ModalScreen):
         self.dismiss(None)
 
     def on_key(self, event) -> None:
-        """Handle backspace/ctrl+h: ctrl+h always goes back, backspace only when input empty."""
+        """Handle backspace/ctrl+h navigation vs text deletion.
+
+        ctrl+h always dismisses. Physical backspace (\x7f) dismisses only when
+        the search input is empty (otherwise the Input widget deletes text).
+        """
+        if event.key == "ctrl+h":
+            # alacritty/kitty extended protocol: ctrl+h → key="ctrl+h"
+            self.dismiss(None)
+            event.stop()
+            event.prevent_default()
+            return
         if event.key == "backspace":
-            # ctrl+h (char \x08) — always go back
             if event.character == "\x08":
+                # Classic terminal: ctrl+h arrives as key="backspace" char="\x08"
                 self.dismiss(None)
                 event.stop()
                 event.prevent_default()
                 return
-            # Physical backspace (char \x7f) — go back only if search is empty
+            # Physical backspace (\x7f) — go back only if search input is empty
             try:
                 inp = self.query_one("#fp-input", Input)
                 if not inp.value:
