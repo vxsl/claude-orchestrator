@@ -1511,8 +1511,8 @@ class TabManager:
 
     def __init__(self):
         self.tabs: list[TabState] = [
-            TabState(id="home", ws_id=None, label="Workstreams", icon="\u2302"),
-            TabState(id="current_sessions", ws_id=None, label="Sessions", icon="\u25c8"),
+            TabState(id="home", ws_id=None, label="Workstreams", icon=""),
+            TabState(id="current_sessions", ws_id=None, label="Sessions", icon=""),
         ]
         self.active_idx: int = 0
 
