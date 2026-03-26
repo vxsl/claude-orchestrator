@@ -477,54 +477,6 @@ class TestSessionManagement:
         assert len(state.sessions) == 2
         assert len(state.threads) == 0
 
-    def test_update_sessions_preserves_live_not_indexed(self, state):
-        """Live sessions injected in memory are preserved when poll returns stale DB data."""
-        live_session = ClaudeSession(
-            session_id="live-new", project_dir="d", project_path="/tmp/proj",
-            message_count=3, is_live=True,
-        )
-        state.sessions = [live_session]
-
-        # Poll returns stale data that doesn't include the live session
-        disk_sessions = [_make_session("s-old", project_path="/tmp/other")]
-        state.update_sessions(disk_sessions, [], [])
-
-        sids = {s.session_id for s in state.sessions}
-        assert "live-new" in sids, "live session should be preserved when missing from disk data"
-        assert "s-old" in sids
-
-    def test_update_sessions_does_not_preserve_dead_sessions(self, state):
-        """Non-live sessions that are absent from disk are correctly dropped."""
-        dead_session = ClaudeSession(
-            session_id="dead-gone", project_dir="d", project_path="/tmp/proj",
-            message_count=5, is_live=False,
-        )
-        state.sessions = [dead_session]
-
-        disk_sessions = [_make_session("s-disk")]
-        state.update_sessions(disk_sessions, [], [])
-
-        sids = {s.session_id for s in state.sessions}
-        assert "dead-gone" not in sids, "non-live session absent from disk should be dropped"
-
-    def test_update_sessions_live_injected_into_matching_disk_thread(self, state, tmp_path):
-        """Live session is re-injected into the matching disk thread so sessions_for_ws finds it."""
-        proj = tmp_path / "proj"
-        proj.mkdir()
-        proj_path = str(proj)
-
-        live_session = ClaudeSession(
-            session_id="live-new", project_dir="d", project_path=proj_path,
-            message_count=1, is_live=True,
-        )
-        state.sessions = [live_session]
-
-        disk_thread = Thread(thread_id="tid-disk", name="proj", project_path=proj_path, sessions=[])
-        state.update_sessions([], [disk_thread], [])
-
-        assert any(s.session_id == "live-new" for s in disk_thread.sessions), \
-            "live session should be injected into matching disk thread"
-
     def test_find_ws_for_session_by_link(self, state):
         ws = Workstream(name="test")
         ws.add_link("claude-session", "abc123", "session")

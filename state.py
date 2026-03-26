@@ -1182,39 +1182,7 @@ class AppState:
 
     def update_sessions(self, sessions: list[ClaudeSession],
                         threads: list[Thread], discovered: list[Workstream]):
-        """Apply new session/thread data from background discovery.
-
-        Preserves live sessions that were injected into memory but not yet indexed
-        by the Rust daemon (discover_threads uses min_messages=1 and reads from the
-        SQLite DB which may lag behind the JSONL files for newly-started sessions).
-        """
-        on_disk_ids = {s.session_id for s in sessions}
-        live_not_indexed = [s for s in self.sessions if s.is_live and s.session_id not in on_disk_ids]
-
-        if live_not_indexed:
-            sessions = list(live_not_indexed) + sessions
-            # Re-inject into matching disk threads so sessions_for_ws can find them.
-            live_by_path: dict[str, list[ClaudeSession]] = {}
-            for s in live_not_indexed:
-                sp = s.project_path.rstrip("/")
-                live_by_path.setdefault(sp, []).append(s)
-
-            for t in threads:
-                sp = t.project_path.rstrip("/")
-                if sp in live_by_path:
-                    t_sids = {s.session_id for s in t.sessions}
-                    for s in live_by_path.pop(sp, []):
-                        if s.session_id not in t_sids:
-                            t.sessions.insert(0, s)
-
-            # For sessions with no matching disk thread, preserve injected threads.
-            if live_by_path:
-                on_disk_tids = {t.thread_id for t in threads}
-                for t in self.threads:
-                    sp = t.project_path.rstrip("/")
-                    if sp in live_by_path and t.thread_id not in on_disk_tids:
-                        threads = [t] + threads
-
+        """Apply new session/thread data from background discovery."""
         self.sessions = sessions
         self.threads = threads
         self.discovered_ws = discovered

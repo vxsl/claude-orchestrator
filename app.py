@@ -1591,9 +1591,6 @@ class OrchestratorApp(App):
         for screen in self.screen_stack:
             screen.post_message(SessionsChanged())
 
-        # 4. Trigger background poll for full consistency (proper thread naming, etc.)
-        self._do_poll_sessions()
-
     # ── Primary action (Enter) ──
 
     def action_select_item(self):
