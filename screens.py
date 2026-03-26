@@ -3489,7 +3489,16 @@ class CurrentSessionsScreen(_VimOptionListMixin, ModalScreen[None]):
         # add_options() remounts every option widget and triggers a full CSS
         # matching pass per option, which is very expensive at 10fps.
         old_idx = olist.highlighted
+        # In-place update only when both count AND IDs are unchanged —
+        # replace_option_prompt_at_index updates display text but NOT the id,
+        # so if sessions reorder we must do a full rebuild to keep IDs correct.
+        ids_match = False
         if olist.option_count == len(options):
+            ids_match = all(
+                olist.get_option_at_index(i).id == opt.id
+                for i, opt in enumerate(options)
+            )
+        if ids_match:
             with self.app.batch_update():
                 for i, opt in enumerate(options):
                     try:
