@@ -3314,6 +3314,7 @@ class CurrentSessionsScreen(_VimOptionListMixin, ModalScreen[None]):
         Binding("backspace,ctrl+h", "dismiss", "back"),
         Binding("enter,l", "select_session", show=False),
         Binding("r", "resume", "Resume"),
+        Binding("space", "archive_session", "Archive"),
         Binding("colon", "command_palette", ":", show=False),
         Binding("question_mark", "help", "?", show=False),
     ] + _VimOptionListMixin.VIM_BINDINGS
@@ -3380,7 +3381,7 @@ class CurrentSessionsScreen(_VimOptionListMixin, ModalScreen[None]):
             yield Static(f"[{C_DIM}]No sessions active today[/{C_DIM}]", id="csd-no-sessions")
             yield Static(
                 "  ".join(f"[{C_YELLOW}]{k}[/{C_YELLOW}] {v}" for k, v in [
-                    ("↑↓/jk", "nav"), ("enter/l/r", "open"), ("^H/esc", "back"),
+                    ("↑↓/jk", "nav"), ("enter/l/r", "open"), ("spc", "archive"), ("^H/esc", "back"),
                 ]),
                 id="csd-help",
             )
@@ -3454,11 +3455,18 @@ class CurrentSessionsScreen(_VimOptionListMixin, ModalScreen[None]):
                 ws_map_by_id[ws.id] = ws
             ws_groups[ws.id].append(s)
 
-        for ws_id in ws_order:
+        for i_ws, ws_id in enumerate(ws_order):
             ws = ws_map_by_id[ws_id]
             group = ws_groups[ws_id]
             icon = getattr(ws, "icon", "") or "◆"
-            ws_label = f"[{C_CYAN}]{icon} {_rich_escape(ws.name)}[/{C_CYAN}]"
+            name_part = f"{icon} {_rich_escape(ws.name)}"
+            # Pad with ─ to fill the line width
+            fill = max(2, lw - len(icon) - 1 - len(ws.name) - 1)
+            ws_label = f"[{C_CYAN}]{name_part} {'─' * fill}[/{C_CYAN}]"
+            if i_ws > 0:
+                # blank separator between groups
+                options.append(Option(f"[{C_DIM}] [/{C_DIM}]", id=f"__gap__{ws_id}", disabled=True))
+                idx += 1
             options.append(Option(ws_label, id=f"__ws__{ws_id}", disabled=True))
             idx += 1
             for s in group:
@@ -3520,6 +3528,16 @@ class CurrentSessionsScreen(_VimOptionListMixin, ModalScreen[None]):
         ws, sid = self._get_selected()
         if ws and sid:
             self.app.launch_claude_session(ws, session_id=sid)
+
+    def action_archive_session(self) -> None:
+        ws, sid = self._get_selected()
+        if not ws or not sid:
+            return
+        if sid not in ws.archived_sessions:
+            ws.archived_sessions[sid] = datetime.now(timezone.utc).isoformat()
+            self.app.state.store.update(ws)
+            self.app.state.invalidate_caches()
+            self._load_sessions()
 
     def on_key(self, event) -> None:
         # ctrl+space — terminals send \x00, Textual may report as ctrl+@ or ctrl+space
