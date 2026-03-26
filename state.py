@@ -981,6 +981,7 @@ class AppState:
             return sessions
 
         result = find_sessions_for_ws(ws, self.sessions)
+        result = [s for s in result if s.session_id not in hidden_sids]
         result = _drop_zombie_sessions(result)
         self._sessions_for_ws_cache[cache_key] = result
         return result
