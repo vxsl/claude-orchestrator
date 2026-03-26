@@ -1193,7 +1193,7 @@ class OrchestratorApp(App):
                 if is_active:
                     tab_parts.append(f"[bold {C_BLUE}]● {_rich_escape(lbl)}[/bold {C_BLUE}]")
                 else:
-                    tab_parts.append(f"[{C_DIM}]○ {_rich_escape(lbl)}[/{C_DIM}]")
+                    tab_parts.append(f"[{C_DIM}]● {_rich_escape(lbl)}[/{C_DIM}]")
             line1 = home_str + DIVIDER + DIVIDER.join(tab_parts)
         else:
             line1 = home_str
