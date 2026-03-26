@@ -1541,6 +1541,8 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         quiet_thinking = [s for s in quiet_active if session_activity(s, self._last_seen_cache) == ThreadActivity.THINKING]
         quiet_thinking.sort(key=lambda s: s.started_at or "", reverse=True)
         quiet_other = [s for s in quiet_active if s not in quiet_thinking]
+        quiet_today = [s for s in quiet_other if _is_today(s.last_activity or s.started_at or "")]
+        quiet_earlier = [s for s in quiet_other if s not in quiet_today]
         all_elevated = notified + elevated
 
         # If the notified/elevated/quiet structure changed, the in-place index
@@ -1548,11 +1550,13 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         # Fall back to a full rebuild to avoid stale/duplicate entries.
         has_separator = bool(all_elevated and (quiet_active or quiet_shelved))
         has_thinking_sep = bool(quiet_thinking)
+        has_earlier_sep = bool(quiet_earlier)
         has_shelved_sep = bool(quiet_shelved)
         expected_count = (
             len(self._detail_sessions)
             + (1 if has_separator else 0)
             + (1 if has_thinking_sep else 0)
+            + (1 if has_earlier_sep else 0)
             + (1 if has_shelved_sep else 0)
         )
         olist = self.query_one("#detail-sessions", OptionList)
@@ -1596,6 +1600,14 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
                 if has_separator:
                     idx += 1  # skip quiet separator
 
+                for s in quiet_today:
+                    if idx < olist.option_count:
+                        act = session_activity(s, self._last_seen_cache)
+                        seen = _is_session_seen(s, self._last_seen_cache)
+                        prompt = _render_session_option(s, act, self._throbber_frame, ws_repo_path=self.ws.repo_path, seen=seen, line_width=lw)
+                        olist.replace_option_prompt_at_index(idx, prompt)
+                    idx += 1
+
                 if has_thinking_sep:
                     idx += 1  # skip thinking separator
                     for s in quiet_thinking:
@@ -1606,13 +1618,15 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
                             olist.replace_option_prompt_at_index(idx, prompt)
                         idx += 1
 
-                for s in quiet_other:
-                    if idx < olist.option_count:
-                        act = session_activity(s, self._last_seen_cache)
-                        seen = _is_session_seen(s, self._last_seen_cache)
-                        prompt = _render_session_option(s, act, self._throbber_frame, ws_repo_path=self.ws.repo_path, seen=seen, line_width=lw)
-                        olist.replace_option_prompt_at_index(idx, prompt)
-                    idx += 1
+                if has_earlier_sep:
+                    idx += 1  # skip earlier separator
+                    for s in quiet_earlier:
+                        if idx < olist.option_count:
+                            act = session_activity(s, self._last_seen_cache)
+                            seen = _is_session_seen(s, self._last_seen_cache)
+                            prompt = _render_session_option(s, act, self._throbber_frame, ws_repo_path=self.ws.repo_path, seen=seen, line_width=lw)
+                            olist.replace_option_prompt_at_index(idx, prompt)
+                        idx += 1
 
                 if has_shelved_sep:
                     idx += 1  # skip shelved separator
@@ -1832,8 +1846,8 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         elevated.sort(key=lambda s: s.last_activity or "", reverse=True)
         quiet.sort(key=lambda s: s.last_activity or "", reverse=True)
 
-        # Split quiet into other, thinking, and shelved sections
-        # Order: thinking (top) → other → shelved (bottom)
+        # Split quiet into today, thinking, earlier, and shelved sections
+        # Order: today → thinking → earlier → shelved
         quiet_active = [s for s in quiet if s.session_id not in self._shelved_set]
         quiet_shelved = [s for s in quiet if s.session_id in self._shelved_set]
         quiet_thinking = [s for s in quiet_active if session_activity(s, self._last_seen_cache) == ThreadActivity.THINKING]
@@ -1877,6 +1891,19 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
             options.append(Option(QUIET_SEPARATOR_LABEL(lw), id="__separator__", disabled=True))
             idx += 1
 
+        # Split quiet_other into today vs earlier so thinking lands between them
+        quiet_today = [s for s in quiet_other if _is_today(s.last_activity or s.started_at or "")]
+        quiet_earlier = [s for s in quiet_other if s not in quiet_today]
+
+        for s in quiet_today:
+            act = session_activity(s, self._last_seen_cache)
+            if act == ThreadActivity.AWAITING_INPUT:
+                animating.append((idx, act))
+            seen = _is_session_seen(s, self._last_seen_cache)
+            prompt = _render_session_option(s, act, self._throbber_frame, ws_repo_path=self.ws.repo_path, seen=seen, line_width=lw)
+            options.append(Option(prompt, id=s.session_id))
+            idx += 1
+
         if quiet_thinking:
             options.append(Option(THINKING_SEPARATOR_LABEL(lw), id="__sep_thinking__", disabled=True))
             idx += 1
@@ -1888,21 +1915,19 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
                 options.append(Option(prompt, id=s.session_id))
                 idx += 1
 
-        earlier_sep_inserted = False
-        for qi, s in enumerate(quiet_other):
-            act = session_activity(s, self._last_seen_cache)
-            if act == ThreadActivity.AWAITING_INPUT:
-                animating.append((idx, act))
-            seen = _is_session_seen(s, self._last_seen_cache)
-            if not earlier_sep_inserted and qi > 0 and not _is_today(s.last_activity or s.started_at or ""):
-                pad = max(1, (lw - 10) // 2)
-                earlier_label = f"[{C_FAINT}]{'─' * pad} earlier {'─' * pad}[/{C_FAINT}]"
-                options.append(Option(earlier_label, id="__sep_earlier__", disabled=True))
-                idx += 1
-                earlier_sep_inserted = True
-            prompt = _render_session_option(s, act, self._throbber_frame, ws_repo_path=self.ws.repo_path, seen=seen, line_width=lw)
-            options.append(Option(prompt, id=s.session_id))
+        if quiet_earlier:
+            pad = max(1, (lw - 10) // 2)
+            earlier_label = f"[{C_FAINT}]{'─' * pad} earlier {'─' * pad}[/{C_FAINT}]"
+            options.append(Option(earlier_label, id="__sep_earlier__", disabled=True))
             idx += 1
+            for s in quiet_earlier:
+                act = session_activity(s, self._last_seen_cache)
+                if act == ThreadActivity.AWAITING_INPUT:
+                    animating.append((idx, act))
+                seen = _is_session_seen(s, self._last_seen_cache)
+                prompt = _render_session_option(s, act, self._throbber_frame, ws_repo_path=self.ws.repo_path, seen=seen, line_width=lw)
+                options.append(Option(prompt, id=s.session_id))
+                idx += 1
 
         if quiet_shelved:
             options.append(Option(SHELVED_SEPARATOR_LABEL(lw), id="__sep_shelved__", disabled=True))
