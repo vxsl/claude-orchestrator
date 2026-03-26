@@ -461,6 +461,8 @@ def _render_ws_option(
 
     if best == ThreadActivity.THINKING:
         name_markup = f"[bold {C_BLUE}]{name_esc}[/bold {C_BLUE}]"
+    elif best in (ThreadActivity.AWAITING_INPUT, ThreadActivity.RESPONSE_READY) and not all_seen:
+        name_markup = f"[bold {C_GREEN}]{name_esc}[/bold {C_GREEN}]"
     else:
         name_markup = f"[{name_bold}{name_color}]{name_esc}[/{name_bold}{name_color}]"
     line1 = f" {icon} {name_markup}{branch_markup}"
