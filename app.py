@@ -1178,6 +1178,7 @@ class OrchestratorApp(App):
         return f"{line1}\n{line2}"
 
     def _render_filter_bar(self) -> str:
+        # ── Line 1: filter presets ──
         filters = [
             ("active", "Active"), ("work", "Work"), ("personal", "Personal"),
             ("all", "All"), ("stale", "Stale"), ("archived", "Archived"),
@@ -1189,12 +1190,35 @@ class OrchestratorApp(App):
                 parts.append(f"[bold {C_MID}] {n}:{label} [/bold {C_MID}]")
             else:
                 parts.append(f"[{C_FAINT}] {n}:{label} [/{C_FAINT}]")
-        presets = "".join(parts)
+        line1 = "".join(parts)
 
         if self.state.search_text:
-            presets += f"  [{C_DIM}]search:[/{C_DIM}] [{C_YELLOW}]{_rich_escape(self.state.search_text)}[/{C_YELLOW}]"
+            line1 += f"  [{C_DIM}]search:[/{C_DIM}] [{C_YELLOW}]{_rich_escape(self.state.search_text)}[/{C_YELLOW}]"
 
-        return presets
+        # ── Line 2: open tabs ──
+        DIVIDER = f"  [{C_FAINT}]│[/{C_FAINT}]  "
+        home_tab = self.tabs.tabs[0]
+        home_icon = home_tab.icon + " " if home_tab.icon else ""
+        if self.tabs.active_tab.id == home_tab.id:
+            home_str = f"[bold italic {C_MID}] {home_icon}{_rich_escape(home_tab.label)} [/]"
+        else:
+            home_str = f"[{C_DIM}] {home_icon}{_rich_escape(home_tab.label)} [/{C_DIM}]"
+
+        other_tabs = [t for t in self.tabs.tabs if t.id != "home"]
+        if other_tabs:
+            tab_parts = []
+            for t in other_tabs:
+                lbl = (t.label[:14] + "\u2026") if len(t.label) > 14 else t.label
+                is_active = t.id == self.tabs.active_tab.id
+                if is_active:
+                    tab_parts.append(f"[bold {C_BLUE}]● {_rich_escape(lbl)}[/bold {C_BLUE}]")
+                else:
+                    tab_parts.append(f"[{C_DIM}]○ {_rich_escape(lbl)}[/{C_DIM}]")
+            line2 = home_str + DIVIDER + DIVIDER.join(tab_parts)
+        else:
+            line2 = home_str
+
+        return f"{line1}\n{line2}"
 
     def _render_summary_bar(self) -> str:
         count = self._active_table().option_count
