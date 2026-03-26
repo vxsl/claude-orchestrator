@@ -3373,6 +3373,7 @@ class CurrentSessionsScreen(_VimOptionListMixin, ModalScreen[None]):
         if not hasattr(app, "state"):
             return
         results = []
+        seen_sids: set[str] = set()
         for ws in app.state.store.active:
             sessions = app.state.sessions_for_ws(ws, include_archived_sessions=False)
             shelved = set(ws.shelved_sessions)
@@ -3381,6 +3382,9 @@ class CurrentSessionsScreen(_VimOptionListMixin, ModalScreen[None]):
                     continue
                 if not _is_today(s.last_activity or ""):
                     continue
+                if s.session_id in seen_sids:
+                    continue
+                seen_sids.add(s.session_id)
                 results.append((ws, s))
         results.sort(key=lambda x: x[1].last_activity or "", reverse=True)
         self._sessions = results
@@ -3614,10 +3618,14 @@ class TrashScreen(_VimOptionListMixin, ModalScreen[None]):
             return
         all_sessions = {s.session_id: s for s in app.state.sessions}
         entries = []
+        seen_sids: set[str] = set()
         for ws in app.state.store.workstreams:
             for sid, deleted_at in ws.deleted_sessions.items():
+                if sid in seen_sids:
+                    continue
                 s = all_sessions.get(sid)
                 if s:
+                    seen_sids.add(sid)
                     entries.append((ws, s, deleted_at))
         # Sort by deleted_at descending (most recently deleted first)
         entries.sort(key=lambda x: x[2] or "", reverse=True)

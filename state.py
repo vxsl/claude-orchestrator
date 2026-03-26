@@ -753,7 +753,7 @@ class AppState:
         jira_cache = get_jira_cache()
 
         for wt in worktrees:
-            path = wt["path"].rstrip("/")
+            path = os.path.expanduser(wt["path"]).rstrip("/")
             if path in ws_by_path:
                 # Already linked — just ensure ticket_key is set
                 ws = ws_by_path[path]
@@ -786,7 +786,7 @@ class AppState:
                 ws.add_link(kind="ticket", value=ticket_key, label=ticket_key)
             self._infer_category_from_remote(ws)
             self.store.add(ws)
-            ws_by_path[path] = ws
+            ws_by_path[os.path.expanduser(path).rstrip("/")] = ws
             changed = True
 
         # 3. Enrich all workstreams with ticket_key
