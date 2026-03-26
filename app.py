@@ -746,9 +746,9 @@ class OrchestratorApp(App):
                         f"[on {BG_RAISED}]{sep}[{C_FAINT}]{_rich_escape(css_sess_label)}[/{C_FAINT}] [/on {BG_RAISED}]"
                     )
             elif is_active and is_permanent:
-                content = f"[bold italic {C_MID} on {BG_BASE}] {prefix}{_rich_escape(ws_label)} [/]"
+                content = f"[italic {C_MID} on {BG_BASE}] {prefix}{_rich_escape(ws_label)} [/]"
             elif is_active:
-                content = f"[bold {C_BLUE} on {BG_BASE}] {prefix}{_rich_escape(ws_label)} [/]"
+                content = f"[{C_BLUE} on {BG_BASE}] {prefix}{_rich_escape(ws_label)} [/]"
             elif is_permanent:
                 content = f"[italic {C_FAINT} on {BG_RAISED}] {prefix}{_rich_escape(ws_label)} [/]"
             else:
@@ -1193,7 +1193,7 @@ class OrchestratorApp(App):
                 if is_active:
                     tab_parts.append(f"[bold {C_BLUE}]● {_rich_escape(lbl)}[/bold {C_BLUE}]")
                 else:
-                    tab_parts.append(f"[{C_DIM}]● {_rich_escape(lbl)}[/{C_DIM}]")
+                    tab_parts.append(f"[{C_DIM}]○ {_rich_escape(lbl)}[/{C_DIM}]")
             line1 = home_str + DIVIDER + DIVIDER.join(tab_parts)
         else:
             line1 = home_str
