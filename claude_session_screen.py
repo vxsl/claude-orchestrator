@@ -543,7 +543,9 @@ class ClaudeSessionScreen(Screen):
         }
 
     def _jsonl_path(self) -> str:
-        encoded_dir = self._cwd.replace("/", "-")
+        # Claude encodes the cwd as a project dir name by replacing both "/" and "."
+        # with "-" (dots in dir names like "ul.UB-6732-foo" become dashes too).
+        encoded_dir = self._cwd.replace("/", "-").replace(".", "-")
         return str(Path.home() / ".claude" / "projects" / encoded_dir / f"{self._session_id}.jsonl")
 
     def _detect_git_branch(self) -> str:

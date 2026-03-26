@@ -456,6 +456,11 @@ def _discover_threads_from_db(
         cluster = [by_id[sid] for sid in sids if sid in by_id]
         if not cluster:
             continue
+        # Use the sessions' decoded project_path rather than the DB value:
+        # the Rust daemon stores a naively decoded path that is wrong for
+        # dotted worktree dirs (e.g. "ul.UB-6732-foo" → stored as "ul/UB-6732-foo").
+        # _hydrate_session now re-decodes correctly, so derive from the sessions.
+        project_path = cluster[0].project_path
         threads.append(Thread(
             thread_id=thread_id,
             name=name,

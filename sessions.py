@@ -87,10 +87,16 @@ def _rust_db_changed() -> bool:
 
 def _hydrate_session(row: dict) -> ClaudeSession:
     """Convert a SQLite row dict into a ClaudeSession object."""
+    # Re-decode project_path from the raw project_dir rather than trusting the
+    # Rust daemon's stored value: the daemon uses a naive decode (all dashes→slashes)
+    # which mishandles worktree paths like "ul.UB-6732-foo" → "ul/UB-6732/foo".
+    # Our _decode_project_dir tries both dash and dot joiners and prefers longer
+    # filesystem matches, so it correctly reconstructs the real path.
+    project_path = _decode_project_dir(row["project_dir"])
     return ClaudeSession(
         session_id=row["session_id"],
         project_dir=row["project_dir"],
-        project_path=row["project_path"],
+        project_path=project_path,
         title=row["title"],
         started_at=row["started_at"],
         last_activity=row["last_activity"],
@@ -611,40 +617,39 @@ def _decode_project_dir(dirname: str) -> str:
             merged.append(parts[i])
             i += 1
     parts = merged
-    # Try to reconstruct the path
-    best_path = "/" + "/".join(parts)
-    # Try progressively joining segments to find real directories
+    # Try to reconstruct the path using a longest-match strategy.
+    # Claude encodes both "/" and "." as "-", so "ul.UB-6732-foo" and "ul/UB-6732/foo"
+    # both encode to "ul-UB-6732-foo".  To find the real path we must check the
+    # filesystem.  At each step we try all segment counts (1…N) with two joiners
+    # ("dash-only" for path separators, and "first-segment.rest" for dotted names)
+    # and choose the LONGEST match — this prefers "ul.UB-6732-foo" (n=3, dot-joiner)
+    # over the greedy "ul" (n=1) when both exist.
+    MAX_LOOKAHEAD = 20
     reconstructed = "/"
     remaining = parts[:]
     while remaining:
-        # Try joining next segment
-        candidate = os.path.join(reconstructed, remaining[0])
-        if os.path.exists(candidate):
-            reconstructed = candidate
-            remaining.pop(0)
-        elif len(remaining) > 1:
-            # Maybe this segment has a dash in it — try joining with next
-            candidate = os.path.join(reconstructed, remaining[0] + "-" + remaining[1])
-            if os.path.exists(candidate):
-                reconstructed = candidate
-                remaining.pop(0)
-                remaining.pop(0)
-            else:
-                # Try accumulating more
-                found = False
-                for n in range(2, min(len(remaining) + 1, 8)):
-                    candidate = os.path.join(reconstructed, "-".join(remaining[:n]))
-                    if os.path.exists(candidate):
-                        reconstructed = candidate
-                        remaining = remaining[n:]
-                        found = True
-                        break
-                if not found:
-                    # Give up on smart reconstruction, just join the rest
-                    reconstructed = os.path.join(reconstructed, "-".join(remaining))
-                    break
+        best_match: str | None = None
+        best_n = 0
+
+        limit = min(len(remaining) + 1, MAX_LOOKAHEAD + 1)
+        for n in range(1, limit):
+            # Dash-only join: represents path component(s) with literal dashes
+            c = os.path.join(reconstructed, "-".join(remaining[:n]))
+            if os.path.exists(c) and n > best_n:
+                best_match, best_n = c, n
+            # Dot+dash join: first segment joined to the rest via "."
+            # (e.g. "ul" + "." + "UB-6732-foo" → "ul.UB-6732-foo")
+            if n > 1:
+                c = os.path.join(reconstructed, remaining[0] + "." + "-".join(remaining[1:n]))
+                if os.path.exists(c) and n > best_n:
+                    best_match, best_n = c, n
+
+        if best_match:
+            reconstructed = best_match
+            remaining = remaining[best_n:]
         else:
-            reconstructed = os.path.join(reconstructed, remaining[0])
+            # No filesystem match found — just join everything left with dashes
+            reconstructed = os.path.join(reconstructed, "-".join(remaining))
             break
     return reconstructed
 
