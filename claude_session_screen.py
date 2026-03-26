@@ -39,7 +39,7 @@ from thread_namer import get_session_title
 log = logging.getLogger("orch.claude_session")
 
 # Keys that pass through the TerminalWidget to the screen for panel navigation
-_PASSTHROUGH_KEYS = {"ctrl+j", "ctrl+k", "ctrl+e", "ctrl+z", "ctrl+backslash", "ctrl+b", "ctrl+x", "ctrl+@"}
+_PASSTHROUGH_KEYS = {"ctrl+j", "ctrl+k", "ctrl+e", "ctrl+h", "ctrl+z", "ctrl+backslash", "ctrl+b", "ctrl+x", "ctrl+@"}
 
 ORCH_DIR = str(Path(__file__).parent)
 
@@ -716,6 +716,14 @@ class ClaudeSessionScreen(Screen):
             event.stop()
             event.prevent_default()
             self.action_zoom_panel()
+            return
+        # ctrl+h (Textual key="ctrl+h"): go back. Note: vterm backspace arrives
+        # as key="backspace" character="\x08" — that is NOT caught here and is
+        # forwarded to the PTY by TerminalWidget so backspace works correctly.
+        if event.key == "ctrl+h":
+            event.stop()
+            event.prevent_default()
+            self.action_go_back()
             return
         # ctrl+space (terminal sends \x00 → Textual: ctrl+@): archive + go back
         if event.key == "ctrl+@" or event.character == "\x00":
