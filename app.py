@@ -737,20 +737,22 @@ class OrchestratorApp(App):
                 sep = f"[{C_FAINT}] \u203a [/{C_FAINT}]"
                 if is_active:
                     content = (
-                        f"[bold {C_BLUE} on {BG_RAISED}] {prefix}{_rich_escape(ws_label)}[/bold {C_BLUE} on {BG_RAISED}]"
-                        f"[bold on {BG_RAISED}]{sep}[{C_MID}]{_rich_escape(css_sess_label)}[/{C_MID}] [/bold on {BG_RAISED}]"
+                        f"[bold {C_BLUE} on {BG_BASE}] {prefix}{_rich_escape(ws_label)}[/bold {C_BLUE} on {BG_BASE}]"
+                        f"[on {BG_BASE}]{sep}[{C_MID}]{_rich_escape(css_sess_label)}[/{C_MID}] [/on {BG_BASE}]"
                     )
                 else:
                     content = (
-                        f"[bold {C_DIM} on {BG_RAISED}] {prefix}{_rich_escape(ws_label)}[/bold {C_DIM} on {BG_RAISED}]"
-                        f"[bold on {BG_RAISED}]{sep}[{C_FAINT}]{_rich_escape(css_sess_label)}[/{C_FAINT}] [/bold on {BG_RAISED}]"
+                        f"[{C_DIM} on {BG_RAISED}] {prefix}{_rich_escape(ws_label)}[/{C_DIM} on {BG_RAISED}]"
+                        f"[on {BG_RAISED}]{sep}[{C_FAINT}]{_rich_escape(css_sess_label)}[/{C_FAINT}] [/on {BG_RAISED}]"
                     )
+            elif is_active and is_permanent:
+                content = f"[bold italic {C_MID} on {BG_BASE}] {prefix}{_rich_escape(ws_label)} [/]"
+            elif is_active:
+                content = f"[bold {C_BLUE} on {BG_BASE}] {prefix}{_rich_escape(ws_label)} [/]"
             elif is_permanent:
-                color = C_MID if is_active else C_FAINT
-                content = f"[bold italic {color} on {BG_RAISED}] {prefix}{_rich_escape(ws_label)} [/bold italic {color} on {BG_RAISED}]"
+                content = f"[italic {C_FAINT} on {BG_RAISED}] {prefix}{_rich_escape(ws_label)} [/]"
             else:
-                color = C_BLUE if is_active else C_DIM
-                content = f"[bold {color} on {BG_RAISED}] {prefix}{_rich_escape(ws_label)} [/bold {color} on {BG_RAISED}]"
+                content = f"[{C_DIM} on {BG_RAISED}] {prefix}{_rich_escape(ws_label)} [/{C_DIM} on {BG_RAISED}]"
 
             parts.append(content)
             if i < len(self.tabs.tabs) - 1:
@@ -1176,10 +1178,11 @@ class OrchestratorApp(App):
         return f"{line1}\n{line2}"
 
     def _render_filter_bar(self) -> str:
-        # ── Line 1: tabs (same as original) ──
+        # ── Line 1: tabs (original rendering) ──
         home_tab = self.tabs.tabs[0]
         home_icon = home_tab.icon + " " if home_tab.icon else ""
         home_str = f"[bold italic {C_MID} on {BG_BASE}] {home_icon}{_rich_escape(home_tab.label)} [/]"
+        CHILD_SEP = f" [{C_DIM}]\u203a[/{C_DIM}] "
         DIVIDER = f"  [{C_FAINT}]\u2502[/{C_FAINT}]  "
 
         other_tabs = [t for t in self.tabs.tabs if t.id != "home"]
@@ -1189,9 +1192,9 @@ class OrchestratorApp(App):
                 lbl = (t.label[:14] + "\u2026") if len(t.label) > 14 else t.label
                 is_active = t.id == self.tabs.active_tab.id
                 if is_active:
-                    tab_parts.append(f"[bold {C_BLUE}]{_rich_escape(lbl)}[/bold {C_BLUE}]")
+                    tab_parts.append(f"[bold {C_BLUE}]● {_rich_escape(lbl)}[/bold {C_BLUE}]")
                 else:
-                    tab_parts.append(f"[bold {C_DIM}]{_rich_escape(lbl)}[/bold {C_DIM}]")
+                    tab_parts.append(f"[{C_DIM}]○ {_rich_escape(lbl)}[/{C_DIM}]")
             line1 = home_str + DIVIDER + DIVIDER.join(tab_parts)
         else:
             line1 = home_str
