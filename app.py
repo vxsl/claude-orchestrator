@@ -737,8 +737,8 @@ class OrchestratorApp(App):
                 sep = f"[{C_FAINT}] \u203a [/{C_FAINT}]"
                 if is_active:
                     content = (
-                        f"[bold {C_BLUE} on {BG_BASE}] {prefix}{_rich_escape(ws_label)}[/bold {C_BLUE} on {BG_BASE}]"
-                        f"[on {BG_BASE}]{sep}[{C_MID}]{_rich_escape(css_sess_label)}[/{C_MID}] [/on {BG_BASE}]"
+                        f"[{C_LIGHT} on {BG_RAISED}] {prefix}{_rich_escape(ws_label)}[/{C_LIGHT} on {BG_RAISED}]"
+                        f"[on {BG_RAISED}]{sep}[{C_MID}]{_rich_escape(css_sess_label)}[/{C_MID}] [/on {BG_RAISED}]"
                     )
                 else:
                     content = (
@@ -746,9 +746,9 @@ class OrchestratorApp(App):
                         f"[on {BG_RAISED}]{sep}[{C_FAINT}]{_rich_escape(css_sess_label)}[/{C_FAINT}] [/on {BG_RAISED}]"
                     )
             elif is_active and is_permanent:
-                content = f"[bold italic {C_MID} on {BG_RAISED}] {prefix}{_rich_escape(ws_label)} [/]"
+                content = f"[italic {C_LIGHT} on {BG_RAISED}] {prefix}{_rich_escape(ws_label)} [/]"
             elif is_active:
-                content = f"[bold {C_BLUE} on {BG_RAISED}] {prefix}{_rich_escape(ws_label)} [/]"
+                content = f"[{C_LIGHT} on {BG_RAISED}] {prefix}{_rich_escape(ws_label)} [/]"
             elif is_permanent:
                 content = f"[italic {C_FAINT} on {BG_RAISED}] {prefix}{_rich_escape(ws_label)} [/]"
             else:
