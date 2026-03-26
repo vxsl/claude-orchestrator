@@ -522,6 +522,94 @@ class TestSessionManagement:
         assert state.find_ws_for_session(session) is None
 
 
+# ─── sessions_for_ws filtering ───────────────────────────────────────
+
+class TestSessionsForWsFiltering:
+    """Verify that archived/deleted sessions are excluded from sessions_for_ws
+    in both the thread_ids path and the directory-match fallback path."""
+
+    def test_archived_sessions_excluded_via_thread_ids(self, state):
+        """Archived sessions hidden when workstream uses thread_ids path."""
+        ws = Workstream(name="test")
+        state.store.add(ws)
+        s1 = _make_session("s1", project_path="/p")
+        s2 = _make_session("s2", project_path="/p")
+        t = Thread(thread_id="t1", name="p", project_path="/p", sessions=[s1, s2])
+        ws.thread_ids = ["t1"]
+        state.threads = [t]
+        state.sessions = [s1, s2]
+
+        # Both visible by default
+        result = state.sessions_for_ws(ws)
+        assert {s.session_id for s in result} == {"s1", "s2"}
+
+        # Archive s1 — should disappear
+        ws.archived_sessions["s1"] = "2026-01-01T00:00:00Z"
+        state.invalidate_caches()
+        result = state.sessions_for_ws(ws)
+        assert {s.session_id for s in result} == {"s2"}
+
+        # With include_archived_sessions=True, s1 reappears
+        result = state.sessions_for_ws(ws, include_archived_sessions=True)
+        assert {s.session_id for s in result} == {"s1", "s2"}
+
+    def test_archived_sessions_excluded_via_directory_match(self, state, tmp_path):
+        """Archived sessions hidden in the find_sessions_for_ws fallback path."""
+        project_dir = tmp_path / "project"
+        project_dir.mkdir()
+
+        ws = Workstream(name="test")
+        ws.add_link("worktree", str(project_dir), "project")
+        state.store.add(ws)
+
+        s1 = _make_session("s1", project_path=str(project_dir))
+        s2 = _make_session("s2", project_path=str(project_dir))
+        state.sessions = [s1, s2]
+        # No threads/thread_ids — forces the directory-match fallback
+
+        result = state.sessions_for_ws(ws)
+        assert {s.session_id for s in result} == {"s1", "s2"}
+
+        # Archive s1
+        ws.archived_sessions["s1"] = "2026-01-01T00:00:00Z"
+        state.invalidate_caches()
+        result = state.sessions_for_ws(ws)
+        assert {s.session_id for s in result} == {"s2"}
+
+    def test_deleted_sessions_excluded_via_directory_match(self, state, tmp_path):
+        """Deleted (trashed) sessions hidden in directory-match fallback path."""
+        project_dir = tmp_path / "project"
+        project_dir.mkdir()
+
+        ws = Workstream(name="test")
+        ws.add_link("worktree", str(project_dir), "project")
+        state.store.add(ws)
+
+        s1 = _make_session("s1", project_path=str(project_dir))
+        state.sessions = [s1]
+
+        ws.deleted_sessions["s1"] = "2026-01-01T00:00:00Z"
+        state.invalidate_caches()
+        result = state.sessions_for_ws(ws)
+        assert result == []
+
+    def test_include_archived_shows_archived_in_directory_match(self, state, tmp_path):
+        """include_archived_sessions=True shows archived in fallback path."""
+        project_dir = tmp_path / "project"
+        project_dir.mkdir()
+
+        ws = Workstream(name="test")
+        ws.add_link("worktree", str(project_dir), "project")
+        state.store.add(ws)
+
+        s1 = _make_session("s1", project_path=str(project_dir))
+        state.sessions = [s1]
+        ws.archived_sessions["s1"] = "2026-01-01T00:00:00Z"
+
+        result = state.sessions_for_ws(ws, include_archived_sessions=True)
+        assert {s.session_id for s in result} == {"s1"}
+
+
 # ─── Tmux Status ─────────────────────────────────────────────────────
 
 class TestTmuxStatus:
