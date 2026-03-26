@@ -5,12 +5,10 @@ No Textual dependency. Functions take explicit parameters instead of reaching in
 
 from __future__ import annotations
 
-import logging
 import os
 import subprocess
 from datetime import datetime
 
-log = logging.getLogger("orch.actions")
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -83,7 +81,6 @@ def find_tmux_window_for_session(session_id: str) -> str | None:
             capture_output=True, text=True, timeout=5,
         )
         if result.returncode != 0:
-            log.debug("find_tmux_window: list-windows failed rc=%d", result.returncode)
             return None
         matches = []
         for line in result.stdout.strip().split("\n"):
@@ -93,11 +90,9 @@ def find_tmux_window_for_session(session_id: str) -> str | None:
             if tag:
                 matches.append((tag, wid))
             if tag == session_id:
-                log.debug("find_tmux_window: found %s -> %s", session_id, wid)
                 return wid
-        log.debug("find_tmux_window: no match for %s among %d tagged windows", session_id, len(matches))
-    except Exception as e:
-        log.debug("find_tmux_window: exception %s", e)
+    except Exception:
+        return None
     return None
 
 
@@ -115,7 +110,6 @@ def switch_to_tmux_window(window_id: str) -> bool:
             capture_output=True, text=True, timeout=5,
         ).stdout.strip()
         if not cur:
-            log.debug("switch_to_tmux_window: can't determine current session")
             return False
 
         # Always try to link into the current session (idempotent if already linked)
@@ -123,18 +117,14 @@ def switch_to_tmux_window(window_id: str) -> bool:
             ["tmux", "link-window", "-s", window_id, "-t", f"{cur}:"],
             capture_output=True, text=True, timeout=5,
         )
-        log.debug("switch_to_tmux_window: link-window %s -> %s rc=%d stderr=%s",
-                  window_id, cur, link_result.returncode, (link_result.stderr or "").strip())
 
         # Now select it — it's guaranteed to be in our session
         result = subprocess.run(
             ["tmux", "select-window", "-t", window_id],
             capture_output=True, text=True, timeout=5,
         )
-        log.debug("switch_to_tmux_window: select-window %s rc=%d", window_id, result.returncode)
         return result.returncode == 0
     except Exception as e:
-        log.debug("switch_to_tmux_window: exception %s", e)
         return False
 
 
@@ -245,8 +235,6 @@ def launch_orch_claude(
         # if the orch session is destroyed (e.g. destroy-unattached).
         _ensure_worker_session()
 
-        log.debug("launch_orch_claude: new-window in %s, name=%s, cwd=%s, resume=%s",
-                  WORKER_SESSION, window_name, cwd, session_id)
         result = subprocess.run(
             ["tmux", "new-window", "-t", WORKER_SESSION,
              "-n", window_name, "-c", cwd,
@@ -254,20 +242,15 @@ def launch_orch_claude(
             capture_output=True, text=True, timeout=5,
         )
         if result.returncode != 0:
-            log.error("launch_orch_claude: new-window FAILED rc=%d stderr=%s",
-                      result.returncode, result.stderr.strip())
             return False, result.stderr.strip()
 
         window_id = result.stdout.strip()
-        log.debug("launch_orch_claude: created window %s", window_id)
 
         # Link the window into the orch session so the user sees it
         link_result = subprocess.run(
             ["tmux", "link-window", "-s", window_id, "-t", f"{orch_session}:"],
             capture_output=True, text=True, timeout=5,
         )
-        log.debug("launch_orch_claude: link-window rc=%d stderr=%s",
-                  link_result.returncode, (link_result.stderr or "").strip())
 
         # Wait for orch-claude to finish creating all panes before switching
         # focus — avoids the half-width flash the user sees mid-layout.
@@ -275,17 +258,14 @@ def launch_orch_claude(
             ["tmux", "wait-for", f"orch-layout-ready-{window_id}"],
             capture_output=True, timeout=10,
         )
-        log.debug("launch_orch_claude: layout-ready signal received for %s", window_id)
 
         sel_result = subprocess.run(
             ["tmux", "select-window", "-t", window_id],
             capture_output=True, text=True, timeout=5,
         )
-        log.debug("launch_orch_claude: select-window rc=%d", sel_result.returncode)
 
         return True, ""
     except Exception as e:
-        log.error("launch_orch_claude: exception %s", e)
         return False, str(e)
 
 
@@ -330,12 +310,10 @@ def find_sessions_for_ws(ws: Workstream, all_sessions: list[ClaudeSession]) -> l
 
 def resume_session_now(ws: Workstream, session: ClaudeSession, dirs: list[str], app):
     """Resume a specific session immediately via ClaudeSessionScreen."""
-    log.debug("resume_session_now: sid=%s title=%s", session.session_id, session.display_name)
     mark_thread_seen(session.session_id)
 
     cwd = session.project_path
     if not os.path.isdir(cwd):
-        log.debug("resume_session_now: cwd %s not a dir, falling back", cwd)
         cwd = dirs[0] if dirs else os.getcwd()
     app.launch_claude_session(ws, session_id=session.session_id, cwd=cwd)
 
@@ -482,12 +460,11 @@ def open_file_picker(cwd: str) -> None:
 
     fzedit = shutil.which("fzedit")
     if not fzedit:
-        log.warning("open_file_picker: fzedit not found on PATH")
         return
     try:
         subprocess.run([fzedit], cwd=cwd)
-    except Exception as e:
-        log.error("open_file_picker: %s", e)
+    except Exception:
+        pass
 
 
 # ─── Liveness Refresh ────────────────────────────────────────────────

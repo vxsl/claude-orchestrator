@@ -14,7 +14,6 @@ import subprocess
 import time as _time
 from pathlib import Path
 
-log = logging.getLogger("orch.app")
 _perf_log = logging.getLogger("orch.perf")
 _PERF_ENABLED = os.environ.get("ORCH_PERF_LOG", "")
 if _PERF_ENABLED:
@@ -501,8 +500,8 @@ class OrchestratorApp(App):
         try:
             for tw in self.query("#main-lower TerminalWidget"):
                 tw.start()
-        except Exception as e:
-            log.error("Failed to start main tig: %s", e)
+        except Exception:
+            pass
 
     def _debounce_tig_update(self):
         if hasattr(self, '_tig_update_timer') and self._tig_update_timer:

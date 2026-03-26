@@ -8,7 +8,6 @@ All rendering happens inside Textual — no tmux pane splitting.
 
 from __future__ import annotations
 
-import logging
 import os
 import shlex
 import subprocess
@@ -35,8 +34,6 @@ from rendering import (
 from sessions import ClaudeSession, parse_session
 from terminal import TerminalWidget
 from thread_namer import get_session_title
-
-log = logging.getLogger("orch.claude_session")
 
 # Keys that pass through the TerminalWidget to the screen for panel navigation
 _PASSTHROUGH_KEYS = {"ctrl+j", "ctrl+k", "ctrl+e", "ctrl+h", "ctrl+z", "ctrl+backslash", "ctrl+b", "ctrl+x", "ctrl+@"}
@@ -460,8 +457,6 @@ class ClaudeSessionScreen(Screen):
         self._jsonl = self._jsonl_path()
         self._sidebar_enabled = not os.environ.get("ORCH_NO_SIDEBAR")
 
-        log.debug("ClaudeSessionScreen.__init__: sid=%s cwd=%s new=%s reattach_tmux=%s",
-                  self._session_id[:8], self._cwd, self._is_new, reattach_tmux)
 
     def _resolve_cwd(self) -> str:
         from actions import ws_working_dir
@@ -601,7 +596,6 @@ class ClaudeSessionScreen(Screen):
     # ── Compose (pure — no I/O) ───────────────────────────────────
 
     def compose(self) -> ComposeResult:
-        log.debug("ClaudeSessionScreen.compose: starting")
         yield Static("", id="detail-tab-bar")
         with Horizontal(id="cs-outer"):
             with Vertical(id="cs-main-col"):
@@ -644,10 +638,8 @@ class ClaudeSessionScreen(Screen):
             ws_name=self._ws.name,
             git_branch=self._git_branch,
         )
-        log.debug("ClaudeSessionScreen.compose: done")
 
     def on_mount(self) -> None:
-        log.debug("ClaudeSessionScreen.on_mount: deferring terminal start until after layout")
         # Defer until after the first layout pass so TerminalWidget.on_resize has fired
         # and _ncol/_nrow are set to the real widget dimensions. Starting before layout
         # would create the tmux session at the hardcoded 80x24 default, causing Claude
@@ -655,26 +647,21 @@ class ClaudeSessionScreen(Screen):
         self.call_after_refresh(self._start_terminals)
 
     def _start_terminals(self) -> None:
-        log.debug("ClaudeSessionScreen._start_terminals: starting terminals")
         claude_tw = self.query_one("#cs-terminal", TerminalWidget)
         if self._reattach_tmux:
             # Reattach to a surviving tmux session
             claude_tw.attach_persistent(self._session_id)
-            log.debug("  reattached cs-terminal via tmux")
         else:
             claude_tw.start_persistent(self._session_id)
-            log.debug("  started cs-terminal via tmux")
         if self._sidebar_enabled:
             for tw in self.query(TerminalWidget):
                 if tw.id != "cs-terminal":
                     try:
                         tw.start()
-                        log.debug("  started %s", tw.id)
-                    except Exception as e:
-                        log.error("  FAILED to start %s: %s", tw.id, e)
+                    except Exception:
+                        pass
         claude_tw.focus()
         self._update_pane_focus()
-        log.debug("ClaudeSessionScreen._start_terminals: done")
 
     def on_unmount(self) -> None:
         if self._tigrc_path:
@@ -690,7 +677,6 @@ class ClaudeSessionScreen(Screen):
         if not isinstance(widget, TerminalWidget) or widget.id != "cs-terminal":
             return  # A sidebar terminal exited, ignore
 
-        log.debug("Claude terminal finished, cleaning up")
 
         auto_link_session(self._store, self._ws.id, self._session_id)
         log_session_exit(self._session_id, self._ws.name, self._start_time)

@@ -6,15 +6,12 @@ and return results via dismiss(). No direct access to app state.
 
 from __future__ import annotations
 
-import logging
 import os
 import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 
 from rich.table import Table as RichTable
-
-log = logging.getLogger("orch.screens")
 
 from textual import on, work
 from textual.app import ComposeResult
@@ -1244,8 +1241,8 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
             for tw in self.query(TerminalWidget):
                 try:
                     tw.start()
-                except Exception as e:
-                    log.error("DetailScreen: failed to start tig terminal %s: %s", tw.id, e)
+                except Exception:
+                    pass
         self._update_pane_labels()
         olist = self.query_one("#detail-sessions", OptionList)
         if olist.option_count > 0 and olist.highlighted is None:
@@ -1659,9 +1656,6 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         if hasattr(app, 'state'):
             all_sessions = app.state.sessions_for_ws(self.ws, include_archived_sessions=True)
             archived = self.ws.archived_sessions
-            log.debug("load_detail: ws=%s all=%d archived_map=%s",
-                      self.ws.name, len(all_sessions),
-                      {k: v for k, v in archived.items()})
             # Auto-unshelf: if the human typed a new message after shelving, wake the session
             unshelved = set()
             for s in all_sessions:
@@ -1671,7 +1665,6 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
                     if last_human and shelved_at and self._parse_ts(last_human) > self._parse_ts(shelved_at):
                         unshelved.add(s.session_id)
             if unshelved:
-                log.debug("load_detail: auto-unshelving %s", unshelved)
                 for sid in unshelved:
                     del self.ws.shelved_sessions[sid]
                 self.store.update(self.ws)
@@ -1682,8 +1675,6 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
             ]
             self._all_archived = [s for s in all_sessions if s.session_id in hidden]
             self._shelved_set = set(self.ws.shelved_sessions)
-            log.debug("load_detail: active=%d archived=%d shelved=%d",
-                      len(self._all_sessions), len(self._all_archived), len(self._shelved_set))
         else:
             from actions import find_sessions_for_ws
             self._all_sessions = find_sessions_for_ws(self.ws, getattr(app, 'sessions', []))
@@ -1940,8 +1931,6 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         elif prev_highlighted is not None:
             olist.highlighted = min(prev_highlighted, len(options) - 1)
         self._animating_sessions = animating
-        log.debug("build_session_list: %d notified + %d elevated + %d quiet (%d shelved), option_count=%d",
-                  len(notified), len(elevated), len(quiet), len(quiet_shelved), olist.option_count)
 
     _ARCHIVED_PAGE_SIZE = 30
 
@@ -2146,8 +2135,6 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         if self._peek_mode:
             return
         oid = event.option_id
-        log.debug("option_selected: option_id=%r option_index=%r widget_id=%s",
-                  oid, event.option_index, event.option_list.id if hasattr(event, 'option_list') else "?")
 
         # Feed notification selected — jump to the matching session
         if oid and oid.startswith("notif:"):
@@ -2175,12 +2162,9 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
             self._build_archived_list()
             return
         if oid is None or oid == "__separator__":
-            if oid is None:
-                log.warning("option_selected: option_id is None!")
             return
         sid = oid.removeprefix("a:")  # archived IDs are "a:<session_id>"
         session = self._find_session_by_id(sid)
-        log.debug("option_selected: sid=%s found=%s", sid, session is not None)
         if session:
             mark_thread_seen(session.session_id)
             self._last_seen_cache = load_last_seen()
@@ -2200,11 +2184,6 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
                 self.ws, session_id=session.session_id,
                 cwd=session.project_path,
             )
-        else:
-            log.warning("option_selected: session not found for sid=%s, detail_sids=%s, archived_sids=%s",
-                        sid, [s.session_id for s in self._detail_sessions],
-                        [s.session_id for s in self._archived_sessions])
-
     def _render_title(self) -> str:
         return f"[bold {C_PURPLE}]{_rich_escape(self.ws.name)}[/bold {C_PURPLE}]"
 
@@ -2715,9 +2694,6 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
     def action_archive_session(self):
         olist = self._focused_olist()
         idx = olist.highlighted
-        log.debug("archive_session: pane=%s idx=%s option_count=%d detail=%d archived=%d",
-                  self._active_pane, idx, olist.option_count,
-                  len(self._detail_sessions), len(self._archived_sessions))
         if idx is None:
             return
         try:
@@ -2728,12 +2704,10 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
             return
         if self._active_pane == "archived":
             sid = oid.removeprefix("a:")
-            log.debug("archive_session: unarchiving sid=%s", sid)
             self.ws.archived_sessions.pop(sid, None)
             self.store.update(self.ws)
         else:
             sid = oid
-            log.debug("archive_session: archiving sid=%s", sid)
             if sid not in self.ws.archived_sessions:
                 self.ws.archived_sessions[sid] = datetime.now(timezone.utc).isoformat()
                 self.store.update(self.ws)
