@@ -769,9 +769,11 @@ class AppState:
         repos = self.known_repos()
         worktrees = discover_worktrees(repos)
 
-        # Build lookup: worktree_path -> existing workstream
+        # Build lookup: worktree_path -> existing ACTIVE workstream
+        # Only active workstreams block auto-creation; archived ones should not
+        # prevent a new workstream from being created for a live worktree.
         ws_by_path: dict[str, Workstream] = {}
-        for ws in self.store.workstreams:
+        for ws in self.store.active:
             for link in ws.links:
                 if link.kind == "worktree":
                     ws_by_path[os.path.expanduser(link.value).rstrip("/")] = ws
@@ -784,7 +786,7 @@ class AppState:
         for wt in worktrees:
             path = os.path.expanduser(wt["path"]).rstrip("/")
             if path in ws_by_path:
-                # Already linked — just ensure ticket_key is set
+                # Already linked to an active workstream — just ensure ticket_key is set
                 ws = ws_by_path[path]
                 if wt["ticket_key"] and not ws.ticket_key:
                     ws.ticket_key = wt["ticket_key"]
