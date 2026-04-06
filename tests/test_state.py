@@ -507,6 +507,35 @@ class TestSessionManagement:
         assert found is not None
         assert found.id == ws.id
 
+    def test_find_ws_for_session_by_subdirectory_link(self, state, tmp_path):
+        """Session from a subdirectory matches workstream linked to parent dir."""
+        project_dir = tmp_path / "repo"
+        sub_dir = project_dir / "client" / "web"
+        sub_dir.mkdir(parents=True)
+
+        ws = Workstream(name="test")
+        ws.add_link("worktree", str(project_dir), "repo")
+        state.store.add(ws)
+
+        session = _make_session(project_path=str(sub_dir))
+        found = state.find_ws_for_session(session)
+        assert found is not None
+        assert found.id == ws.id
+
+    def test_find_ws_for_session_by_subdirectory_repo_path(self, state, tmp_path):
+        """Session from a subdirectory matches workstream via repo_path."""
+        project_dir = tmp_path / "repo"
+        sub_dir = project_dir / "client" / "web"
+        sub_dir.mkdir(parents=True)
+
+        ws = Workstream(name="test", repo_path=str(project_dir))
+        state.store.add(ws)
+
+        session = _make_session(project_path=str(sub_dir))
+        found = state.find_ws_for_session(session)
+        assert found is not None
+        assert found.id == ws.id
+
     def test_find_ws_for_session_not_found(self, state):
         ws = Workstream(name="test")
         state.store.add(ws)
@@ -783,6 +812,26 @@ class TestRepoLinking:
         state.store.add(ws)
         repos = state.known_repos()
         assert str(d) in repos
+
+    def test_known_repos_resolves_subdirectories_to_git_root(self, state, tmp_path):
+        """Sessions from subdirectories should resolve to the git root."""
+        import subprocess
+        repo = tmp_path / "myrepo"
+        repo.mkdir()
+        subprocess.run(["git", "init", str(repo)], capture_output=True)
+        sub = repo / "client" / "web"
+        sub.mkdir(parents=True)
+        # Clear the toplevel cache so our test dirs are resolved fresh
+        from state import _git_toplevel_cache
+        _git_toplevel_cache.clear()
+
+        state.sessions = [
+            _make_session("s1", project_path=str(sub)),
+        ]
+        repos = state.known_repos()
+        # Should resolve to git root, not the subdirectory
+        assert str(repo) in repos
+        assert str(sub) not in repos
 
     def test_known_repos_excludes_nonexistent(self, state):
         """Paths that don't exist on disk are filtered out."""

@@ -8,9 +8,31 @@ renders AppState into widgets and routes key events to state mutations.
 from __future__ import annotations
 
 import os
+import subprocess
 from datetime import datetime
 from pathlib import Path
 from typing import Sequence
+
+
+# ── Git helpers ────────────────────────────────────────────────────
+
+_git_toplevel_cache: dict[str, str | None] = {}
+
+
+def _git_toplevel(path: str) -> str | None:
+    """Resolve a path to its git repo root, or None if not in a git repo."""
+    if path in _git_toplevel_cache:
+        return _git_toplevel_cache[path]
+    try:
+        result = subprocess.run(
+            ["git", "-C", path, "rev-parse", "--show-toplevel"],
+            capture_output=True, text=True, timeout=3,
+        )
+        toplevel = result.stdout.strip() if result.returncode == 0 else None
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        toplevel = None
+    _git_toplevel_cache[path] = toplevel
+    return toplevel
 
 
 # ── Fuzzy matching ──────────────────────────────────────────────────
@@ -707,7 +729,12 @@ class AppState:
         return dirs
 
     def known_repos(self) -> list[str]:
-        """Unique repo paths from session history + workstream repo_path values."""
+        """Unique repo paths from session history + workstream repo_path values.
+
+        Session paths that are subdirectories of a git repo are resolved to the
+        git toplevel so that discover_worktrees can correctly identify primary
+        checkouts (e.g. a session from /repos/ul/client/web resolves to /repos/ul).
+        """
         repos = set()
         for s in self.sessions:
             if s.project_path:
@@ -715,7 +742,14 @@ class AppState:
         for ws in self.store.active:
             if ws.repo_path:
                 repos.add(os.path.expanduser(ws.repo_path).rstrip("/"))
-        return sorted(p for p in repos if os.path.isdir(p))
+        # Resolve subdirectories to their git toplevel
+        resolved = set()
+        for p in repos:
+            if not os.path.isdir(p):
+                continue
+            toplevel = _git_toplevel(p)
+            resolved.add(toplevel if toplevel else p)
+        return sorted(resolved)
 
     # ── Worktree auto-discovery + enrichment ─────────────────────────
 
@@ -991,12 +1025,14 @@ class AppState:
                     session.session_id.startswith(link.value)
                 ):
                     return ws
-            if ws.repo_path and os.path.expanduser(ws.repo_path).rstrip("/") == sp:
-                return ws
+            if ws.repo_path:
+                rp = os.path.expanduser(ws.repo_path).rstrip("/")
+                if sp == rp or sp.startswith(rp + "/"):
+                    return ws
             for link in ws.links:
                 if link.kind in ("worktree", "file"):
                     expanded = os.path.expanduser(link.value).rstrip("/")
-                    if os.path.isdir(expanded) and sp == expanded:
+                    if os.path.isdir(expanded) and (sp == expanded or sp.startswith(expanded + "/")):
                         return ws
         return None
 

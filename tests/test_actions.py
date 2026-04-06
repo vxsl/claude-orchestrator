@@ -75,6 +75,36 @@ class TestFindSessionsForWs:
         found = find_sessions_for_ws(ws, sessions)
         assert len(found) == 1
 
+    def test_match_by_subdirectory(self, tmp_path):
+        """Session started from a subdirectory matches parent worktree link."""
+        d = tmp_path / "repo"
+        sub = d / "client" / "web"
+        sub.mkdir(parents=True)
+        ws = Workstream(name="test")
+        ws.add_link("worktree", str(d), "repo")
+        sessions = [self._make_session("s1", project_path=str(sub))]
+        found = find_sessions_for_ws(ws, sessions)
+        assert len(found) == 1
+
+    def test_match_by_repo_path(self, tmp_path):
+        """Session matches via ws.repo_path (not just links)."""
+        d = tmp_path / "repo"
+        d.mkdir()
+        ws = Workstream(name="test", repo_path=str(d))
+        sessions = [self._make_session("s1", project_path=str(d))]
+        found = find_sessions_for_ws(ws, sessions)
+        assert len(found) == 1
+
+    def test_match_subdirectory_via_repo_path(self, tmp_path):
+        """Session from subdirectory matches via ws.repo_path."""
+        d = tmp_path / "repo"
+        sub = d / "client" / "web"
+        sub.mkdir(parents=True)
+        ws = Workstream(name="test", repo_path=str(d))
+        sessions = [self._make_session("s1", project_path=str(sub))]
+        found = find_sessions_for_ws(ws, sessions)
+        assert len(found) == 1
+
     def test_no_duplicates(self, tmp_path):
         d = tmp_path / "proj"
         d.mkdir()

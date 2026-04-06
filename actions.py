@@ -285,8 +285,12 @@ def find_sessions_for_ws(ws: Workstream, all_sessions: list[ClaudeSession]) -> l
                     found.append(s)
                     seen.add(s.session_id)
 
-    # 2. Auto-match by directory — exact match only
+    # 2. Auto-match by directory (includes subdirectory sessions)
     ws_dirs = set()
+    if ws.repo_path:
+        expanded = os.path.expanduser(ws.repo_path).rstrip("/")
+        if os.path.isdir(expanded):
+            ws_dirs.add(expanded)
     for link in ws.links:
         if link.kind in ("worktree", "file"):
             expanded = os.path.expanduser(link.value).rstrip("/")
