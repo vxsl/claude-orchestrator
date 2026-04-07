@@ -73,15 +73,6 @@ class TestDetectCategory:
     def test_work_bug(self):
         assert _detect_category("fix the auth bug") == Category.WORK
 
-    def test_meta_tooling(self):
-        assert _detect_category("update the CLI tooling") == Category.META
-
-    def test_meta_workflow(self):
-        assert _detect_category("improve the workflow automation") == Category.META
-
-    def test_meta_dashboard(self):
-        assert _detect_category("fix the dashboard") == Category.META
-
     def test_default_personal(self):
         assert _detect_category("organize my notes") == Category.PERSONAL
 

@@ -45,7 +45,7 @@ def populated_state(tmp_path):
     ws4 = Workstream(name="Done item", description="Completed",
                      category=Category.WORK)
     ws5 = Workstream(name="Meta tooling", description="Orchestrator improvements",
-                     category=Category.META)
+                     category=Category.WORK)
     ws6 = Workstream(name="Review needed", description="PR open",
                      category=Category.WORK)
 
@@ -78,7 +78,7 @@ class TestFiltering:
         populated_state.set_filter("work")
         items = populated_state.get_filtered_streams()
         assert all(w.category == Category.WORK for w in items)
-        assert len(items) == 4  # Active work, Blocked, Done, Review
+        assert len(items) == 5  # Active work, Blocked, Done, Meta tooling, Review
 
     def test_filter_personal(self, populated_state):
         populated_state.set_filter("personal")
@@ -156,7 +156,7 @@ class TestSorting:
         items = populated_state.get_filtered_streams()
         cats = [w.category.value for w in items]
         # Within each category, items are sorted by status
-        assert cats[0] in ("meta", "personal", "work")
+        assert cats[0] in ("personal", "work")
 
     def test_sort_mode_persistence(self, populated_state):
         populated_state.set_sort("created")
@@ -1443,13 +1443,13 @@ class TestInferCategoryFromRemote:
             state._infer_category_from_remote(ws)
         assert ws.category == Category.WORK
 
-    def test_no_override_explicit_meta(self, state):
-        """Don't override an explicit META category."""
-        ws = Workstream(name="meta item", category=Category.META, repo_path="/fake/repo")
+    def test_no_override_explicit_work(self, state):
+        """Don't override an explicit WORK category."""
+        ws = Workstream(name="work item", category=Category.WORK, repo_path="/fake/repo")
         state.store.add(ws)
         with patch("state.get_git_remote_host", return_value="gitlab.com"):
             state._infer_category_from_remote(ws)
-        assert ws.category == Category.META
+        assert ws.category == Category.WORK
 
     def test_no_remote_does_nothing(self, state):
         """When get_git_remote_host returns None, category is unchanged."""

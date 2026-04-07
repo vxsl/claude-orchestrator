@@ -108,7 +108,6 @@ _STALE_COLOR = {
 CATEGORY_THEME = {
     Category.WORK: C_CYAN,
     Category.PERSONAL: C_PURPLE,
-    Category.META: C_DIM,
 }
 
 LINK_TYPE_ICONS = {

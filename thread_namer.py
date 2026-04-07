@@ -37,7 +37,7 @@ BATCH_SIZE = 15
 class ThreadMeta:
     """AI-generated metadata for a thread."""
     title: str
-    category: str  # "work", "personal", "meta"
+    category: str  # "work", "personal"
 
 
 def _thread_fingerprint(thread: Thread) -> str:
@@ -111,7 +111,7 @@ def _build_prompt(threads_context: list[tuple[str, str]]) -> str:
 
 For each thread below, provide:
 1. A SHORT title (3-8 words max) that captures the train of thought / goal
-2. A category: "work" (job tasks, tickets, PRs), "personal" (side projects, configs, tools), or "meta" (tooling about the workflow itself)
+2. A category: "work" (job tasks, tickets, PRs, tooling) or "personal" (side projects, configs, hobbies)
 
 Rules:
 - Titles should be what a human would call this line of work, not a description of what Claude did

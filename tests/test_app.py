@@ -290,7 +290,7 @@ def app_with_store(tmp_path):
     store = Store(path=store_path)
     ws1 = Workstream(name="Alpha", category=Category.WORK)
     ws2 = Workstream(name="Beta", category=Category.PERSONAL)
-    ws3 = Workstream(name="Gamma", category=Category.META)
+    ws3 = Workstream(name="Gamma", category=Category.WORK)
     for ws in [ws1, ws2, ws3]:
         store.add(ws)
 
@@ -560,7 +560,7 @@ class TestDoResume:
         """With exactly 1 matching session, resume via launch_claude_session."""
         session = self._make_session("s1", project_path="/tmp/test")
         mock_find.return_value = [session]
-        ws = Workstream(name="test", category=Category.META)
+        ws = Workstream(name="test", category=Category.WORK)
         app = MagicMock()
 
         _do_resume(ws, app, [session])
@@ -573,7 +573,7 @@ class TestDoResume:
         """With 2+ matching sessions, show SessionPickerScreen."""
         sessions = [self._make_session(f"s{i}") for i in range(3)]
         mock_find.return_value = sessions
-        ws = Workstream(name="test", category=Category.META)
+        ws = Workstream(name="test", category=Category.WORK)
         app = MagicMock()
 
         _do_resume(ws, app, sessions)
@@ -584,7 +584,7 @@ class TestDoResume:
 
     def test_no_sessions_no_dirs_notifies(self):
         """With no sessions or directories, show notification."""
-        ws = Workstream(name="test", category=Category.META)
+        ws = Workstream(name="test", category=Category.WORK)
         app = MagicMock()
 
         _do_resume(ws, app, [], sessions_for_ws_fn=lambda w: [])
@@ -1150,7 +1150,7 @@ def app_with_sessions(tmp_path):
     ws1.updated_at = "2026-03-23T12:00:00"  # reset after add_link's touch()
     ws2 = Workstream(name="Beta", category=Category.PERSONAL,
                      updated_at="2026-03-23T11:00:00", created_at="2026-03-23T11:00:00")
-    ws3 = Workstream(name="Gamma", category=Category.META,
+    ws3 = Workstream(name="Gamma", category=Category.WORK,
                      updated_at="2026-03-23T10:00:00", created_at="2026-03-23T10:00:00")
     for ws in [ws1, ws2, ws3]:
         store.add(ws)
@@ -2507,7 +2507,7 @@ class TestAutoResumeTabSession:
         import asyncio
         from unittest.mock import AsyncMock, MagicMock, patch
 
-        ws = Workstream(name="test", category=Category.META)
+        ws = Workstream(name="test", category=Category.WORK)
         session_id = "test-session-id"
 
         app = OrchestratorApp.__new__(OrchestratorApp)

@@ -16,13 +16,11 @@ from typing import Optional
 class Category(str, Enum):
     WORK = "work"
     PERSONAL = "personal"
-    META = "meta"
 
 
 CATEGORY_COLORS = {
     Category.WORK: "dodger_blue1",
     Category.PERSONAL: "medium_purple",
-    Category.META: "dim",
 }
 
 
@@ -152,7 +150,11 @@ class Workstream:
     @classmethod
     def from_dict(cls, d: dict) -> Workstream:
         d = dict(d)
-        d["category"] = Category(d["category"])
+        # Migration: "meta" category removed — map to "work"
+        raw_cat = d.get("category", "personal")
+        if raw_cat == "meta":
+            raw_cat = "work"
+        d["category"] = Category(raw_cat)
         d["links"] = [Link(**lnk) for lnk in d.get("links", [])]
         # Migration: add fields that may not exist in old data
         d.setdefault("archived", False)

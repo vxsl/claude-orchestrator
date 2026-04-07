@@ -57,12 +57,6 @@ WORK_KEYWORDS = [
     r"\bbug\b", r"\bhotfix\b", r"\bclient\b",
 ]
 
-# Words that suggest meta category
-META_KEYWORDS = [
-    r"\btool(?:ing)?\b", r"\bsetup\b", r"\bconfig(?:ure)?\b",
-    r"\bworkflow\b", r"\bautomation\b", r"\bscript\b",
-    r"\bCLI\b", r"\bdashboard\b", r"\borchestrat\w*\b",
-]
 
 
 @dataclass
@@ -115,12 +109,7 @@ def _detect_category(text: str) -> Category:
     """Detect the most likely category from text content."""
     text_lower = text.lower()
     work_score = sum(1 for pat in WORK_KEYWORDS if re.search(pat, text_lower))
-    meta_score = sum(1 for pat in META_KEYWORDS if re.search(pat, text_lower))
 
-    if work_score > meta_score and work_score > 0:
-        return Category.WORK
-    if meta_score > work_score and meta_score > 0:
-        return Category.META
     if work_score > 0:
         return Category.WORK
     return Category.PERSONAL

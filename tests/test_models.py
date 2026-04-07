@@ -299,4 +299,3 @@ class TestConstants:
     def test_category_enum_values(self):
         assert Category.WORK.value == "work"
         assert Category.PERSONAL.value == "personal"
-        assert Category.META.value == "meta"

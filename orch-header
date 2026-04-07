@@ -34,7 +34,7 @@ STATUS_COLORS = {
     'in-progress': CY, 'queued': D, 'awaiting-review': P,
     'done': G, 'blocked': R,
 }
-CAT_COLORS = {'work': CY, 'personal': P, 'meta': D}
+CAT_COLORS = {'work': CY, 'personal': P}
 
 
 def format_elapsed(secs):

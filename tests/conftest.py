@@ -38,7 +38,7 @@ def populated_store(tmp_path):
     ws4 = Workstream(name="Done item", description="Completed",
                      category=Category.WORK)
     ws5 = Workstream(name="Meta tooling", description="Orchestrator improvements",
-                     category=Category.META)
+                     category=Category.WORK)
     ws6 = Workstream(name="Review needed", description="PR open",
                      category=Category.WORK)
 

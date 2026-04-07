@@ -38,7 +38,6 @@ ANSI = {
 CATEGORY_ANSI = {
     Category.WORK: ANSI["blue"],
     Category.PERSONAL: ANSI["magenta"],
-    Category.META: ANSI["gray"],
 }
 
 LINK_ICONS = {
@@ -231,7 +230,7 @@ def cmd_seed(args):
           Link("file", "prompt", "~/workstreams/05-ub-tickets.md")]),
         ("AI Show & Tell presentation", "Worktrees + AI workflow slides + speaker notes", Category.WORK, False,
          [Link("file", "prompt", "~/workstreams/04-presentation.md")]),
-        ("Claude orchestrator v1", "TUI dashboard for managing parallel AI workstreams", Category.META, False,
+        ("Claude orchestrator v1", "TUI dashboard for managing parallel AI workstreams", Category.WORK, False,
          [Link("file", "source", "~/dev/claude-orchestrator/")]),
         ("hud-daemon Claude usage", "Add Claude usage at-a-glance to eww HUD", Category.PERSONAL, False,
          [Link("file", "sandbox", "~/cleanup/bin/hud-daemon"),
@@ -799,7 +798,7 @@ _orch() {
         'seed:Seed with sample workstreams'
         'completions:Generate shell completion script'
     )
-    categories=(work personal meta)
+    categories=(work personal)
     sorts=(updated created category name)
     shells=(bash zsh)
 

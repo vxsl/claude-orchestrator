@@ -157,7 +157,7 @@ A workstream is a single sustained goal or line of work. It may span multiple re
 
 Rules:
 1. If a thread clearly belongs to an existing workstream, assign it: {{"action":"assign","workstream_id":"...","thread_ids":[...]}}
-2. Otherwise group related threads into a new workstream: {{"action":"create","name":"...","category":"work|personal|meta","thread_ids":[...],"description":"one sentence"}}
+2. Otherwise group related threads into a new workstream: {{"action":"create","name":"...","category":"work|personal","thread_ids":[...],"description":"one sentence"}}
 3. Threads about the same ticket/feature across repos = ONE workstream
 4. Use ticket IDs in names when present (e.g. "UB-6732 time range fix")
 5. Names: 3-8 words, lowercase unless proper nouns/ticket IDs

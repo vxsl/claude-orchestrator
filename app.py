@@ -1121,8 +1121,6 @@ class OrchestratorApp(App):
             cat_parts.append(f"[{C_CYAN}]{by_cat[Category.WORK]} work[/{C_CYAN}]")
         if by_cat.get(Category.PERSONAL):
             cat_parts.append(f"[{C_PURPLE}]{by_cat[Category.PERSONAL]} personal[/{C_PURPLE}]")
-        if by_cat.get(Category.META):
-            cat_parts.append(f"[{C_DIM}]{by_cat[Category.META]} meta[/{C_DIM}]")
         stale = len(self.state.store.stale())
         line1_parts = [
             f"[bold {C_BLUE}] ORCH [/bold {C_BLUE}]",
