@@ -206,6 +206,7 @@ export ORCH_WS_ID="$WS_ID"
 export ORCH_SESSION_ID="$SESSION_ID"
 export CLAUDE_SESSION_ID="$SESSION_ID"  # used by notify hook to link notifications to sessions
 export ORCH_DIR
+export CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING=1
 
 # ─── Build and run Claude command ────────────────────────────────
 cd "$CWD"
