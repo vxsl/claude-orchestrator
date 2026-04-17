@@ -52,6 +52,9 @@ set status-view-show-untracked-dirs = no
 TIGRC
 
 export TIGRC_USER="$SIDEBAR_TIGRC"
+# Tell git to skip opportunistic index-stat refresh writes so tig's periodic
+# `git status` polling doesn't race with other git processes on the index lock.
+export GIT_OPTIONAL_LOCKS=0
 
 # ─── Split this pane: top = tig status, bottom = tig log ──────
 # We're running inside the sidebar pane already.
@@ -63,7 +66,7 @@ CURRENT_PANE=$(tmux display-message -p '#{pane_id}')
 # Bottom pane: tig (commit log), 50% height
 TIG_LOG_PANE=$(tmux split-window -v -l 50% -c "$CWD" -t "$CURRENT_PANE" \
     -P -F '#{pane_id}' \
-    env TIGRC_USER="$SIDEBAR_TIGRC" tig)
+    env TIGRC_USER="$SIDEBAR_TIGRC" GIT_OPTIONAL_LOCKS=0 tig)
 
 # When tig status exits (top pane), kill the bottom pane too
 trap 'rm -f "$SIDEBAR_TIGRC"; tmux kill-pane -t "$TIG_LOG_PANE" 2>/dev/null || true' EXIT
