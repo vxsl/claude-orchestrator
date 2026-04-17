@@ -539,7 +539,7 @@ class OrchestratorApp(App):
         """Return (activity, icon_markup) for a workstream tab. '' markup when idle."""
         if not ws_id:
             return ThreadActivity.IDLE, ""
-        ws = next((w for w in self.state.workstreams if w.id == ws_id), None)
+        ws = self.state.get_ws(ws_id)
         if not ws:
             return ThreadActivity.IDLE, ""
         sessions = self.state.sessions_for_ws(ws)
