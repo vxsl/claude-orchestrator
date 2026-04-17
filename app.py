@@ -76,6 +76,7 @@ from rendering import (
     _is_session_seen, _is_today, _any_session_today,
     _render_session_option, _render_ws_option, _session_title,
     _rich_escape,
+    _best_activity, _activity_icon,
 )
 from state import AppState, TabManager
 from actions import (
@@ -511,19 +512,50 @@ class OrchestratorApp(App):
 
     def _tick_throbber(self):
         """Advance the throbber frame and refresh preview if any sessions are thinking."""
+        last_seen = self.state.last_seen_cache
         preview = self.state.preview_sessions
-        thinking = preview and any(
-            session_activity(s, self.state.last_seen_cache) == ThreadActivity.THINKING
+        preview_thinking = preview and any(
+            session_activity(s, last_seen) == ThreadActivity.THINKING
             for s in preview
         )
-        if thinking:
+        tab_thinking = any(
+            tab.ws_id and self._tab_activity(tab.ws_id)[0] == ThreadActivity.THINKING
+            for tab in self.tabs.tabs
+        )
+        if preview_thinking or tab_thinking:
             self.state.throbber_frame += 1
-            self._refresh_preview_sessions(throbber_tick=True)
+            if preview_thinking:
+                self._refresh_preview_sessions(throbber_tick=True)
+            if tab_thinking:
+                self._update_all_bars()
+                self._sync_tab_bar()
         else:
             # Nothing to animate — pause until a THINKING session appears.
             if self._throbber_timer and not self._throbber_paused:
                 self._throbber_timer.pause()
                 self._throbber_paused = True
+
+    def _tab_activity(self, ws_id: str | None):
+        """Return (activity, icon_markup) for a workstream tab. '' markup when idle."""
+        if not ws_id:
+            return ThreadActivity.IDLE, ""
+        ws = next((w for w in self.state.workstreams if w.id == ws_id), None)
+        if not ws:
+            return ThreadActivity.IDLE, ""
+        sessions = self.state.sessions_for_ws(ws)
+        if not sessions:
+            return ThreadActivity.IDLE, ""
+        last_seen = self.state.last_seen_cache
+        act = _best_activity(sessions, last_seen)
+        if act == ThreadActivity.IDLE:
+            return act, ""
+        unseen = any(
+            not _is_session_seen(s, last_seen)
+            for s in sessions
+            if session_activity(s, last_seen) == act
+        )
+        icon = _activity_icon(act, self.state.throbber_frame, seen=not unseen)
+        return act, icon
 
     def _resume_throbber(self):
         """Resume the throbber if it was paused (called when a session starts thinking)."""
@@ -748,26 +780,35 @@ class OrchestratorApp(App):
 
             ws_label = tab.label
 
+            # Activity indicator for non-permanent tabs (thinking spinner / attention dot).
+            act_prefix = ""
+            if not is_permanent:
+                _, act_icon = self._tab_activity(tab.ws_id)
+                if act_icon:
+                    act_prefix = f"{act_icon} "
+
             if has_session:
                 sep = f"[{C_FAINT}] \u203a [/{C_FAINT}]"
                 if is_active:
                     content = (
-                        f"[bold {C_BLUE} on {BG_BASE}] {prefix}{_rich_escape(ws_label)}[/bold {C_BLUE} on {BG_BASE}]"
+                        f"[on {BG_BASE}] {act_prefix}[/on {BG_BASE}]"
+                        f"[bold {C_BLUE} on {BG_BASE}]{prefix}{_rich_escape(ws_label)}[/bold {C_BLUE} on {BG_BASE}]"
                         f"[on {BG_BASE}]{sep}[{C_MID}]{_rich_escape(css_sess_label)}[/{C_MID}] [/on {BG_BASE}]"
                     )
                 else:
                     content = (
-                        f"[{C_DIM} on {BG_RAISED}] {prefix}{_rich_escape(ws_label)}[/{C_DIM} on {BG_RAISED}]"
+                        f"[on {BG_RAISED}] {act_prefix}[/on {BG_RAISED}]"
+                        f"[{C_DIM} on {BG_RAISED}]{prefix}{_rich_escape(ws_label)}[/{C_DIM} on {BG_RAISED}]"
                         f"[on {BG_RAISED}]{sep}[{C_FAINT}]{_rich_escape(css_sess_label)}[/{C_FAINT}] [/on {BG_RAISED}]"
                     )
             elif is_active and is_permanent:
                 content = f"[bold italic {C_MID} on {BG_BASE}] {prefix}{_rich_escape(ws_label)} [/]"
             elif is_active:
-                content = f"[bold {C_BLUE} on {BG_BASE}] {prefix}{_rich_escape(ws_label)} [/]"
+                content = f"[on {BG_BASE}] {act_prefix}[/on {BG_BASE}][bold {C_BLUE} on {BG_BASE}]{prefix}{_rich_escape(ws_label)} [/]"
             elif is_permanent:
                 content = f"[italic {C_FAINT} on {BG_RAISED}] {prefix}{_rich_escape(ws_label)} [/]"
             else:
-                content = f"[{C_DIM} on {BG_RAISED}] {prefix}{_rich_escape(ws_label)} [/{C_DIM} on {BG_RAISED}]"
+                content = f"[on {BG_RAISED}] {act_prefix}[/on {BG_RAISED}][{C_DIM} on {BG_RAISED}]{prefix}{_rich_escape(ws_label)} [/{C_DIM} on {BG_RAISED}]"
 
             parts.append(content)
             if i < len(self.tabs.tabs) - 1:
@@ -1200,10 +1241,17 @@ class OrchestratorApp(App):
             for t in other_tabs:
                 lbl = (t.label[:14] + "\u2026") if len(t.label) > 14 else t.label
                 is_active = t.id == self.tabs.active_tab.id
-                if is_active:
-                    tab_parts.append(f"[bold {C_BLUE}]● {_rich_escape(lbl)}[/bold {C_BLUE}]")
+                _, act_icon = self._tab_activity(t.ws_id)
+                if act_icon:
+                    dot = act_icon
+                elif is_active:
+                    dot = f"[{C_BLUE}]●[/{C_BLUE}]"
                 else:
-                    tab_parts.append(f"[{C_DIM}]○ {_rich_escape(lbl)}[/{C_DIM}]")
+                    dot = f"[{C_DIM}]○[/{C_DIM}]"
+                if is_active:
+                    tab_parts.append(f"{dot} [bold {C_BLUE}]{_rich_escape(lbl)}[/bold {C_BLUE}]")
+                else:
+                    tab_parts.append(f"{dot} [{C_DIM}]{_rich_escape(lbl)}[/{C_DIM}]")
             line1 = home_str + DIVIDER + DIVIDER.join(tab_parts)
         else:
             line1 = home_str
