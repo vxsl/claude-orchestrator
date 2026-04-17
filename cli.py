@@ -695,6 +695,35 @@ def cmd_import(args):
     print(f"  {_c('green', '\u2713')} Imported {len(imported)} workstreams.")
 
 
+# ─── Cleanup ─────────────────────────────────────────────────────────
+
+def cmd_cleanup_idle(args):
+    """Kill orch-launched Claude sessions whose JSONL is older than --hours."""
+    from cleanup import (
+        DEFAULT_IDLE_HOURS, cleanup_idle_orch_sessions, find_idle_orch_sessions,
+    )
+
+    idle_hours = args.hours if args.hours is not None else DEFAULT_IDLE_HOURS
+
+    if args.dry_run:
+        idle = find_idle_orch_sessions(idle_hours)
+        if not idle:
+            print(_c("dim", f"  No idle sessions older than {idle_hours:g}h."))
+            return
+        print(f"  {_c('bold', 'Would kill')} (>{idle_hours:g}h idle):")
+        for name, age_h in idle:
+            print(f"    {_c('dim', name[:8])}  {age_h:.1f}h")
+        return
+
+    killed = cleanup_idle_orch_sessions(idle_hours)
+    if not killed:
+        print(_c("dim", f"  No idle sessions older than {idle_hours:g}h."))
+        return
+    print(f"  {_c('green', '\u2713')} Killed {len(killed)} idle session(s):")
+    for name, age_h in killed:
+        print(f"    {_c('dim', name[:8])}  {age_h:.1f}h")
+
+
 # ─── Shell completion ────────────────────────────────────────────────
 
 def cmd_completions(args):
@@ -1094,6 +1123,24 @@ workstream. supports round-trip with Obsidian.
     p_seed.add_argument("--force", action="store_true",
                        help="Overwrite existing workstreams")
 
+    # cleanup-idle
+    p_cleanup = sub.add_parser("cleanup-idle",
+        help="Kill idle orch-launched Claude sessions",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""\
+examples:
+  orch cleanup-idle                    Kill sessions idle >6h
+  orch cleanup-idle --hours 2          Kill sessions idle >2h
+  orch cleanup-idle --dry-run          Preview what would be killed
+
+skips currently-attached tmux sessions.  the JSONL is preserved, so
+you can still resume any killed session with `claude --resume <id>`.
+""")
+    p_cleanup.add_argument("--hours", type=float, default=None,
+                           help=f"Idle threshold in hours (default: 6)")
+    p_cleanup.add_argument("--dry-run", action="store_true",
+                           help="Preview only, do not kill")
+
     # completions
     p_comp = sub.add_parser("completions", help="Generate shell completion script",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -1130,6 +1177,7 @@ examples:
         "export": cmd_export,
         "import": cmd_import,
         "seed": cmd_seed,
+        "cleanup-idle": cmd_cleanup_idle,
         "completions": cmd_completions,
     }
 

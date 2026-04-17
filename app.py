@@ -419,6 +419,14 @@ class OrchestratorApp(App):
 
         self._throbber_timer = self.set_interval(0.15, self._tick_throbber)
 
+        # Auto-cleanup of idle orch-launched Claude sessions.  Each lingering
+        # session pins ~500 MB.  Runs every 10 min; threshold via env var.
+        from cleanup import _idle_hours_from_env
+        self._idle_cleanup_hours = _idle_hours_from_env()
+        if self._idle_cleanup_hours > 0:
+            self.set_timer(45, self._auto_cleanup_idle_sessions)
+            self.set_interval(600, self._auto_cleanup_idle_sessions)
+
         ws_table.focus()
 
     def on_unmount(self):
@@ -538,6 +546,21 @@ class OrchestratorApp(App):
     def _start_liveness_backstop(self):
         self._refresh_session_liveness()
         self.set_interval(30, self._refresh_session_liveness)
+
+    def _auto_cleanup_idle_sessions(self):
+        """Kill orch tmux sessions whose JSONL is older than the idle threshold."""
+        from cleanup import cleanup_idle_orch_sessions
+        try:
+            killed = cleanup_idle_orch_sessions(self._idle_cleanup_hours)
+        except Exception:
+            return
+        if killed:
+            n = len(killed)
+            self.notify(
+                f"Auto-killed {n} idle Claude session{'s' if n != 1 else ''} "
+                f"(>{self._idle_cleanup_hours:g}h)",
+                timeout=5,
+            )
 
     # ── Active table helper ──
 
