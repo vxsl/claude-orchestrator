@@ -941,7 +941,8 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         Binding("e", "open_todos", "Todos"),
         Binding("o", "open_links", "Open links"),
         Binding("f", "file_picker", "Files"),
-        Binding("x", "archive", "Archive"),
+        Binding("x", "close_tab", "Close"),
+        Binding("u", "archive", "Archive"),
         Binding("p", "peek_session", "Peek", priority=True),
         Binding("h", "go_back", show=False),
         Binding("enter,l", "select_session", show=False),
@@ -2263,7 +2264,7 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         pairs = [
             ("^L", "resume"), ("c", "spawn"),
             ("n", "+todo"), ("e", "todos"), ("L", "+link"),
-            ("o", "open"), ("x", "archive ws"),
+            ("o", "open"), ("x", "close tab"), ("u", "archive ws"),
             ("space", "archive/restore"),
             ("z", "defer/undefer"),
             ("p", "peek"), ("y", "yank cmd"),
@@ -2664,6 +2665,10 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         self.store.update(self.ws)
         self.app.notify(f"Archived: {self.ws.name}", timeout=2)
         self.dismiss()
+
+    def action_close_tab(self):
+        """Close this workstream's tab (delegates to app)."""
+        self.app.action_close_tab()
 
     def action_archive_session(self):
         olist = self._focused_olist()
