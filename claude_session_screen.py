@@ -326,12 +326,13 @@ class SessionFooterWidget(Static):
     }}
     """
 
-    def __init__(self, session_id: str, cwd: str, ws_name: str, git_branch: str = "") -> None:
+    def __init__(self, session_id: str, cwd: str, ws_name: str, git_branch: str = "", is_new: bool = False) -> None:
         super().__init__()
         self._session_id = session_id
         self._cwd = cwd
         self._ws_name = ws_name
         self._git_branch = git_branch
+        self._is_new = is_new
 
     def on_mount(self) -> None:
         self._update_footer()
@@ -356,7 +357,8 @@ class SessionFooterWidget(Static):
         left_parts.append(f"[{C_YELLOW}]C-z[/] [{C_DIM}]zoom[/]")
 
         left = "  ".join(left_parts)
-        right = f"[{C_DIM}]claude --resume {self._session_id}[/]"
+        flag = "--session-id" if self._is_new else "--resume"
+        right = f"[{C_DIM}]claude {flag} {self._session_id}[/]"
 
         # Compute visible widths (strip Rich markup)
         left_w = len(re.sub(r"\[/?[^\]]*\]", "", left))
@@ -637,6 +639,7 @@ class ClaudeSessionScreen(Screen):
             cwd=self._cwd,
             ws_name=self._ws.name,
             git_branch=self._git_branch,
+            is_new=self._is_new,
         )
 
     def on_mount(self) -> None:
