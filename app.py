@@ -2032,6 +2032,21 @@ class OrchestratorApp(App):
         reattach = False
         effective_sid = session_id
 
+        def _trace(msg: str) -> None:
+            try:
+                import datetime
+                log = Path.home() / ".cache" / "claude-orchestrator" / "spawn-debug.log"
+                log.parent.mkdir(parents=True, exist_ok=True)
+                with log.open("a") as fh:
+                    fh.write(f"{datetime.datetime.now().isoformat()} {msg}\n")
+            except Exception:
+                pass
+
+        _trace(
+            f"launch_claude_session ws={ws.id}/{ws.name!r} session_id={session_id!r} "
+            f"reuse_pending={reuse_pending} prompt_len={len(prompt) if prompt else 0}"
+        )
+
         # If no explicit session_id, reuse any pending new session for this workstream
         # so that pressing "c", going back, then pressing "c" again returns to the same thread.
         if reuse_pending and session_id is None and ws.id:
@@ -2046,19 +2061,26 @@ class OrchestratorApp(App):
                 jsonl_path = Path.home() / ".claude" / "projects" / encoded / f"{pending}.jsonl"
                 if jsonl_path.exists():
                     effective_sid = pending
+                    _trace(f"  reuse_pending hit: adopting pending={pending} (jsonl exists)")
                 else:
                     del self._ws_pending_session[ws.id]
+                    _trace(f"  reuse_pending hit but pending={pending} had no jsonl — dropped")
 
         if effective_sid:
             self._detached_sessions.pop(effective_sid, None)
             reattach = await asyncio.get_running_loop().run_in_executor(
                 None, TerminalWidget.tmux_session_alive, effective_sid
             )
+            _trace(f"  effective_sid={effective_sid} tmux_alive={reattach}")
 
         screen = ClaudeSessionScreen(
             ws=ws, store=self.state.store,
             session_id=effective_sid, prompt=prompt, cwd=cwd,
             reattach_tmux=reattach,
+        )
+        _trace(
+            f"  screen created: _is_new={screen._is_new} _session_id={screen._session_id} "
+            f"reattach_tmux={reattach} cmd_flag={'--session-id' if screen._is_new else '--resume'}"
         )
 
         # Remember the session ID so "c" returns to the same thread next time.
