@@ -520,7 +520,16 @@ class TerminalWidget(Widget, can_focus=True):
         if self._cwd:
             tmux_cmd.extend(["-c", self._cwd])
         tmux_cmd.append(inner_cmd)
-        subprocess.run(tmux_cmd, env=env, timeout=5)
+        result = subprocess.run(tmux_cmd, env=env, timeout=5, capture_output=True, text=True)
+        if result.returncode != 0:
+            # tmux silently fails here cause "can't find session" downstream when
+            # the attach runs against a session that was never created. Common
+            # culprit: inner_cmd over tmux's ~16KB command-length limit.
+            err = (result.stderr or "").strip() or "(no stderr)"
+            raise RuntimeError(
+                f"tmux new-session failed (rc={result.returncode}): {err} "
+                f"[inner_cmd was {len(inner_cmd)} bytes]"
+            )
         # Ensure the running server picks up any config updates since it started
         self._reload_tmux_config(env)
 

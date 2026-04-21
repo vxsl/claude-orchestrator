@@ -475,8 +475,10 @@ class ClaudeSessionScreen(Screen):
             parts.append(f"Category: {ws.category.value}")
         if ws.notes:
             parts.append(f"Recent notes: {ws.notes[:500]}")
-        if self._prompt:
-            parts.append(f"\nInitial task: {self._prompt}")
+        # Do not duplicate self._prompt here: it is already passed to claude
+        # as the positional arg. Appending it again blows past tmux's ~16KB
+        # new-session command-length limit on long task briefs and causes the
+        # spawn to fail silently (tmux "command too long" → "can't find session").
 
         # Continuation context
         cont_dir = Path.home() / ".cache" / "claude-orchestrator" / "continuations"
@@ -520,13 +522,31 @@ class ClaudeSessionScreen(Screen):
         return "\n".join(parts)
 
     def _build_claude_command(self) -> str:
+        # tmux new-session has a ~16KB command-length limit; long briefs
+        # blow past it and the spawn fails silently. Route the two
+        # potentially-huge args (system prompt, positional prompt) through
+        # files when they'd push us close to the limit.
         args = ["claude"]
         if self._is_new:
             args += ["--session-id", self._session_id]
         else:
             args += ["--resume", self._session_id]
-        args += ["--append-system-prompt", self._sys_prompt]
+
+        spawn_dir = Path.home() / ".cache" / "claude-orchestrator" / "spawn-args"
+        spawn_dir.mkdir(parents=True, exist_ok=True)
+
+        sys_path = spawn_dir / f"{self._session_id}.sys"
+        sys_path.write_text(self._sys_prompt)
+        args += ["--append-system-prompt-file", str(sys_path)]
+
         args += ["-n", f"orch:{self._ws.name}"]
+
+        if self._prompt and len(self._prompt) > 4000:
+            prompt_path = spawn_dir / f"{self._session_id}.prompt"
+            prompt_path.write_text(self._prompt)
+            # Use command substitution so the shell reads the prompt at exec time,
+            # keeping the tmux command line short.
+            return shlex.join(args) + f' "$(cat {shlex.quote(str(prompt_path))})"'
         if self._prompt:
             args.append(self._prompt)
         return shlex.join(args)
@@ -670,6 +690,14 @@ class ClaudeSessionScreen(Screen):
         if self._tigrc_path:
             try:
                 os.unlink(self._tigrc_path)
+            except OSError:
+                pass
+        # Claude has already consumed these at startup; safe to delete.
+        spawn_dir = Path.home() / ".cache" / "claude-orchestrator" / "spawn-args"
+        for suffix in (".sys", ".prompt"):
+            p = spawn_dir / f"{self._session_id}{suffix}"
+            try:
+                p.unlink()
             except OSError:
                 pass
 
