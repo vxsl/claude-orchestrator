@@ -718,7 +718,7 @@ class TodoScreen(_VimOptionListMixin, ModalScreen[None]):
             prompt = f"{item.text}\n\n{item.context}"
         self._app_state.toggle_todo(self.ws.id, item.id)  # mark done
         self._rebuild()
-        self.app.launch_claude_session(self.ws, prompt=prompt)
+        self.app.launch_claude_session(self.ws, prompt=prompt, reuse_pending=False)
 
     def action_edit_context(self):
         item = self._highlighted_item()

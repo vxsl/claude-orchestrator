@@ -2013,8 +2013,17 @@ class OrchestratorApp(App):
         prompt: str | None = None,
         cwd: str | None = None,
         callback=None,
+        reuse_pending: bool = True,
     ) -> None:
-        """Push a ClaudeSessionScreen for the given workstream."""
+        """Push a ClaudeSessionScreen for the given workstream.
+
+        reuse_pending: when True (default), a session_id=None call may be
+        upgraded to a resume of a still-pending session for this ws (so
+        pressing "c" twice returns to the same thread). Task-dispatch
+        callers (e.g. spawning a crystallized todo) set this False — a
+        todo is a new task, never a continuation of whatever fresh session
+        happens to be cached.
+        """
         from claude_session_screen import ClaudeSessionScreen
         from terminal import TerminalWidget
 
@@ -2025,8 +2034,20 @@ class OrchestratorApp(App):
 
         # If no explicit session_id, reuse any pending new session for this workstream
         # so that pressing "c", going back, then pressing "c" again returns to the same thread.
-        if session_id is None and ws.id:
-            effective_sid = self._ws_pending_session.get(ws.id)
+        if reuse_pending and session_id is None and ws.id:
+            pending = self._ws_pending_session.get(ws.id)
+            if pending:
+                # Stale pending IDs leak when a spawn is dismissed before Claude
+                # writes its first JSONL entry. Resuming a nonexistent session
+                # makes `claude --resume` print "can't find session: <id>" in the
+                # terminal. Drop the pending slot if the JSONL never appeared.
+                cwd_for_check = cwd or ws_working_dir(ws)
+                encoded = cwd_for_check.replace("/", "-").replace(".", "-")
+                jsonl_path = Path.home() / ".claude" / "projects" / encoded / f"{pending}.jsonl"
+                if jsonl_path.exists():
+                    effective_sid = pending
+                else:
+                    del self._ws_pending_session[ws.id]
 
         if effective_sid:
             self._detached_sessions.pop(effective_sid, None)
@@ -2040,8 +2061,10 @@ class OrchestratorApp(App):
             reattach_tmux=reattach,
         )
 
-        # Remember the session ID so "c" returns to the same thread next time
-        if session_id is None and ws.id:
+        # Remember the session ID so "c" returns to the same thread next time.
+        # Skip for task-dispatch spawns (reuse_pending=False) — those shouldn't
+        # hijack the workstream's "press c for fresh" slot with a specific task.
+        if reuse_pending and session_id is None and ws.id:
             self._ws_pending_session[ws.id] = screen._session_id
 
         def _on_dismiss(result):
