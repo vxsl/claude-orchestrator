@@ -200,6 +200,15 @@ class VTermBackend:
         return 0
 
     def _on_movecursor(self, pos, oldpos, visible, user):
+        # Cursor moves don't trigger damage events, so mark the old and
+        # new rows dirty ourselves — otherwise tmux copy-mode cursor
+        # navigation (k/j/h/l) leaves a stale cursor block at the prior
+        # position until some unrelated cell change repaints the row.
+        if oldpos.row != pos.row or oldpos.col != pos.col:
+            if 0 <= oldpos.row < self.lines:
+                self.dirty_rows.add(oldpos.row)
+            if 0 <= pos.row < self.lines:
+                self.dirty_rows.add(pos.row)
         self.cursor_y = pos.row
         self.cursor_x = pos.col
         return 0
