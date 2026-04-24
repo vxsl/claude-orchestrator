@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import copy
 import json
+import logging
 import os
 import re
 import shutil
@@ -20,6 +21,10 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
+
+# Per-phase perf logging — same env flag/logger as app.py and threads.py.
+_perf_log = logging.getLogger("orch.perf")
+_PERF_ENABLED = bool(os.environ.get("ORCH_PERF_LOG", ""))
 
 
 CLAUDE_PROJECTS_DIR = Path.home() / ".claude" / "projects"
@@ -46,7 +51,13 @@ _SESSION_CACHE_TTL_S: float = 5.0  # fallback TTL — only used if generation ch
 
 
 def _get_rust_db() -> Optional[sqlite3.Connection]:
-    """Get a read-only connection to the Rust engine's SQLite DB, or None."""
+    """Get a read-only connection to the Rust engine's SQLite DB, or None.
+
+    Uses check_same_thread=False so the cached connection can be reused
+    across worker threads and the main thread (for the generation gate).
+    Safe because we open in query_only mode and SQLite's serialized mode
+    handles concurrent reads.
+    """
     global _rust_db_conn
     db_path = _default_db_path()
     if not db_path.exists():
@@ -55,7 +66,7 @@ def _get_rust_db() -> Optional[sqlite3.Connection]:
     if _rust_db_conn is not None:
         return _rust_db_conn
     try:
-        conn = sqlite3.connect(str(db_path), timeout=1.0)
+        conn = sqlite3.connect(str(db_path), timeout=1.0, check_same_thread=False)
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("PRAGMA query_only=ON")
         # Verify table exists
@@ -64,6 +75,23 @@ def _get_rust_db() -> Optional[sqlite3.Connection]:
         return conn
     except (sqlite3.Error, sqlite3.OperationalError):
         _rust_db_conn = None
+        return None
+
+
+def get_rust_db_generation() -> Optional[int]:
+    """Return the current Rust DB generation counter, or None if unavailable.
+
+    This is the cheap gate used to skip work when the daemon hasn't written
+    new data since our last check. Safe to call from the main thread; runs
+    in well under 1ms on a warm connection.
+    """
+    conn = _get_rust_db()
+    if conn is None:
+        return None
+    try:
+        row = conn.execute("SELECT value FROM meta WHERE key='generation'").fetchone()
+        return int(row[0]) if row else None
+    except (sqlite3.Error, sqlite3.ProgrammingError, ValueError):
         return None
 
 
@@ -149,6 +177,7 @@ def _discover_sessions_from_db(
     """
     global _sessions_cache, _sessions_cache_generation, _sessions_cache_time
 
+    _t0 = time.monotonic() if _PERF_ENABLED else 0
     conn = _get_rust_db()
     if conn is None:
         return None
@@ -161,6 +190,12 @@ def _discover_sessions_from_db(
         try:
             row = conn.execute("SELECT value FROM meta WHERE key='generation'").fetchone()
             if row and int(row[0]) == _sessions_cache_generation:
+                if _PERF_ENABLED:
+                    _perf_log.warning(
+                        "_discover_sessions_from_db: cache_hit %.1fms (gen=%d, n=%d)",
+                        (time.monotonic() - _t0) * 1000,
+                        _sessions_cache_generation, len(_sessions_cache),
+                    )
                 return _sessions_cache  # data unchanged — skip full read
         except sqlite3.Error:
             pass
@@ -179,10 +214,14 @@ def _discover_sessions_from_db(
         if limit > 0:
             query += f" LIMIT {limit}"
 
+        _t_q0 = time.monotonic() if _PERF_ENABLED else 0
         conn.row_factory = sqlite3.Row
         cursor = conn.execute(query, params)
-        sessions = [_hydrate_session(dict(row)) for row in cursor]
+        rows = cursor.fetchall()
         conn.row_factory = None
+        _t_q1 = time.monotonic() if _PERF_ENABLED else 0
+        sessions = [_hydrate_session(dict(row)) for row in rows]
+        _t_h = time.monotonic() if _PERF_ENABLED else 0
 
         if use_cache:
             _sessions_cache = sessions
@@ -194,6 +233,15 @@ def _discover_sessions_from_db(
             except sqlite3.Error:
                 pass
 
+        if _PERF_ENABLED:
+            _perf_log.warning(
+                "_discover_sessions_from_db: cache_miss %.1fms "
+                "(query=%.1f, hydrate=%.1f, n=%d, gen=%d)",
+                (time.monotonic() - _t0) * 1000,
+                (_t_q1 - _t_q0) * 1000,
+                (_t_h - _t_q1) * 1000,
+                len(sessions), _sessions_cache_generation,
+            )
         return sessions
     except sqlite3.Error:
         return None

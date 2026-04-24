@@ -7,6 +7,9 @@ sessions without any LLM calls. Manual workstreams get 'pinned' status.
 from __future__ import annotations
 
 import json
+import logging
+import os
+import time as _time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from enum import Enum
@@ -19,6 +22,11 @@ from sessions import (
     CLAUDE_PROJECTS_DIR,
     _strip_xml_wrappers,
 )
+
+# Per-phase perf logging — same env flag and logger as app.py so output
+# is unified in ~/.cache/claude-orchestrator/perf.log.
+_perf_log = logging.getLogger("orch.perf")
+_PERF_ENABLED = bool(os.environ.get("ORCH_PERF_LOG", ""))
 
 # Thread result cache — invalidated when the DB generation changes.
 # The sessions cache already guards the expensive part; this caches the
@@ -411,6 +419,7 @@ def _discover_threads_from_db(
     """
     global _threads_cache, _threads_cache_generation
     from sessions import _get_rust_db
+    _t0 = _time.monotonic() if _PERF_ENABLED else 0
     conn = _get_rust_db()
     if conn is None:
         return None
@@ -423,11 +432,17 @@ def _discover_threads_from_db(
         current_gen = int(row[0]) if row else -1
     except Exception:
         current_gen = -1
+    _t_gen = _time.monotonic() if _PERF_ENABLED else 0
 
     if _threads_cache is not None and current_gen == _threads_cache_generation and current_gen != -1:
         # Update _last_seen references so freshness checks are current
         for t in _threads_cache:
             t._last_seen = last_seen
+        if _PERF_ENABLED:
+            _perf_log.warning(
+                "_discover_threads_from_db: cache_hit %.1fms (gen=%d, n=%d)",
+                (_time.monotonic() - _t0) * 1000, current_gen, len(_threads_cache),
+            )
         return _threads_cache
 
     try:
@@ -437,6 +452,7 @@ def _discover_threads_from_db(
         ).fetchall()
     except Exception:
         return None
+    _t_query = _time.monotonic() if _PERF_ENABLED else 0
 
     if not rows:
         return None  # DB not yet populated by daemon
@@ -446,6 +462,7 @@ def _discover_threads_from_db(
     for s in sessions:
         for alias in s.all_session_ids:
             by_id.setdefault(alias, s)
+    _t_index = _time.monotonic() if _PERF_ENABLED else 0
 
     threads: list[Thread] = []
     for thread_id, name, project_path, sids_json in rows:
@@ -468,6 +485,7 @@ def _discover_threads_from_db(
             sessions=cluster,
             _last_seen=last_seen,
         ))
+    _t_build = _time.monotonic() if _PERF_ENABLED else 0
 
     # Re-sort: live first, then by last activity
     threads.sort(key=lambda t: t.last_activity or "", reverse=True)
@@ -475,6 +493,19 @@ def _discover_threads_from_db(
 
     _threads_cache = threads
     _threads_cache_generation = current_gen
+    if _PERF_ENABLED:
+        _t_end = _time.monotonic()
+        _perf_log.warning(
+            "_discover_threads_from_db: cache_miss %.1fms "
+            "(gen_check=%.1f, query=%.1f, index=%.1f, build=%.1f, sort=%.1f, gen=%d, rows=%d)",
+            (_t_end - _t0) * 1000,
+            (_t_gen - _t0) * 1000,
+            (_t_query - _t_gen) * 1000,
+            (_t_index - _t_query) * 1000,
+            (_t_build - _t_index) * 1000,
+            (_t_end - _t_build) * 1000,
+            current_gen, len(rows),
+        )
     return threads
 
 
@@ -486,17 +517,35 @@ def discover_threads(min_messages: int = 1) -> list[Thread]:
 
     Falls back to pure-Python clustering when the Rust daemon is not running.
     """
+    _t0 = _time.monotonic() if _PERF_ENABLED else 0
     sessions = discover_sessions(min_messages=min_messages)
+    _t_sessions = _time.monotonic() if _PERF_ENABLED else 0
     if not sessions:
+        if _PERF_ENABLED:
+            _perf_log.warning(
+                "discover_threads: empty (sessions=%.1fms)",
+                (_t_sessions - _t0) * 1000,
+            )
         return []
 
     last_seen = load_last_seen()
+    _t_seen = _time.monotonic() if _PERF_ENABLED else 0
 
     # Fast path: Rust-precomputed thread clusters.
     # An empty result with non-empty sessions means a session/DB mismatch
     # (e.g. test fixtures or a stale DB) — fall back to Python in that case.
     db_threads = _discover_threads_from_db(sessions, last_seen)
     if db_threads:
+        if _PERF_ENABLED:
+            _t_db = _time.monotonic()
+            _perf_log.warning(
+                "discover_threads: db_path %.1fms (sessions=%.1f, last_seen=%.1f, db_threads=%.1f, n=%d)",
+                (_t_db - _t0) * 1000,
+                (_t_sessions - _t0) * 1000,
+                (_t_seen - _t_sessions) * 1000,
+                (_t_db - _t_seen) * 1000,
+                len(db_threads),
+            )
         return db_threads
 
     # ── Python fallback (Rust daemon not running or DB not yet populated) ──

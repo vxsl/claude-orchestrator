@@ -61,7 +61,7 @@ from models import (
     Category, Link, Store, Workstream,
     _relative_time,
 )
-from sessions import ClaudeSession, invalidate_live_session_cache, ensure_rust_engine_running
+from sessions import ClaudeSession, invalidate_live_session_cache, ensure_rust_engine_running, get_rust_db_generation
 from threads import Thread, ThreadActivity, session_activity, mark_thread_seen, discover_threads
 from thread_namer import apply_cached_names, name_uncached_threads, title_sessions, get_session_title, refresh_thread_titles
 from session_bridge import SessionBridge
@@ -247,6 +247,7 @@ class OrchestratorApp(App):
         self._tab_switch_in_progress: bool = False  # suppress _on_detail_dismissed during tab switch
         self._last_liveness_check: float = 0.0  # rate limiter for liveness checks
         self._liveness_deferred: bool = False  # trailing-edge pending flag
+        self._last_processed_generation: int = -1  # Rust DB generation we last refreshed for
         self._ws_pending_session: dict[str, str] = {}  # ws_id -> session_id for reuse on "c"
 
     def on_key(self, event) -> None:
@@ -928,6 +929,16 @@ class OrchestratorApp(App):
         """
         if _PERF_ENABLED:
             _perf_log.warning("_on_rust_engine_update: bridge callback fired")
+        # Cheap generation gate: skip the worker entirely when the daemon's
+        # SQLite generation hasn't advanced since our last refresh. ~44% of
+        # rust-engine notifications fire without data changes (the daemon
+        # bumps state for liveness/heartbeat reasons that don't affect
+        # discover_threads output). Single sub-ms SQLite query on main thread.
+        gen = get_rust_db_generation()
+        if gen is not None and gen == self._last_processed_generation:
+            if _PERF_ENABLED:
+                _perf_log.warning("_on_rust_engine_update: skipped (gen %d unchanged)", gen)
+            return
         now = _time.monotonic()
         if now - getattr(self, '_last_rust_update', 0) < 1.0:
             # Schedule a trailing-edge update if not already pending
@@ -943,6 +954,13 @@ class OrchestratorApp(App):
         """Trailing-edge fire for rate-limited Rust engine updates."""
         self._rust_update_pending = False
         self._last_rust_update = _time.monotonic()
+        # Re-check generation: by the time the trailing-edge fires, an
+        # earlier worker may have already covered this generation.
+        gen = get_rust_db_generation()
+        if gen is not None and gen == self._last_processed_generation:
+            if _PERF_ENABLED:
+                _perf_log.warning("_fire_deferred_rust_update: skipped (gen %d unchanged)", gen)
+            return
         self._do_refresh_from_db()
 
     @staticmethod
@@ -969,6 +987,11 @@ class OrchestratorApp(App):
 
     def __do_refresh_from_db_inner(self):
         _t0 = _time.monotonic() if _PERF_ENABLED else 0
+        # Snapshot the generation we're about to consume. We mark it as
+        # processed regardless of fingerprint outcome — both "changed" and
+        # "no changes" mean we paid for this generation; future callbacks
+        # at the same gen can skip.
+        gen_at_start = get_rust_db_generation()
         threads = discover_threads()
         if _PERF_ENABLED:
             _perf_log.warning("_do_refresh_from_db: discover_threads %.1fms", (_time.monotonic() - _t0) * 1000)
@@ -981,6 +1004,9 @@ class OrchestratorApp(App):
         for t in threads:
             sessions.extend(t.sessions)
         sessions.sort(key=lambda s: s.last_activity or "", reverse=True)
+
+        if gen_at_start is not None:
+            self._last_processed_generation = gen_at_start
 
         # Skip UI update if nothing actually changed
         if self._session_fingerprint(self.state.sessions) == self._session_fingerprint(sessions):
@@ -1182,6 +1208,72 @@ class OrchestratorApp(App):
 
     # ── Bar rendering ──
 
+    def _bar_fingerprint(self) -> tuple:
+        """Cheap signature of all inputs the four bars derive from.
+
+        If this matches the previous call, _update_all_bars would produce
+        identical output for every bar — skip the renders entirely. Costs
+        roughly O(n_sessions) hash() calls, much cheaper than the bars'
+        per-session session_activity walk + markup build.
+        """
+        sessions = self.state.sessions
+        ws = self.state.store.active
+        # Per-session tuple: everything session_activity() reads + tokens
+        # for the status bar's total. Aggregated to a single int via sum
+        # of hashes — order-insensitive, deterministic, cheap.
+        sess_fp = 0
+        for s in sessions:
+            sess_fp ^= hash((
+                s.session_id,
+                s.is_live,
+                s.last_message_role,
+                s.last_activity,
+                s.turn_complete,
+                s.last_stop_reason,
+                s.last_tool_name,
+                s.message_count,
+                s.total_input_tokens,
+                s.total_output_tokens,
+            ))
+        # Workstreams contribute to category counts, stale count, and the
+        # solve count in the summary bar.
+        ws_fp = 0
+        for w in ws:
+            ws_fp ^= hash((w.id, w.category, getattr(w, "ticket_solve_status", "")))
+        # Tab list + active tab affect the tab/filter bars.
+        try:
+            tab_ids = tuple(t.id for t in self.tabs.tabs)
+            active_tab_id = self.tabs.active_tab.id if self.tabs.active_tab else None
+        except Exception:
+            tab_ids = ()
+            active_tab_id = None
+        try:
+            table_count = self.query_one("#ws-table", OptionList).option_count
+        except Exception:
+            table_count = 0
+        # Note: throbber_frame is intentionally NOT included. The throbber
+        # owns animation and calls _update_all_bars on every tick; if we
+        # included the frame, our data-driven refresh would duplicate that
+        # work whenever it lands between ticks. Worst case: one tick of
+        # stale icon if our path runs without the throbber advancing — the
+        # next 150ms throbber tick fixes it.
+        # last_seen_cache identity captures "user marked something seen"
+        # events (the cache is replaced when invalidated, not mutated in
+        # place). Affects per-tab unseen-dot rendering.
+        return (
+            len(sessions),
+            sess_fp,
+            len(ws),
+            ws_fp,
+            len(self.state.store.stale()),
+            self.state.filter_mode,
+            self.state.search_text,
+            tab_ids,
+            active_tab_id,
+            table_count,
+            id(self.state.last_seen_cache),
+        )
+
     @perf_trace()
     def _update_all_bars(self):
         # Activate a per-pass tab-activity cache if a caller didn't already.
@@ -1207,6 +1299,14 @@ class OrchestratorApp(App):
             if summary != getattr(self, '_last_summary_bar', ''):
                 self._last_summary_bar = summary
                 self.query_one("#summary-bar", Static).update(summary)
+            # Keep the data-path fingerprint in sync with what's now on
+            # screen, so a subsequent _do_refresh_ws_table can correctly
+            # skip its own bar render. Throbber and other direct callers
+            # benefit from this too.
+            try:
+                self._last_bar_fp = self._bar_fingerprint()
+            except Exception:
+                pass
         except Exception:
             pass
         finally:
@@ -1501,13 +1601,29 @@ class OrchestratorApp(App):
                 table.add_options(final_options)
                 self._olist_restore_cursor(table, old_key, old_idx)
                 self._ws_table_ids = new_ids
+        _t2 = _time.monotonic() if _PERF_ENABLED else 0
+        # Bar + preview updates run OUTSIDE the batch_update: they don't
+        # need to be coalesced with the table redraw, and gating
+        # _update_all_bars on a fingerprint avoids the per-session
+        # session_activity walk + markup build when nothing relevant
+        # has changed (the dominant case for non-rust-engine refreshes).
+        new_key = self._olist_cursor_key(table)
+        # _update_all_bars refreshes self._last_bar_fp at the end, so this
+        # gate stays consistent across all callers (throbber, _sync_tab_bar,
+        # and our own data path).
+        bar_fp = self._bar_fingerprint()
+        if bar_fp != getattr(self, '_last_bar_fp', None):
             self._update_all_bars()
-            new_key = self._olist_cursor_key(table)
-            self._update_preview(force=(new_key != old_key))
+            bar_skipped = False
+        else:
+            bar_skipped = True
+        self._update_preview(force=(new_key != old_key))
         if _PERF_ENABLED:
-            _perf_log.warning("_do_refresh_ws_table: id_check %.1fms, batch_update %.1fms (%d replaced), total %.1fms",
+            _perf_log.warning("_do_refresh_ws_table: id_check %.1fms, batch_update %.1fms (%d replaced), post %.1fms (bars=%s), total %.1fms",
                               (_t1 - _t0) * 1000,
-                              (_time.monotonic() - _t1) * 1000, n_replaced,
+                              (_t2 - _t1) * 1000, n_replaced,
+                              (_time.monotonic() - _t2) * 1000,
+                              "skipped" if bar_skipped else "rendered",
                               (_time.monotonic() - _t0) * 1000)
 
     def _selected_ws(self) -> Workstream | None:
