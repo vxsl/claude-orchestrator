@@ -1053,6 +1053,46 @@ class TerminalWidget(Widget, can_focus=True):
         self._scroll_offset = max(self._scroll_offset - lines, 0)
         self.refresh()
 
+    def _tmux_copy_mode_nav(self, action: str | None = None) -> None:
+        """Enter tmux copy-mode (idempotent) and optionally run a copy-mode command.
+
+        With ``action=None`` this just enters copy-mode (useful as an
+        explicit "I want to select on the current screen" trigger).  With
+        an action like ``"halfpage-up"`` it scrolls without an extra
+        keystroke from the user.
+        """
+        if not self._persistent_session:
+            return
+        sess = self._persistent_session
+        try:
+            subprocess.run(
+                ["tmux", "-L", self.TMUX_SOCKET,
+                 "copy-mode", "-t", sess],
+                capture_output=True, timeout=2,
+            )
+            if action:
+                subprocess.run(
+                    ["tmux", "-L", self.TMUX_SOCKET,
+                     "send-keys", "-t", sess, "-X", action],
+                    capture_output=True, timeout=2,
+                )
+        except Exception:
+            pass
+
+    # Map of Textual key names → tmux copy-mode commands.  When a
+    # persistent (tmux) session is attached, these keys auto-enter
+    # copy-mode so scrollback browsing and selection share one buffer.
+    _TMUX_NAV_KEYS = {
+        "ctrl+u": "halfpage-up",
+        "shift+pageup": "halfpage-up",
+        "ctrl+d": "halfpage-down",
+        "shift+pagedown": "halfpage-down",
+        "shift+up": "cursor-up",
+        "shift+down": "cursor-down",
+        "shift+home": "history-top",
+        "shift+end": "history-bottom",
+    }
+
     async def on_key(self, event: events.Key) -> None:
         if self._pid is None:
             return
@@ -1070,13 +1110,27 @@ class TerminalWidget(Widget, can_focus=True):
 
         key = event.key
 
-        # Vim-style scroll bindings
+        # In a tmux-backed session, scroll keys auto-enter copy-mode so
+        # scrollback and selection share one buffer.  Once in copy-mode
+        # tmux's vi bindings handle further navigation natively (hjkl,
+        # ctrl-u/d, g/G, /search), and `v` starts selection / `y` yanks
+        # to the system clipboard / `Escape` exits back to typing.
+        if self._persistent_session:
+            nav = self._TMUX_NAV_KEYS.get(key)
+            if nav is not None:
+                self._tmux_copy_mode_nav(nav)
+                return
+            # Explicit "enter copy-mode without scrolling" trigger
+            if key == "alt+v":
+                self._tmux_copy_mode_nav()
+                return
+
+        # Local-scrollback fallback for non-tmux PTYs (start() rather than
+        # start_persistent()).
         if key == "ctrl+u" or key == "shift+pageup":
             if self._backend and self._backend.scrollback:
                 self._scroll_up(self._nrow // 2)
             elif self._mouse_tracking:
-                # No local scrollback (tmux manages its own history); forward
-                # as mouse scroll-up events so tmux copy mode handles it.
                 cx, cy = self._ncol // 2 + 1, self._nrow // 2 + 1
                 for _ in range(5):
                     self._write_to_pty(f"\x1b[<64;{cx};{cy}M")
@@ -1085,7 +1139,6 @@ class TerminalWidget(Widget, can_focus=True):
             if self._scroll_offset > 0:
                 self._scroll_down(self._nrow // 2)
             elif self._mouse_tracking:
-                # No local scroll; forward as mouse scroll-down to tmux.
                 cx, cy = self._ncol // 2 + 1, self._nrow // 2 + 1
                 for _ in range(5):
                     self._write_to_pty(f"\x1b[<65;{cx};{cy}M")
@@ -1104,23 +1157,6 @@ class TerminalWidget(Widget, can_focus=True):
         if key == "shift+end":
             self._scroll_offset = 0
             self.refresh()
-            return
-
-        # alt+v → hand off to tmux copy-mode for vim-style selection + yank.
-        # tmux's own scrollback is authoritative once in copy-mode, so drop
-        # our local scroll offset first.
-        if key == "alt+v" and self._persistent_session:
-            if self._scroll_offset > 0:
-                self._scroll_offset = 0
-                self.refresh()
-            try:
-                subprocess.run(
-                    ["tmux", "-L", self.TMUX_SOCKET, "copy-mode",
-                     "-t", self._persistent_session],
-                    capture_output=True, timeout=2,
-                )
-            except Exception:
-                pass
             return
 
         # Any other key input snaps back to bottom
