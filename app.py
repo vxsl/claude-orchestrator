@@ -512,50 +512,73 @@ class OrchestratorApp(App):
 
     def _tick_throbber(self):
         """Advance the throbber frame and refresh preview if any sessions are thinking."""
-        last_seen = self.state.last_seen_cache
-        preview = self.state.preview_sessions
-        preview_thinking = preview and any(
-            session_activity(s, last_seen) == ThreadActivity.THINKING
-            for s in preview
-        )
-        tab_thinking = any(
-            tab.ws_id and self._tab_activity(tab.ws_id)[0] == ThreadActivity.THINKING
-            for tab in self.tabs.tabs
-        )
-        if preview_thinking or tab_thinking:
-            self.state.throbber_frame += 1
-            if preview_thinking:
-                self._refresh_preview_sessions(throbber_tick=True)
-            if tab_thinking:
-                self._update_all_bars()
-                self._sync_tab_bar()
-        else:
-            # Nothing to animate — pause until a THINKING session appears.
-            if self._throbber_timer and not self._throbber_paused:
-                self._throbber_timer.pause()
-                self._throbber_paused = True
+        # Hold a single (act, unseen) cache for the whole tick so the bar
+        # renderers below don't redundantly walk sessions per tab.
+        self._tab_activity_cache = {}
+        try:
+            last_seen = self.state.last_seen_cache
+            preview = self.state.preview_sessions
+            preview_thinking = preview and any(
+                session_activity(s, last_seen) == ThreadActivity.THINKING
+                for s in preview
+            )
+            tab_thinking = any(
+                tab.ws_id and self._tab_activity(tab.ws_id)[0] == ThreadActivity.THINKING
+                for tab in self.tabs.tabs
+            )
+            if preview_thinking or tab_thinking:
+                self.state.throbber_frame += 1
+                if preview_thinking:
+                    self._refresh_preview_sessions(throbber_tick=True)
+                if tab_thinking:
+                    self._sync_tab_bar()
+            else:
+                # Nothing to animate — pause until a THINKING session appears.
+                if self._throbber_timer and not self._throbber_paused:
+                    self._throbber_timer.pause()
+                    self._throbber_paused = True
+        finally:
+            self._tab_activity_cache = None
 
     def _tab_activity(self, ws_id: str | None):
-        """Return (activity, icon_markup) for a workstream tab. '' markup when idle."""
+        """Return (activity, icon_markup) for a workstream tab. '' markup when idle.
+
+        Uses ``self._tab_activity_cache`` (a dict) when set by callers entering a
+        render pass — callers are responsible for allocating and clearing the
+        dict. The (act, unseen) pair is what's cached; the icon is re-derived
+        from the current throbber_frame on every access."""
         if not ws_id:
             return ThreadActivity.IDLE, ""
+        cache = getattr(self, '_tab_activity_cache', None)
+        if cache is not None and ws_id in cache:
+            act, unseen = cache[ws_id]
+        else:
+            act, unseen = self._compute_tab_activity(ws_id)
+            if cache is not None:
+                cache[ws_id] = (act, unseen)
+        if act == ThreadActivity.IDLE:
+            return act, ""
+        icon = _activity_icon(act, self.state.throbber_frame, seen=not unseen)
+        return act, icon
+
+    def _compute_tab_activity(self, ws_id: str):
+        """Uncached inner computation for ``_tab_activity``. Returns (act, unseen)."""
         ws = self.state.get_ws(ws_id)
         if not ws:
-            return ThreadActivity.IDLE, ""
+            return ThreadActivity.IDLE, False
         sessions = self.state.sessions_for_ws(ws)
         if not sessions:
-            return ThreadActivity.IDLE, ""
+            return ThreadActivity.IDLE, False
         last_seen = self.state.last_seen_cache
         act = _best_activity(sessions, last_seen)
         if act == ThreadActivity.IDLE:
-            return act, ""
+            return act, False
         unseen = any(
             not _is_session_seen(s, last_seen)
             for s in sessions
             if session_activity(s, last_seen) == act
         )
-        icon = _activity_icon(act, self.state.throbber_frame, seen=not unseen)
-        return act, icon
+        return act, unseen
 
     def _resume_throbber(self):
         """Resume the throbber if it was paused (called when a session starts thinking)."""
@@ -1152,6 +1175,12 @@ class OrchestratorApp(App):
     # ── Bar rendering ──
 
     def _update_all_bars(self):
+        # Activate a per-pass tab-activity cache if a caller didn't already.
+        # Tab + filter bars both query every tab's activity; without this we
+        # re-walk sessions per tab twice.
+        owns_cache = getattr(self, '_tab_activity_cache', None) is None
+        if owns_cache:
+            self._tab_activity_cache = {}
         try:
             lines = [
                 self._render_tab_bar(),
@@ -1171,6 +1200,9 @@ class OrchestratorApp(App):
                 self.query_one("#summary-bar", Static).update(summary)
         except Exception:
             pass
+        finally:
+            if owns_cache:
+                self._tab_activity_cache = None
 
     def _render_status_bar(self) -> str:
         SEP = f"  [{C_FAINT}]·[/{C_FAINT}]  "
@@ -1202,24 +1234,24 @@ class OrchestratorApp(App):
             sid for w in self.state.store.active
             for sid in w.archived_sessions
         }
-        thinking = sum(
-            1 for s in sessions
-            if session_activity(s, self.state.last_seen_cache) == ThreadActivity.THINKING
-        )
-        your_turn = sum(
-            1 for s in sessions
-            if s.session_id not in archived_sids
-            and session_activity(s, self.state.last_seen_cache) in (
-                ThreadActivity.AWAITING_INPUT, ThreadActivity.RESPONSE_READY
-            )
-        )
+        last_seen = self.state.last_seen_cache
+        thinking = 0
+        your_turn = 0
+        total_tokens = 0
+        _your_turn_acts = (ThreadActivity.AWAITING_INPUT, ThreadActivity.RESPONSE_READY)
+        for s in sessions:
+            act = session_activity(s, last_seen)
+            if act == ThreadActivity.THINKING:
+                thinking += 1
+            elif act in _your_turn_acts and s.session_id not in archived_sids:
+                your_turn += 1
+            total_tokens += s.total_input_tokens + s.total_output_tokens
         line2_parts = [f"[{C_DIM}] [/{C_DIM}][bold]{len(sessions)}[/bold] sessions"]
         if thinking:
             line2_parts.append(f"[{C_BLUE}]{thinking} thinking[/{C_BLUE}]")
         if your_turn:
             line2_parts.append(f"[{C_GREEN}]{your_turn} your turn[/{C_GREEN}]")
         if sessions:
-            total_tokens = sum(s.total_input_tokens + s.total_output_tokens for s in sessions)
             if total_tokens > 0:
                 _tk = f"{total_tokens / 1_000_000:.1f}M" if total_tokens > 1_000_000 else f"{total_tokens / 1_000:.0f}k" if total_tokens > 1_000 else str(total_tokens)
                 line2_parts.append(_token_color_markup(_tk, total_tokens))
