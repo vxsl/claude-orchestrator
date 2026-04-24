@@ -1,96 +1,120 @@
-"""Profiling harness for the orchestrator TUI.
+"""Lightweight perf instrumentation for the orchestrator TUI.
 
-Instruments key codepaths to measure actual wall-clock time spent
-in rendering, layout, and data operations.
+Usage:
+  ORCH_PERF=1 orch
+
+When enabled:
+- Every @perf_trace-decorated call is timed.
+- Calls exceeding PERF_SLOW_MS (default 20ms) are appended to
+  PERF_LOG_PATH (default /tmp/orch_perf.log) as they happen.
+- On process exit, a full stats report is written to PERF_REPORT_PATH
+  (default /tmp/orch_perf_report.txt).
+
+When disabled (ORCH_PERF unset): @perf_trace is a no-op, zero overhead.
 """
-import time
+from __future__ import annotations
+
+import atexit
 import functools
+import os
 import statistics
+import sys
+import time
 from collections import defaultdict
 
+PERF_ENABLED = os.environ.get("ORCH_PERF") == "1"
+PERF_SLOW_MS = float(os.environ.get("ORCH_PERF_SLOW_MS", "20"))
+PERF_LOG_PATH = os.environ.get("ORCH_PERF_LOG", "/tmp/orch_perf.log")
+PERF_REPORT_PATH = os.environ.get("ORCH_PERF_REPORT", "/tmp/orch_perf_report.txt")
 
-class PerfTracker:
-    """Lightweight performance instrumentation."""
 
-    _instance = None
-
+class _Tracker:
     def __init__(self):
         self.timings: dict[str, list[float]] = defaultdict(list)
-        self.counts: dict[str, int] = defaultdict(int)
-        self._start_times: dict[str, float] = {}
+        self._log_fh = None
 
-    @classmethod
-    def get(cls):
-        if cls._instance is None:
-            cls._instance = cls()
-        return cls._instance
+    def _log(self, msg: str) -> None:
+        if self._log_fh is None:
+            try:
+                self._log_fh = open(PERF_LOG_PATH, "a", buffering=1)
+                self._log_fh.write(
+                    f"\n# orch perf log opened pid={os.getpid()} "
+                    f"at {time.strftime('%Y-%m-%d %H:%M:%S')}\n"
+                )
+            except OSError:
+                return
+        try:
+            self._log_fh.write(msg + "\n")
+        except (OSError, ValueError):
+            pass
 
-    def start(self, name: str):
-        self._start_times[name] = time.perf_counter()
+    def record(self, name: str, elapsed: float) -> None:
+        self.timings[name].append(elapsed)
+        ms = elapsed * 1000
+        if ms >= PERF_SLOW_MS:
+            self._log(f"SLOW {ms:7.2f}ms  {name}")
 
-    def stop(self, name: str):
-        if name in self._start_times:
-            elapsed = time.perf_counter() - self._start_times.pop(name)
-            self.timings[name].append(elapsed)
-            self.counts[name] += 1
-            return elapsed
-        return 0.0
-
-    def track(self, name: str):
-        """Context manager for timing a block."""
-        class _Timer:
-            def __init__(self, tracker, name):
-                self.tracker = tracker
-                self.name = name
-            def __enter__(self):
-                self.tracker.start(self.name)
-                return self
-            def __exit__(self, *args):
-                self.tracker.stop(self.name)
-        return _Timer(self, name)
-
-    def report(self) -> str:
-        lines = ["\n=== PERFORMANCE REPORT ===\n"]
-        for name in sorted(self.timings.keys()):
-            times = self.timings[name]
-            count = len(times)
+    def write_report(self) -> None:
+        if not self.timings:
+            return
+        try:
+            fh = open(PERF_REPORT_PATH, "w")
+        except OSError:
+            return
+        lines = ["# orch perf report\n"]
+        # Sort by total time desc — shows what contributes most to wall time.
+        entries = []
+        for name, times in self.timings.items():
+            n = len(times)
             total = sum(times)
-            mean = statistics.mean(times)
-            if count > 1:
-                p50 = statistics.median(times)
-                p95 = sorted(times)[int(count * 0.95)] if count >= 20 else max(times)
-                lines.append(
-                    f"  {name:40s}  calls={count:4d}  "
-                    f"total={total*1000:8.1f}ms  "
-                    f"mean={mean*1000:6.2f}ms  "
-                    f"p50={p50*1000:6.2f}ms  "
-                    f"p95={p95*1000:6.2f}ms"
-                )
-            else:
-                lines.append(
-                    f"  {name:40s}  calls={count:4d}  "
-                    f"total={total*1000:8.1f}ms"
-                )
-        lines.append("")
-        return "\n".join(lines)
-
-    def reset(self):
-        self.timings.clear()
-        self.counts.clear()
-        self._start_times.clear()
+            mean = total / n
+            p50 = statistics.median(times)
+            p95 = sorted(times)[int(n * 0.95)] if n >= 20 else max(times)
+            entries.append((total, name, n, mean, p50, p95))
+        entries.sort(reverse=True)
+        header = (
+            f"  {'name':45s}  {'calls':>6s}  {'total':>9s}  "
+            f"{'mean':>8s}  {'p50':>8s}  {'p95':>8s}\n"
+        )
+        lines.append(header)
+        lines.append("  " + "-" * (len(header) - 3) + "\n")
+        for total, name, n, mean, p50, p95 in entries:
+            lines.append(
+                f"  {name:45s}  {n:6d}  {total*1000:7.1f}ms  "
+                f"{mean*1000:6.2f}ms  {p50*1000:6.2f}ms  {p95*1000:6.2f}ms\n"
+            )
+        fh.writelines(lines)
+        fh.close()
 
 
-def timed(name: str = None):
-    """Decorator to time a function."""
+_tracker = _Tracker() if PERF_ENABLED else None
+
+
+def perf_trace(name: str | None = None):
+    """Decorator — times the call, logs slow ones. No-op when ORCH_PERF is unset."""
+    if not PERF_ENABLED:
+        def passthrough(fn):
+            return fn
+        return passthrough
+
     def decorator(fn):
         label = name or f"{fn.__module__}.{fn.__qualname__}"
+
         @functools.wraps(fn)
         def wrapper(*args, **kwargs):
-            tracker = PerfTracker.get()
-            tracker.start(label)
+            t0 = time.perf_counter()
             try:
                 return fn(*args, **kwargs)
             finally:
-                tracker.stop(label)
+                _tracker.record(label, time.perf_counter() - t0)
+
         return wrapper
+
     return decorator
+
+
+if PERF_ENABLED:
+    @atexit.register
+    def _dump_on_exit():
+        _tracker.write_report()
+        sys.stderr.write(f"[orch-perf] report written to {PERF_REPORT_PATH}\n")

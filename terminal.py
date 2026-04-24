@@ -33,6 +33,8 @@ from textual.message import Message
 from textual.strip import Strip
 from textual.widget import Widget
 
+from profile_app import perf_trace
+
 try:
     from vterm_backend import VTermBackend
     _HAS_VTERM = True
@@ -339,6 +341,7 @@ class TerminalWidget(Widget, can_focus=True):
         """Start the render tick — decouples rendering from the read loop."""
         self.set_interval(1 / 20, self._render_tick)
 
+    @perf_trace()
     def _render_tick(self) -> None:
         """Flush pending terminal output to screen, capped at 20fps."""
         if self._has_dirty and not self._sync_output:
@@ -750,6 +753,7 @@ class TerminalWidget(Widget, can_focus=True):
 
     # ── Rendering ──────────────────────────────────────────────────
 
+    @perf_trace()
     def _refresh_dirty(self) -> None:
         """Refresh only lines that libvterm's damage callback marked dirty.
         Falls back to full refresh for pyte backend or when scrolled up."""

@@ -67,6 +67,7 @@ from thread_namer import apply_cached_names, name_uncached_threads, title_sessio
 from session_bridge import SessionBridge
 from watcher import SessionWatcher
 from description_refresher import refresh_descriptions
+from profile_app import perf_trace
 
 from rendering import (
     C_BLUE, C_CYAN, C_DIM, C_FAINT, C_GREEN, C_MID, C_PURPLE, C_RED, C_YELLOW,
@@ -510,6 +511,7 @@ class OrchestratorApp(App):
             self._tig_update_timer.stop()
         self._tig_update_timer = self.set_timer(0.4, lambda: self._update_main_tig(self._selected_ws()))
 
+    @perf_trace()
     def _tick_throbber(self):
         """Advance the throbber frame and refresh preview if any sessions are thinking."""
         # Hold a single (act, unseen) cache for the whole tick so the bar
@@ -771,6 +773,7 @@ class OrchestratorApp(App):
         self._sync_tab_bar()
         self._on_return_from_modal()
 
+    @perf_trace()
     def _sync_tab_bar(self):
         """Re-render the top bar to reflect current tab state."""
         self._update_all_bars()
@@ -780,6 +783,7 @@ class OrchestratorApp(App):
         except Exception:
             pass
 
+    @perf_trace()
     def _render_tab_bar(self) -> str:
         """Render the tab bar line as Rich markup."""
         # Detect if a ClaudeSessionScreen is currently active (on top of the stack).
@@ -1038,6 +1042,7 @@ class OrchestratorApp(App):
         if changed:
             self.call_from_thread(self._apply_liveness_change)
 
+    @perf_trace()
     def _apply_liveness_change(self):
         # Skip main table rebuild when DetailScreen covers it — defer to return
         if not self._detail_screen_active:
@@ -1050,6 +1055,7 @@ class OrchestratorApp(App):
         for screen in self.screen_stack:
             screen.post_message(SessionsChanged())
 
+    @perf_trace()
     def _update_preview(self, force: bool = False):
         ws = self._selected_ws()
         ws_id = ws.id if ws else None
@@ -1101,6 +1107,7 @@ class OrchestratorApp(App):
             olist.display = False
             no_sessions.display = True
 
+    @perf_trace()
     def _refresh_preview_sessions(self, throbber_tick: bool = False):
         olist = self.query_one("#preview-sessions", OptionList)
         highlighted = olist.highlighted
@@ -1162,6 +1169,7 @@ class OrchestratorApp(App):
                 olist.highlighted = highlighted
 
     @on(OptionList.OptionHighlighted, "#ws-table")
+    @perf_trace()
     def on_ws_highlighted(self, event: OptionList.OptionHighlighted):
         self._debounce_preview()
         self._debounce_tig_update()
@@ -1174,6 +1182,7 @@ class OrchestratorApp(App):
 
     # ── Bar rendering ──
 
+    @perf_trace()
     def _update_all_bars(self):
         # Activate a per-pass tab-activity cache if a caller didn't already.
         # Tab + filter bars both query every tab's activity; without this we
@@ -1204,6 +1213,7 @@ class OrchestratorApp(App):
             if owns_cache:
                 self._tab_activity_cache = None
 
+    @perf_trace()
     def _render_status_bar(self) -> str:
         SEP = f"  [{C_FAINT}]·[/{C_FAINT}]  "
         ws = self.state.store.active
@@ -1259,6 +1269,7 @@ class OrchestratorApp(App):
 
         return f"{line1}\n{line2}"
 
+    @perf_trace()
     def _render_filter_bar(self) -> str:
         # ── Line 1: tabs (original rendering) ──
         home_tab = self.tabs.tabs[0]
@@ -1397,6 +1408,7 @@ class OrchestratorApp(App):
         return (ws.id, ws.name, ws.archived, ws.category, len(ws_sessions),
                 sess_fp, has_tmux, git_fp, lw, _date.today())
 
+    @perf_trace()
     def _do_refresh_ws_table(self):
         """Actually rebuild the workstreams table (called via debounce timer)."""
         _t0 = _time.monotonic() if _PERF_ENABLED else 0
@@ -1588,6 +1600,7 @@ class OrchestratorApp(App):
         if any_ai_changes:
             self.call_from_thread(self._apply_ai_updates, threads)
 
+    @perf_trace()
     def _apply_sessions(self, sessions: list[ClaudeSession],
                         threads: list[Thread]):
         self.state.update_sessions(sessions, threads)
@@ -1609,6 +1622,7 @@ class OrchestratorApp(App):
                 ws.description = new_desc
                 self.state.store.update(ws)
 
+    @perf_trace()
     def _apply_ai_updates(self, threads: list[Thread]):
         """Single callback for all AI-powered session/thread updates."""
         self.state.threads = threads
@@ -2422,6 +2436,7 @@ class OrchestratorApp(App):
         except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
             pass
 
+    @perf_trace()
     def _apply_tmux_status(self, paths: set[str], names: set[str]):
         if self.state.update_tmux_status(paths, names):
             self._refresh_ws_table_debounced()
@@ -2455,6 +2470,7 @@ class OrchestratorApp(App):
         ):
             self.call_from_thread(self._apply_git_status, new_cache)
 
+    @perf_trace()
     def _apply_git_status(self, new_cache: dict):
         self.state.git_status_cache = new_cache
         self._refresh_ws_table_debounced()
