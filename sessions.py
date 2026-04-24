@@ -642,10 +642,25 @@ class ClaudeSession:
             return "unknown"
 
 
+_decode_dir_cache: dict[str, str] = {}
+
+
+def invalidate_decode_dir_cache() -> None:
+    """Drop the dirname → resolved-path memo. Call when worktrees move."""
+    _decode_dir_cache.clear()
+
+
 def _decode_project_dir(dirname: str) -> str:
     """Convert Claude's project dir name back to a real path.
     e.g., '-home-kyle-dev-claude-orchestrator' -> '/home/kyle/dev/claude-orchestrator'
     """
+    # Memo: dirname is small-cardinality (one per project) and the resolved
+    # path is stable for the lifetime of the process. Without this, hydrating
+    # 500+ sessions runs the os.path.exists fan-out below per session and
+    # spikes to >1s under page-cache pressure.
+    cached = _decode_dir_cache.get(dirname)
+    if cached is not None:
+        return cached
     # Replace leading dash with /
     path = dirname.replace("-", "/", 1) if dirname.startswith("-") else dirname
     # Replace remaining dashes that are path separators
@@ -699,6 +714,7 @@ def _decode_project_dir(dirname: str) -> str:
             # No filesystem match found — just join everything left with dashes
             reconstructed = os.path.join(reconstructed, "-".join(remaining))
             break
+    _decode_dir_cache[dirname] = reconstructed
     return reconstructed
 
 
