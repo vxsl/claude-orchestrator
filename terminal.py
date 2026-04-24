@@ -442,14 +442,47 @@ class TerminalWidget(Widget, can_focus=True):
     def _tmux_conf_path() -> str:
         """Return path to a minimal tmux config that makes tmux invisible."""
         conf = Path(tempfile.gettempdir()) / "orch-tmux.conf"
-        if not conf.exists():
-            conf.write_text(
-                "set -g status off\n"
-                "set -g prefix None\n"
-                "set -s escape-time 0\n"
-                "set -g mouse on\n"
-            )
+        _clip = (
+            "wl-copy 2>/dev/null || "
+            "xclip -selection clipboard 2>/dev/null || "
+            "xsel --clipboard --input 2>/dev/null"
+        )
+        content = (
+            "set -g status off\n"
+            "set -g prefix None\n"
+            "set -s escape-time 0\n"
+            "set -g mouse on\n"
+            "set -g history-limit 10000\n"
+            "setw -g mode-keys vi\n"
+            "bind-key -T copy-mode-vi v send-keys -X begin-selection\n"
+            "bind-key -T copy-mode-vi V send-keys -X select-line\n"
+            "bind-key -T copy-mode-vi C-v send-keys -X rectangle-toggle\n"
+            f"bind-key -T copy-mode-vi y send-keys -X copy-pipe-and-cancel '{_clip}'\n"
+            f"bind-key -T copy-mode-vi Enter send-keys -X copy-pipe-and-cancel '{_clip}'\n"
+            "bind-key -T copy-mode-vi q send-keys -X cancel\n"
+            "bind-key -T copy-mode-vi Escape send-keys -X cancel\n"
+        )
+        # Always rewrite so config updates take effect across orch versions
+        if not conf.exists() or conf.read_text() != content:
+            conf.write_text(content)
         return str(conf)
+
+    @classmethod
+    def _reload_tmux_config(cls, env: dict | None = None) -> None:
+        """Re-source the tmux config against a running server, if any.
+
+        ``-f`` on ``new-session`` only applies when tmux bootstraps a new
+        server; if an earlier orch run already started a server, its config
+        is stale.  ``source-file`` updates it in place.
+        """
+        conf = cls._tmux_conf_path()
+        try:
+            subprocess.run(
+                ["tmux", "-L", cls.TMUX_SOCKET, "source-file", conf],
+                env=env, capture_output=True, timeout=2,
+            )
+        except Exception:
+            pass
 
     def start_persistent(self, session_name: str) -> None:
         """Start the command inside a tmux session, then attach to it.
@@ -485,6 +518,8 @@ class TerminalWidget(Widget, can_focus=True):
             tmux_cmd.extend(["-c", self._cwd])
         tmux_cmd.append(inner_cmd)
         subprocess.run(tmux_cmd, env=env, timeout=5)
+        # Ensure the running server picks up any config updates since it started
+        self._reload_tmux_config(env)
 
         # Now attach to it via pty.fork — the attach process is what we
         # manage; the actual claude process lives in the tmux server.
@@ -511,6 +546,9 @@ class TerminalWidget(Widget, can_focus=True):
         env = os.environ.copy()
         env.update(TERM="xterm-256color", COLORTERM="truecolor")
         env.pop("TMUX", None)
+
+        # Ensure copy-mode / clipboard bindings are current on the server
+        self._reload_tmux_config(env)
 
         self._persistent_session = session_name
         self._pid, self._fd = pty.fork()
@@ -1066,6 +1104,23 @@ class TerminalWidget(Widget, can_focus=True):
         if key == "shift+end":
             self._scroll_offset = 0
             self.refresh()
+            return
+
+        # alt+v → hand off to tmux copy-mode for vim-style selection + yank.
+        # tmux's own scrollback is authoritative once in copy-mode, so drop
+        # our local scroll offset first.
+        if key == "alt+v" and self._persistent_session:
+            if self._scroll_offset > 0:
+                self._scroll_offset = 0
+                self.refresh()
+            try:
+                subprocess.run(
+                    ["tmux", "-L", self.TMUX_SOCKET, "copy-mode",
+                     "-t", self._persistent_session],
+                    capture_output=True, timeout=2,
+                )
+            except Exception:
+                pass
             return
 
         # Any other key input snaps back to bottom
