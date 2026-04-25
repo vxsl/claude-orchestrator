@@ -11,6 +11,7 @@ Based on mitosch/textual-terminal, modernized for Textual 8.x.
 from __future__ import annotations
 
 import asyncio
+import base64
 import fcntl
 import os
 import pty
@@ -335,6 +336,10 @@ class TerminalWidget(Widget, can_focus=True):
         # _has_dirty is set by the read loop; _render_tick flushes at 20fps.
         self._has_dirty = False
 
+        # Buffer for OSC 52 (clipboard set) sequences that span multiple
+        # PTY reads.  See _scan_osc52.
+        self._osc52_buf: bytes = b""
+
     # ── Lifecycle ──────────────────────────────────────────────────
 
     def on_mount(self) -> None:
@@ -456,6 +461,10 @@ class TerminalWidget(Widget, can_focus=True):
             "set -s escape-time 0\n"
             "set -g mouse on\n"
             "set -g history-limit 10000\n"
+            # Make tmux emit OSC 52 on copy.  Our terminal widget
+            # extracts these and forwards them to the outer TTY, so
+            # yanks reach the user's local clipboard even over SSH.
+            "set -g set-clipboard on\n"
             "setw -g mode-keys vi\n"
             "bind-key -T copy-mode-vi v send-keys -X begin-selection\n"
             "bind-key -T copy-mode-vi V send-keys -X select-line\n"
@@ -735,8 +744,63 @@ class TerminalWidget(Widget, can_focus=True):
         except Exception:
             pass
 
+    def _scan_osc52(self, data: bytes) -> None:
+        """Extract OSC 52 (set-clipboard) escapes from the PTY stream and
+        forward the decoded payload to the outer terminal via Textual's
+        clipboard API.
+
+        libvterm consumes OSC sequences internally with no passthrough,
+        so without this scan tmux's set-clipboard emissions never reach
+        the user's actual terminal — breaking yank-to-clipboard over
+        SSH where local wl-copy/xclip have no display to write to.
+
+        Sequences may straddle PTY reads, so we accumulate a partial
+        match in ``self._osc52_buf`` until the terminator (BEL or ST)
+        arrives.
+        """
+        buf = self._osc52_buf + data if self._osc52_buf else data
+        self._osc52_buf = b""
+
+        while True:
+            start = buf.find(b"\x1b]52;")
+            if start < 0:
+                return
+            bel = buf.find(b"\x07", start)
+            st = buf.find(b"\x1b\\", start)
+            if bel >= 0 and (st < 0 or bel < st):
+                end, term_len = bel + 1, 1
+            elif st >= 0:
+                end, term_len = st + 2, 2
+            else:
+                # Incomplete — stash the tail and wait for the next chunk.
+                # Cap the buffer so a malformed/runaway sequence can't OOM.
+                tail = buf[start:]
+                if len(tail) > 10_000_000:
+                    self._osc52_buf = b""
+                else:
+                    self._osc52_buf = tail
+                return
+
+            seq = buf[start:end]
+            try:
+                inner = seq[5:-term_len]  # strip "ESC ] 5 2 ;" and terminator
+                sep = inner.find(b";")
+                if sep > 0:
+                    payload = inner[sep + 1:]
+                    text = base64.b64decode(payload, validate=False).decode(
+                        "utf-8", errors="replace")
+                    app = self.app if self.is_mounted else None
+                    if app is not None and hasattr(app, "copy_to_clipboard"):
+                        app.copy_to_clipboard(text)
+            except Exception:
+                pass
+
+            buf = buf[end:]
+
     def _process_output_vterm(self, data: bytes) -> None:
         """Feed raw bytes to libvterm and detect sync output."""
+        # Forward clipboard escapes before libvterm eats them
+        self._scan_osc52(data)
         prev_sync = self._sync_output
         if b'\x1b[?2026h' in data:
             self._sync_output = True
