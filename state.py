@@ -547,6 +547,13 @@ class AppState:
         self._sessions_for_ws_cache: dict[str, list[ClaudeSession]] = {}
         self._last_seen_valid: bool = False
         self._session_mtimes: dict[str, float] = {}  # session_id -> last known mtime
+        # thread_id → Thread / session_id → ClaudeSession indexes, rebuilt
+        # in update_sessions. Avoids per-call dict-comprehension over
+        # self.threads in sessions_for_ws (the dominant cost on cache miss
+        # — N_threads × N_workstreams ops per refresh, repeated since
+        # _sessions_for_ws_cache wipes on every update_sessions).
+        self._thread_by_id: dict[str, Thread] = {}
+        self._sessions_by_id: dict[str, ClaudeSession] = {}
         self.git_status_cache: dict[str, object] = {}  # path -> WorktreeStatus
         self.sessions_loaded: bool = False  # True after first session discovery completes
         self.infer_repo_paths()
@@ -1024,7 +1031,12 @@ class AppState:
             effective_tids = list(matched)
 
         if effective_tids:
-            thread_map = {t.thread_id: t for t in self.threads}
+            # Use the cached thread_id index built by update_sessions.
+            # Length-mismatch fallback covers tests that mutate self.threads
+            # directly without going through update_sessions.
+            if len(self._thread_by_id) != len(self.threads):
+                self._thread_by_id = {t.thread_id: t for t in self.threads}
+            thread_map = self._thread_by_id
             sessions = []
             seen = set()
             for tid in effective_tids:
@@ -1260,6 +1272,8 @@ class AppState:
                         break
         self.sessions = sessions
         self.threads = threads
+        self._thread_by_id = {t.thread_id: t for t in threads}
+        self._sessions_by_id = {s.session_id: s for s in sessions}
         self.sessions_loaded = True
         self.invalidate_caches()
         self.infer_repo_paths()

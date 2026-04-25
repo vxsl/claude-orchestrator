@@ -631,6 +631,69 @@ class TestSessionsForWsFiltering:
         assert {s.session_id for s in result} == {"s1"}
 
 
+class TestSessionsForWsThreadMapCache:
+    """update_sessions builds a thread_id → Thread index used by
+    sessions_for_ws. Verify it stays consistent across updates and
+    survives mutations the test code does outside update_sessions."""
+
+    def test_thread_map_built_by_update_sessions(self, state):
+        s1 = _make_session("s1", project_path="/p")
+        t = Thread(thread_id="t1", name="p", project_path="/p", sessions=[s1])
+        state.update_sessions([s1], [t])
+        assert state._thread_by_id == {"t1": t}
+        assert state._sessions_by_id == {"s1": s1}
+
+    def test_session_added_to_thread_picked_up(self, state):
+        """When update_sessions delivers an additional session in the same
+        thread, sessions_for_ws reflects it (cache rebuild)."""
+        s1 = _make_session("s1", project_path="/p")
+        t1 = Thread(thread_id="t1", name="p", project_path="/p", sessions=[s1])
+
+        ws = Workstream(name="test")
+        ws.thread_ids = ["t1"]
+        state.store.add(ws)
+        state.update_sessions([s1], [t1])
+        assert {s.session_id for s in state.sessions_for_ws(ws)} == {"s1"}
+
+        s2 = _make_session("s2", project_path="/p")
+        t1b = Thread(thread_id="t1", name="p", project_path="/p", sessions=[s1, s2])
+        state.update_sessions([s1, s2], [t1b])
+        assert {s.session_id for s in state.sessions_for_ws(ws)} == {"s1", "s2"}
+
+    def test_thread_id_change_picked_up(self, state):
+        """When ws.thread_ids changes (via invalidate_caches), the new
+        thread's sessions are returned."""
+        s1 = _make_session("s1", project_path="/p1")
+        s2 = _make_session("s2", project_path="/p2")
+        t1 = Thread(thread_id="t1", name="p1", project_path="/p1", sessions=[s1])
+        t2 = Thread(thread_id="t2", name="p2", project_path="/p2", sessions=[s2])
+
+        ws = Workstream(name="test")
+        ws.thread_ids = ["t1"]
+        state.store.add(ws)
+        state.update_sessions([s1, s2], [t1, t2])
+        assert {s.session_id for s in state.sessions_for_ws(ws)} == {"s1"}
+
+        ws.thread_ids = ["t2"]
+        state.invalidate_caches()
+        assert {s.session_id for s in state.sessions_for_ws(ws)} == {"s2"}
+
+    def test_thread_map_fallback_when_threads_set_directly(self, state):
+        """Tests that mutate self.threads without update_sessions should
+        still get correct results — covered by the length-mismatch fallback."""
+        s1 = _make_session("s1", project_path="/p")
+        t = Thread(thread_id="t1", name="p", project_path="/p", sessions=[s1])
+
+        ws = Workstream(name="test")
+        ws.thread_ids = ["t1"]
+        state.store.add(ws)
+        state.threads = [t]
+        state.sessions = [s1]
+        # _thread_by_id is still {} from __init__, but the fallback in
+        # sessions_for_ws rebuilds it on length mismatch.
+        assert {s.session_id for s in state.sessions_for_ws(ws)} == {"s1"}
+
+
 # ─── Tmux Status ─────────────────────────────────────────────────────
 
 class TestTmuxStatus:
