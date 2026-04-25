@@ -6,10 +6,18 @@ and return results via dismiss(). No direct access to app state.
 
 from __future__ import annotations
 
+import logging
 import os
 import subprocess
+import time as _time
 from datetime import datetime, timezone
 from pathlib import Path
+
+# Shared logger with app.py — handler is configured there when
+# ORCH_PERF_LOG is set, so calls from this module land in the same
+# ~/.cache/claude-orchestrator/perf.log file.
+_perf_log = logging.getLogger("orch.perf")
+_PERF_ENABLED = os.environ.get("ORCH_PERF_LOG", "")
 
 from rich.table import Table as RichTable
 
@@ -61,6 +69,7 @@ from terminal import TerminalWidget
 from notifications import Notification, dismiss_notification, dismiss_all_for_dirs
 from state import fuzzy_match, content_search, SessionSearchResult
 from widgets import FuzzyPicker, FuzzyPickerScreen
+from profile_app import perf_trace
 
 
 def _label_with_legend(left: str, legend: str) -> RichTable:
@@ -1650,7 +1659,9 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         except (ValueError, TypeError):
             return datetime.min.replace(tzinfo=timezone.utc)
 
+    @perf_trace()
     def _load_detail_sessions(self):
+        _t0 = _time.monotonic() if _PERF_ENABLED else 0
         app = self.app
         if hasattr(app, 'state'):
             all_sessions = app.state.sessions_for_ws(self.ws, include_archived_sessions=True)
@@ -1747,6 +1758,12 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
                 self.query_one("#detail-sessions", OptionList).focus()
 
         self._update_pane_labels()
+        if _PERF_ENABLED:
+            _perf_log.warning(
+                "DetailScreen._load_detail_sessions: %.1fms (sessions=%d, archived=%d)",
+                (_time.monotonic() - _t0) * 1000,
+                len(self._detail_sessions), len(self._archived_sessions),
+            )
 
     @staticmethod
     def _highlighted_session_id(olist: OptionList) -> str | None:
@@ -1965,7 +1982,9 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
             return f"[bold {C_BLUE}]Feed[/bold {C_BLUE}] [{C_DIM}]({n})[/{C_DIM}]"
         return f"[bold {C_BLUE}]Feed[/bold {C_BLUE}]"
 
+    @perf_trace()
     def _load_feed(self):
+        _t0 = _time.monotonic() if _PERF_ENABLED else 0
         app = self.app
         if hasattr(app, 'state'):
             self._feed_notifications = app.state.notifications_for_ws(self.ws)
@@ -2020,13 +2039,26 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
             self.query_one("#detail-no-feed", Static).display = False
         except Exception:
             pass
+        if _PERF_ENABLED:
+            _perf_log.warning(
+                "DetailScreen._load_feed: %.1fms (feed=%d, matched=%d)",
+                (_time.monotonic() - _t0) * 1000,
+                len(self._feed_notifications), len(self._session_notifications),
+            )
 
+    @perf_trace()
     def _build_feed_list(self):
+        _t0 = _time.monotonic() if _PERF_ENABLED else 0
         olist = self.query_one("#detail-feed", OptionList)
         options = [Option(_render_notification_option(notif), id=f"notif:{notif.id}")
                    for notif in self._feed_notifications]
         olist.clear_options()
         olist.add_options(options)
+        if _PERF_ENABLED:
+            _perf_log.warning(
+                "DetailScreen._build_feed_list: %.1fms (n=%d)",
+                (_time.monotonic() - _t0) * 1000, len(options),
+            )
 
     # _poll_feed merged into _apply_liveness_result (single timer)
 
@@ -2605,7 +2637,9 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         self._update_pane_labels()
         self._update_animating_cache()
 
+    @perf_trace()
     def _refresh(self):
+        _t0 = _time.monotonic() if _PERF_ENABLED else 0
         with self.app.batch_update():
             self.query_one("#detail-title", Static).update(self._render_title() + "  " + self._render_meta())
             try:
@@ -2614,6 +2648,11 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
                 pass  # body not present when tig sidebar is active
             self._load_detail_sessions()
             self._load_feed()
+        if _PERF_ENABLED:
+            _perf_log.warning(
+                "DetailScreen._refresh: total %.1fms",
+                (_time.monotonic() - _t0) * 1000,
+            )
 
     def action_quick_note(self):
         def on_note(text: str | None):
