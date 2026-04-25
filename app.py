@@ -61,7 +61,7 @@ from models import (
     Category, Link, Store, Workstream,
     _relative_time,
 )
-from sessions import ClaudeSession, invalidate_live_session_cache, ensure_rust_engine_running, get_rust_db_generation
+from sessions import ClaudeSession, invalidate_live_session_cache, ensure_rust_engine_running
 from threads import Thread, ThreadActivity, session_activity, mark_thread_seen, discover_threads
 from thread_namer import apply_cached_names, name_uncached_threads, title_sessions, get_session_title, refresh_thread_titles
 from session_bridge import SessionBridge
@@ -247,7 +247,6 @@ class OrchestratorApp(App):
         self._tab_switch_in_progress: bool = False  # suppress _on_detail_dismissed during tab switch
         self._last_liveness_check: float = 0.0  # rate limiter for liveness checks
         self._liveness_deferred: bool = False  # trailing-edge pending flag
-        self._last_processed_generation: int = -1  # Rust DB generation we last refreshed for
         self._ws_pending_session: dict[str, str] = {}  # ws_id -> session_id for reuse on "c"
 
     def on_key(self, event) -> None:
@@ -926,19 +925,15 @@ class OrchestratorApp(App):
         The daemon has already parsed the changed files and written to SQLite.
         We just need to re-read from the DB (3ms) and refresh the UI.
         Rate-limited to avoid flooding the UI thread during heavy activity.
+
+        No generation gate here: the daemon bumps meta.generation on every
+        file-modification event (including liveness/heartbeat .json updates),
+        not only when threads/sessions output diverges. In practice the gate
+        skipped 0 of 14541 callbacks; the downstream _session_fingerprint
+        check in _do_refresh_from_db is the real dedup.
         """
         if _PERF_ENABLED:
             _perf_log.warning("_on_rust_engine_update: bridge callback fired")
-        # Cheap generation gate: skip the worker entirely when the daemon's
-        # SQLite generation hasn't advanced since our last refresh. ~44% of
-        # rust-engine notifications fire without data changes (the daemon
-        # bumps state for liveness/heartbeat reasons that don't affect
-        # discover_threads output). Single sub-ms SQLite query on main thread.
-        gen = get_rust_db_generation()
-        if gen is not None and gen == self._last_processed_generation:
-            if _PERF_ENABLED:
-                _perf_log.warning("_on_rust_engine_update: skipped (gen %d unchanged)", gen)
-            return
         now = _time.monotonic()
         if now - getattr(self, '_last_rust_update', 0) < 1.0:
             # Schedule a trailing-edge update if not already pending
@@ -954,13 +949,6 @@ class OrchestratorApp(App):
         """Trailing-edge fire for rate-limited Rust engine updates."""
         self._rust_update_pending = False
         self._last_rust_update = _time.monotonic()
-        # Re-check generation: by the time the trailing-edge fires, an
-        # earlier worker may have already covered this generation.
-        gen = get_rust_db_generation()
-        if gen is not None and gen == self._last_processed_generation:
-            if _PERF_ENABLED:
-                _perf_log.warning("_fire_deferred_rust_update: skipped (gen %d unchanged)", gen)
-            return
         self._do_refresh_from_db()
 
     @staticmethod
@@ -987,11 +975,6 @@ class OrchestratorApp(App):
 
     def __do_refresh_from_db_inner(self):
         _t0 = _time.monotonic() if _PERF_ENABLED else 0
-        # Snapshot the generation we're about to consume. We mark it as
-        # processed regardless of fingerprint outcome — both "changed" and
-        # "no changes" mean we paid for this generation; future callbacks
-        # at the same gen can skip.
-        gen_at_start = get_rust_db_generation()
         threads = discover_threads()
         if _PERF_ENABLED:
             _perf_log.warning("_do_refresh_from_db: discover_threads %.1fms", (_time.monotonic() - _t0) * 1000)
@@ -1004,9 +987,6 @@ class OrchestratorApp(App):
         for t in threads:
             sessions.extend(t.sessions)
         sessions.sort(key=lambda s: s.last_activity or "", reverse=True)
-
-        if gen_at_start is not None:
-            self._last_processed_generation = gen_at_start
 
         # Skip UI update if nothing actually changed
         if self._session_fingerprint(self.state.sessions) == self._session_fingerprint(sessions):
