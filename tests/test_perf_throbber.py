@@ -90,6 +90,7 @@ def _make_test_app(tmp_path, num_tabs: int, num_thinking: int):
     app.state = state
     app.tabs = tabs
     app._tab_activity_cache = None
+    app._ws_activity_cache = {}
     app._throbber_timer = None
     app._throbber_paused = False
     app._last_top_bar = ""
@@ -197,6 +198,46 @@ class TestThrobberTickBudget:
         assert worst <= 1, (
             f"no tab should be recomputed more than once per tick; "
             f"worst={worst} distribution={per_tab}"
+        )
+
+    def test_activity_cache_skips_heavy_work_across_ticks(self, tmp_path):
+        """When session attrs don't change between ticks, the per-ws fingerprint
+        cache should short-circuit _best_activity / _is_session_seen — the
+        actual cost we're saving."""
+        import rendering as r
+
+        app, wss = _make_test_app(tmp_path, num_tabs=6, num_thinking=2)
+
+        best_calls = 0
+        original_best = r._best_activity
+
+        def counting(sessions, last_seen=None):
+            nonlocal best_calls
+            best_calls += 1
+            return original_best(sessions, last_seen)
+
+        r._best_activity = counting
+        try:
+            import app as app_mod
+            original_in_app = app_mod._best_activity
+            app_mod._best_activity = counting
+            try:
+                # Tick 1: cold cache — every tab recomputes.
+                app._tick_throbber()
+                cold = best_calls
+                # Tick 2: warm cache, no session attrs changed — every tab
+                # should hit the fingerprint cache and skip _best_activity.
+                app._tick_throbber()
+                warm = best_calls - cold
+            finally:
+                app_mod._best_activity = original_in_app
+        finally:
+            r._best_activity = original_best
+
+        assert warm == 0, (
+            f"second tick with unchanged sessions should hit the activity "
+            f"fingerprint cache and skip _best_activity entirely; "
+            f"got {warm} calls (cold tick: {cold})"
         )
 
     def test_status_bar_single_pass_over_sessions(self, tmp_path):

@@ -248,6 +248,12 @@ class OrchestratorApp(App):
         self._last_liveness_check: float = 0.0  # rate limiter for liveness checks
         self._liveness_deferred: bool = False  # trailing-edge pending flag
         self._ws_pending_session: dict[str, str] = {}  # ws_id -> session_id for reuse on "c"
+        # Cross-render cache for _tab_activity. Keyed by ws_id; value is
+        # (sessions_fp, act, unseen). _bar_fingerprint already filters
+        # data-stable refreshes, but when something does change it's
+        # usually for one ws — the remaining ~70 ws have unchanged
+        # activity and shouldn't re-walk their sessions.
+        self._ws_activity_cache: dict[str, tuple[int, "ThreadActivity", bool]] = {}
 
     def on_key(self, event) -> None:
         # Swallow tab / shift+tab so they don't cycle focus among widgets
@@ -545,10 +551,15 @@ class OrchestratorApp(App):
     def _tab_activity(self, ws_id: str | None):
         """Return (activity, icon_markup) for a workstream tab. '' markup when idle.
 
-        Uses ``self._tab_activity_cache`` (a dict) when set by callers entering a
-        render pass — callers are responsible for allocating and clearing the
-        dict. The (act, unseen) pair is what's cached; the icon is re-derived
-        from the current throbber_frame on every access."""
+        Two layers of caching:
+        - ``self._tab_activity_cache`` (per-pass): callers entering a render
+          set the dict, ensuring the same ws is computed once per pass.
+        - ``self._ws_activity_cache`` (cross-render): (act, unseen) keyed by
+          a session-attrs fingerprint — survives across renders since the
+          values are stable as long as inputs don't change.
+
+        The icon is re-derived from the current throbber_frame on every
+        access so the spinner animates without polluting either cache."""
         if not ws_id:
             return ThreadActivity.IDLE, ""
         cache = getattr(self, '_tab_activity_cache', None)
@@ -563,8 +574,30 @@ class OrchestratorApp(App):
         icon = _activity_icon(act, self.state.throbber_frame, seen=not unseen)
         return act, icon
 
+    @staticmethod
+    def _ws_activity_fingerprint(sessions, last_seen) -> int:
+        """Hash of every session attribute that feeds _compute_tab_activity.
+
+        Order-insensitive (XOR) + cheap. Includes id(last_seen) so "marked
+        seen" events (last_seen_cache replaced) invalidate the cache.
+        """
+        fp = id(last_seen)
+        for s in sessions:
+            fp ^= hash((
+                s.session_id,
+                s.is_live,
+                s.last_message_role,
+                s.last_activity,
+                s.turn_complete,
+                s.last_stop_reason,
+                s.last_tool_name,
+                s.message_count,
+                getattr(s, 'last_user_message_at', '') or '',
+            ))
+        return fp
+
     def _compute_tab_activity(self, ws_id: str):
-        """Uncached inner computation for ``_tab_activity``. Returns (act, unseen)."""
+        """Returns (act, unseen). Uses cross-render fingerprint cache."""
         ws = self.state.get_ws(ws_id)
         if not ws:
             return ThreadActivity.IDLE, False
@@ -572,14 +605,20 @@ class OrchestratorApp(App):
         if not sessions:
             return ThreadActivity.IDLE, False
         last_seen = self.state.last_seen_cache
+        fp = self._ws_activity_fingerprint(sessions, last_seen)
+        cached = self._ws_activity_cache.get(ws_id)
+        if cached is not None and cached[0] == fp:
+            return cached[1], cached[2]
         act = _best_activity(sessions, last_seen)
         if act == ThreadActivity.IDLE:
-            return act, False
-        unseen = any(
-            not _is_session_seen(s, last_seen)
-            for s in sessions
-            if session_activity(s, last_seen) == act
-        )
+            unseen = False
+        else:
+            unseen = any(
+                not _is_session_seen(s, last_seen)
+                for s in sessions
+                if session_activity(s, last_seen) == act
+            )
+        self._ws_activity_cache[ws_id] = (fp, act, unseen)
         return act, unseen
 
     def _resume_throbber(self):
