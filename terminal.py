@@ -761,10 +761,21 @@ class TerminalWidget(Widget, can_focus=True):
         buf = self._osc52_buf + data if self._osc52_buf else data
         self._osc52_buf = b""
 
+        _DEBUG_LOG = "/tmp/orch-osc52.log"
+
+        def _dbg(msg: str) -> None:
+            try:
+                with open(_DEBUG_LOG, "a") as f:
+                    f.write(msg + "\n")
+            except Exception:
+                pass
+
         while True:
             start = buf.find(b"\x1b]52;")
             if start < 0:
                 return
+
+            _dbg(f"[scan] found OSC 52 prefix at offset {start}, buf len {len(buf)}")
             bel = buf.find(b"\x07", start)
             st = buf.find(b"\x1b\\", start)
             if bel >= 0 and (st < 0 or bel < st):
@@ -782,21 +793,26 @@ class TerminalWidget(Widget, can_focus=True):
                 return
 
             seq = buf[start:end]
+            _dbg(f"[scan] complete OSC 52 found, seq len {len(seq)}, term_len {term_len}")
             try:
                 inner = seq[5:-term_len]  # strip "ESC ] 5 2 ;" and terminator
                 # Format: <selection-target>;<base64>.  The target field
                 # is often empty (tmux emits ";;<b64>"), so the separator
                 # may be at index 0 — accept sep >= 0, not > 0.
                 sep = inner.find(b";")
+                _dbg(f"[scan] inner len {len(inner)}, sep at {sep}, inner first 20: {inner[:20]!r}")
                 if sep >= 0:
                     payload = inner[sep + 1:]
                     text = base64.b64decode(payload, validate=False).decode(
                         "utf-8", errors="replace")
+                    _dbg(f"[scan] decoded text len {len(text)}: {text[:60]!r}")
                     app = self.app if self.is_mounted else None
+                    _dbg(f"[scan] is_mounted={self.is_mounted}, app={app!r}, has copy_to_clipboard={hasattr(app, 'copy_to_clipboard') if app else False}")
                     if app is not None and hasattr(app, "copy_to_clipboard"):
                         app.copy_to_clipboard(text)
-            except Exception:
-                pass
+                        _dbg("[scan] called app.copy_to_clipboard")
+            except Exception as e:
+                _dbg(f"[scan] EXCEPTION: {e!r}")
 
             buf = buf[end:]
 
