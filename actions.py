@@ -286,15 +286,17 @@ def find_sessions_for_ws(ws: Workstream, all_sessions: list[ClaudeSession]) -> l
                     seen.add(s.session_id)
 
     # 2. Auto-match by directory (includes subdirectory sessions)
+    # Uses the TTL-cached isdir to avoid stat() fan-out on every refresh.
+    from state import _isdir_cached
     ws_dirs = set()
     if ws.repo_path:
         expanded = os.path.expanduser(ws.repo_path).rstrip("/")
-        if os.path.isdir(expanded):
+        if _isdir_cached(expanded):
             ws_dirs.add(expanded)
     for link in ws.links:
         if link.kind in ("worktree", "file"):
             expanded = os.path.expanduser(link.value).rstrip("/")
-            if os.path.isdir(expanded):
+            if _isdir_cached(expanded):
                 ws_dirs.add(expanded)
 
     if ws_dirs:

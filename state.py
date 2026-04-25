@@ -9,9 +9,37 @@ from __future__ import annotations
 
 import os
 import subprocess
+import time as _time
 from datetime import datetime
 from pathlib import Path
 from typing import Sequence
+
+
+# ── Filesystem helpers ─────────────────────────────────────────────
+
+# TTL-cached os.path.isdir. _ws_dirs / find_sessions_for_ws call isdir
+# per workstream link during every refresh; for ~70 workstreams × ~3
+# links each that's 200+ stat() syscalls per refresh, which spikes the
+# build_options loop to 100s of ms under cold page-cache. The 30s TTL
+# is long enough to amortize across the per-second refresh cadence and
+# short enough to pick up worktree creates/removes during a session.
+_isdir_cache: dict[str, tuple[float, bool]] = {}
+_ISDIR_TTL_S: float = 30.0
+
+
+def _isdir_cached(path: str) -> bool:
+    now = _time.monotonic()
+    cached = _isdir_cache.get(path)
+    if cached is not None and now - cached[0] < _ISDIR_TTL_S:
+        return cached[1]
+    result = os.path.isdir(path)
+    _isdir_cache[path] = (now, result)
+    return result
+
+
+def invalidate_isdir_cache() -> None:
+    """Drop the isdir TTL cache. Call when worktrees move."""
+    _isdir_cache.clear()
 
 
 # ── Git helpers ────────────────────────────────────────────────────
@@ -719,12 +747,12 @@ class AppState:
         dirs = set()
         if ws.repo_path:
             expanded = os.path.expanduser(ws.repo_path).rstrip("/")
-            if os.path.isdir(expanded):
+            if _isdir_cached(expanded):
                 dirs.add(expanded)
         for link in ws.links:
             if link.kind in ("worktree", "file"):
                 expanded = os.path.expanduser(link.value).rstrip("/")
-                if os.path.isdir(expanded):
+                if _isdir_cached(expanded):
                     dirs.add(expanded)
         return dirs
 
@@ -745,7 +773,7 @@ class AppState:
         # Resolve subdirectories to their git toplevel
         resolved = set()
         for p in repos:
-            if not os.path.isdir(p):
+            if not _isdir_cached(p):
                 continue
             toplevel = _git_toplevel(p)
             resolved.add(toplevel if toplevel else p)
