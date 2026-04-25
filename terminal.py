@@ -784,8 +784,11 @@ class TerminalWidget(Widget, can_focus=True):
             seq = buf[start:end]
             try:
                 inner = seq[5:-term_len]  # strip "ESC ] 5 2 ;" and terminator
+                # Format: <selection-target>;<base64>.  The target field
+                # is often empty (tmux emits ";;<b64>"), so the separator
+                # may be at index 0 — accept sep >= 0, not > 0.
                 sep = inner.find(b";")
-                if sep > 0:
+                if sep >= 0:
                     payload = inner[sep + 1:]
                     text = base64.b64decode(payload, validate=False).decode(
                         "utf-8", errors="replace")
