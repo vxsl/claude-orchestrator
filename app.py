@@ -703,9 +703,19 @@ class OrchestratorApp(App):
         else:
             # Workstreams tab: pop everything above Home (CSS + any stale Detail).
             # pop_screen() is synchronous so we can call dismiss() in a loop.
+            # Suppress the dismiss callback's synchronous _on_return_from_modal
+            # (disk reload + full table rebuild) so the tab switch is snappy;
+            # defer that refresh to after the first frame.
+            self._tab_switch_in_progress = True
             while len(self.screen_stack) > 1:
                 self.screen_stack[-1].dismiss()
             self._detail_screen_active = False
+            self.call_after_refresh(self._finish_workstreams_tab_switch)
+
+    def _finish_workstreams_tab_switch(self) -> None:
+        """Deferred: run the full _on_return_from_modal refresh after the first frame."""
+        self._tab_switch_in_progress = False
+        self._on_return_from_modal()
 
     def _push_detail_for_tab(self, ws: Workstream):
         """Switch to ws's DetailScreen, keeping the stack clean.
