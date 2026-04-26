@@ -475,7 +475,13 @@ class TerminalWidget(Widget, can_focus=True):
             f"bind-key -T copy-mode-vi y send-keys -X copy-pipe-and-cancel '{_clip}'\n"
             f"bind-key -T copy-mode-vi Enter send-keys -X copy-pipe-no-clear '{_clip}'\n"
             "bind-key -T copy-mode-vi q send-keys -X cancel\n"
-            "bind-key -T copy-mode-vi Escape send-keys -X cancel\n"
+            # Vim-style two-stage Escape: first Escape with an active
+            # selection clears it (still in copy-mode, cursor preserved);
+            # second Escape (no selection) exits copy-mode.
+            "bind-key -T copy-mode-vi Escape "
+            "if-shell -F '#{selection_present}' "
+            "'send-keys -X clear-selection' "
+            "'send-keys -X cancel'\n"
         )
         # Always rewrite so config updates take effect across orch versions
         if not conf.exists() or conf.read_text() != content:
