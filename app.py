@@ -1420,7 +1420,7 @@ class OrchestratorApp(App):
 
         # ── Line 2: filter presets ──
         filters = [
-            ("stale", "Stale"), ("archived", "Archived"),
+            ("all", "All"), ("stale", "Stale"), ("archived", "Archived"),
         ]
         SEP = f" [{C_FAINT}]·[/{C_FAINT}] "
         preset_parts = []

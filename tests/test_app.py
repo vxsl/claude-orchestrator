@@ -384,22 +384,27 @@ class TestTabSwitching:
             assert "Workstreams" in str(rendered)
 
     async def test_archived_filter_shows_archived(self, app_with_store):
-        """Pressing 2 activates archived filter."""
+        """Pressing 3 activates archived filter."""
         async with app_with_store.run_test(size=(120, 40)) as pilot:
-            await pilot.press("2")
+            await pilot.press("3")
             assert pilot.app.filter_mode == "archived"
 
 
 @pytest.mark.asyncio
 class TestFilters:
-    async def test_filter_stale(self, app_with_store):
+    async def test_filter_all(self, app_with_store):
         async with app_with_store.run_test(size=(120, 40)) as pilot:
             await pilot.press("1")
+            assert pilot.app.filter_mode == "all"
+
+    async def test_filter_stale(self, app_with_store):
+        async with app_with_store.run_test(size=(120, 40)) as pilot:
+            await pilot.press("2")
             assert pilot.app.filter_mode == "stale"
 
     async def test_filter_archived(self, app_with_store):
         async with app_with_store.run_test(size=(120, 40)) as pilot:
-            await pilot.press("2")
+            await pilot.press("3")
             assert pilot.app.filter_mode == "archived"
 
 
@@ -959,16 +964,21 @@ class TestTabBarE2E:
 
 @pytest.mark.asyncio
 class TestFilterKeysE2E:
-    """Filter keys 1=stale, 2=archived; default view is all unarchived."""
+    """Filter keys 1=all, 2=stale, 3=archived."""
 
-    async def test_filter_1_stale(self, app_with_store):
+    async def test_filter_1_all(self, app_with_store):
         async with app_with_store.run_test(size=(120, 40)) as pilot:
             await pilot.press("1")
-            assert pilot.app.filter_mode == "stale"
+            assert pilot.app.filter_mode == "all"
 
-    async def test_filter_2_archived(self, app_with_store):
+    async def test_filter_2_stale(self, app_with_store):
         async with app_with_store.run_test(size=(120, 40)) as pilot:
             await pilot.press("2")
+            assert pilot.app.filter_mode == "stale"
+
+    async def test_filter_3_archived(self, app_with_store):
+        async with app_with_store.run_test(size=(120, 40)) as pilot:
+            await pilot.press("3")
             assert pilot.app.filter_mode == "archived"
 
 

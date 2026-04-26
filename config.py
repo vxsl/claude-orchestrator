@@ -38,8 +38,9 @@ DEFAULT_KEYS: dict[str, tuple[str, str, bool, bool]] = {
     "toggle_archive": ("u", "Archive", False, False),
     "delete_item": ("d", "", False, False),
     # Filters
-    "filter('stale')": ("1", "", False, False),
-    "filter('archived')": ("2", "", False, False),
+    "filter('all')": ("1", "", False, False),
+    "filter('stale')": ("2", "", False, False),
+    "filter('archived')": ("3", "", False, False),
     "search": ("slash", "/", True, False),
     # Sort
     "sort('activity')": ("f1", "", False, False),
