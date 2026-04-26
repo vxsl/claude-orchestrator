@@ -469,8 +469,11 @@ class TerminalWidget(Widget, can_focus=True):
             "bind-key -T copy-mode-vi v send-keys -X begin-selection\n"
             "bind-key -T copy-mode-vi V send-keys -X select-line\n"
             "bind-key -T copy-mode-vi C-v send-keys -X rectangle-toggle\n"
+            # `y` yanks and exits copy-mode (vim-style).
+            # `Enter` yanks and keeps the selection active so you can
+            # extend it and yank again without re-entering copy-mode.
             f"bind-key -T copy-mode-vi y send-keys -X copy-pipe-and-cancel '{_clip}'\n"
-            f"bind-key -T copy-mode-vi Enter send-keys -X copy-pipe-and-cancel '{_clip}'\n"
+            f"bind-key -T copy-mode-vi Enter send-keys -X copy-pipe-no-clear '{_clip}'\n"
             "bind-key -T copy-mode-vi q send-keys -X cancel\n"
             "bind-key -T copy-mode-vi Escape send-keys -X cancel\n"
         )
