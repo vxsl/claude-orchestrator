@@ -1714,3 +1714,89 @@ class TestDiscoverAndEnrichWorktrees:
             state.discover_and_enrich_worktrees()
             ws = state.store.active[0]
             assert ws.name == "UB-42: Fix login timeout"
+
+
+# ── Non-Repo Workstream Auto-Discovery ──────────────────────────────
+
+
+class TestDiscoverNonRepoWorkstreams:
+    def _session(self, project_path: str, sid: str = "abc") -> ClaudeSession:
+        return ClaudeSession(
+            session_id=sid,
+            project_path=project_path,
+            project_dir=project_path.replace("/", "-"),
+            started_at="2026-04-25T00:00:00Z",
+            last_activity="2026-04-25T00:00:00Z",
+            message_count=1,
+        )
+
+    def test_creates_ws_for_home_dir(self, state, tmp_path):
+        """A session launched from a non-repo dir auto-creates a workstream."""
+        scratch = tmp_path / "scratch"
+        scratch.mkdir()
+        state.sessions = [self._session(str(scratch))]
+        with patch("state._git_toplevel", return_value=None):
+            changed = state.discover_non_repo_workstreams()
+        assert changed is True
+        assert len(state.store.active) == 1
+        ws = state.store.active[0]
+        assert ws.name == "scratch"
+        assert ws.repo_path == str(scratch)
+
+    def test_skips_session_inside_git_repo(self, state, tmp_path):
+        """A session whose path is inside a git repo is left alone."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        state.sessions = [self._session(str(repo))]
+        with patch("state._git_toplevel", return_value=str(repo)):
+            changed = state.discover_non_repo_workstreams()
+        assert changed is False
+        assert len(state.store.active) == 0
+
+    def test_skips_already_linked_path(self, state, tmp_path):
+        """If a workstream already anchors the path, skip."""
+        scratch = tmp_path / "scratch"
+        scratch.mkdir()
+        existing = Workstream(name="Existing", repo_path=str(scratch))
+        state.store.add(existing)
+        state.sessions = [self._session(str(scratch))]
+        with patch("state._git_toplevel", return_value=None):
+            changed = state.discover_non_repo_workstreams()
+        assert changed is False
+        assert len(state.store.active) == 1
+
+    def test_dedupes_same_path_across_sessions(self, state, tmp_path):
+        scratch = tmp_path / "scratch"
+        scratch.mkdir()
+        state.sessions = [
+            self._session(str(scratch), sid="a"),
+            self._session(str(scratch), sid="b"),
+        ]
+        with patch("state._git_toplevel", return_value=None):
+            state.discover_non_repo_workstreams()
+        assert len(state.store.active) == 1
+
+    def test_names_home_as_home(self, state):
+        home = str(Path.home())
+        state.sessions = [self._session(home)]
+        with patch("state._git_toplevel", return_value=None), \
+             patch("state._isdir_cached", return_value=True):
+            state.discover_non_repo_workstreams()
+        assert len(state.store.active) == 1
+        assert state.store.active[0].name == "Home"
+
+    def test_skips_paths_in_skip_dirs(self, state, tmp_path):
+        cache = tmp_path / ".cache" / "thing"
+        cache.mkdir(parents=True)
+        state.sessions = [self._session(str(cache))]
+        with patch("state._git_toplevel", return_value=None):
+            changed = state.discover_non_repo_workstreams()
+        assert changed is False
+        assert len(state.store.active) == 0
+
+    def test_skips_missing_directory(self, state):
+        state.sessions = [self._session("/nonexistent/path/here")]
+        with patch("state._git_toplevel", return_value=None):
+            changed = state.discover_non_repo_workstreams()
+        assert changed is False
+        assert len(state.store.active) == 0

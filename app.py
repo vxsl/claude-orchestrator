@@ -2652,6 +2652,7 @@ class OrchestratorApp(App):
     @work(thread=True, exclusive=True, group="worktrees")
     def _do_worktree_check(self):
         changed = self.state.discover_and_enrich_worktrees()
+        changed = self.state.discover_non_repo_workstreams() or changed
         if changed:
             self.call_from_thread(self._refresh_ws_table_debounced)
 

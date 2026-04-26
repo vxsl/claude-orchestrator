@@ -901,6 +901,55 @@ class AppState:
 
         return changed
 
+    # ── Non-repo directory auto-discovery ────────────────────────────
+
+    def discover_non_repo_workstreams(self) -> bool:
+        """Auto-create one workstream per distinct non-repo session directory.
+
+        Sessions launched outside any git repo (e.g. from ~ or one-off
+        scratch dirs) otherwise have no workstream to anchor them.
+        For each unique session project_path that isn't inside a git repo,
+        create a workstream with repo_path set to that directory.
+
+        Returns True if anything changed.
+        """
+        # Lookup: directory path -> existing active workstream
+        ws_by_path: dict[str, Workstream] = {}
+        for ws in self.store.active:
+            for link in ws.links:
+                if link.kind in ("worktree", "file"):
+                    ws_by_path[os.path.expanduser(link.value).rstrip("/")] = ws
+            if ws.repo_path:
+                ws_by_path[os.path.expanduser(ws.repo_path).rstrip("/")] = ws
+
+        home = str(Path.home()).rstrip("/")
+        seen: set[str] = set()
+        changed = False
+
+        for s in self.sessions:
+            p = s.project_path.rstrip("/")
+            if not p or p in seen:
+                continue
+            seen.add(p)
+            if p in ws_by_path:
+                continue
+            if not _isdir_cached(p):
+                continue
+            # Skip noisy paths (caches, package dirs, trash)
+            parts = set(Path(p).parts)
+            if parts & self._SKIP_DIRS:
+                continue
+            if _git_toplevel(p) is not None:
+                continue  # path is inside a git repo
+
+            name = "Home" if p == home else Path(p).name or p
+            ws = Workstream(name=name, repo_path=p, category=Category.PERSONAL)
+            self.store.add(ws)
+            ws_by_path[p] = ws
+            changed = True
+
+        return changed
+
     # ── Full-system repo discovery ────────────────────────────────────
 
     _all_repos: list[str] | None = None
