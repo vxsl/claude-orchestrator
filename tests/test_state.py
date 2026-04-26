@@ -74,24 +74,6 @@ class TestFiltering:
         items = populated_state.get_filtered_streams()
         assert len(items) == 6
 
-    def test_filter_work(self, populated_state):
-        populated_state.set_filter("work")
-        items = populated_state.get_filtered_streams()
-        assert all(w.category == Category.WORK for w in items)
-        assert len(items) == 5  # Active work, Blocked, Done, Meta tooling, Review
-
-    def test_filter_personal(self, populated_state):
-        populated_state.set_filter("personal")
-        items = populated_state.get_filtered_streams()
-        assert all(w.category == Category.PERSONAL for w in items)
-        assert len(items) == 1
-
-    def test_filter_active(self, populated_state):
-        """Active now means 'has live sessions' — with no sessions, no workstreams are active."""
-        populated_state.set_filter("active")
-        items = populated_state.get_filtered_streams()
-        assert len(items) == 0  # No sessions = no active workstreams
-
     def test_filter_stale(self, populated_state):
         populated_state.set_filter("stale")
         items = populated_state.get_filtered_streams()
@@ -135,11 +117,11 @@ class TestSearch:
         assert len(items) == 0
 
     def test_search_combined_with_filter(self, populated_state):
-        populated_state.set_filter("work")
-        populated_state.set_search("blocked")
+        populated_state.set_filter("stale")
+        populated_state.set_search("personal")
         items = populated_state.get_filtered_streams()
         assert len(items) == 1
-        assert items[0].category == Category.WORK
+        assert items[0].name == "Personal project"
 
 
 # ─── Sorting ─────────────────────────────────────────────────────────
@@ -749,9 +731,9 @@ class TestCommandExecution:
         assert result["action"] == "error"
 
     def test_filter_command(self, state):
-        result = state.execute_command("filter work")
+        result = state.execute_command("filter stale")
         assert result["action"] == "refresh"
-        assert state.filter_mode == "work"
+        assert state.filter_mode == "stale"
 
     def test_search_command(self, state):
         result = state.execute_command("search hello")

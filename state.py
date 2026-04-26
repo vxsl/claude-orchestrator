@@ -532,7 +532,7 @@ class AppState:
 
     def __init__(self, store: Store | None = None):
         self.store = store or Store()
-        self.filter_mode: str = "active"
+        self.filter_mode: str = "all"
         self.sort_mode: str = "updated"
         self.search_text: str = ""
         self.sessions: list[ClaudeSession] = []
@@ -571,17 +571,7 @@ class AppState:
 
     def get_filtered_streams(self) -> list[Workstream]:
         """Apply current filter, search, and sort to manual workstreams."""
-        if self.filter_mode == "all":
-            streams = list(self.store.active)
-        elif self.filter_mode == "work":
-            streams = [w for w in self.store.active if w.category == Category.WORK]
-        elif self.filter_mode == "personal":
-            streams = [w for w in self.store.active if w.category == Category.PERSONAL]
-        elif self.filter_mode == "active":
-            # Active = has live sessions or recent activity
-            streams = [w for w in self.store.active
-                       if any(s.is_live for s in self.sessions_for_ws(w))]
-        elif self.filter_mode == "stale":
+        if self.filter_mode == "stale":
             streams = self.store.stale()
         elif self.filter_mode == "archived":
             streams = list(self.store.archived)
@@ -1454,7 +1444,7 @@ class AppState:
 
         # Filter
         elif cmd in ("filter", "f"):
-            valid = ("all", "work", "personal", "active", "stale", "archived")
+            valid = ("all", "stale", "archived")
             if arg in valid:
                 self.filter_mode = arg
                 return {"action": "refresh"}

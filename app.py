@@ -1338,21 +1338,11 @@ class OrchestratorApp(App):
         ws = self.state.store.active
 
         # ── Line 1: workstream landscape ──
-        by_cat = {}
-        for w in ws:
-            by_cat[w.category] = by_cat.get(w.category, 0) + 1
-        cat_parts = []
-        if by_cat.get(Category.WORK):
-            cat_parts.append(f"[{C_CYAN}]{by_cat[Category.WORK]} work[/{C_CYAN}]")
-        if by_cat.get(Category.PERSONAL):
-            cat_parts.append(f"[{C_PURPLE}]{by_cat[Category.PERSONAL]} personal[/{C_PURPLE}]")
         stale = len(self.state.store.stale())
         line1_parts = [
             f"[bold {C_BLUE}] ORCH [/bold {C_BLUE}]",
             f"[bold]{len(ws)}[/bold] streams",
         ]
-        if cat_parts:
-            line1_parts.append("  ".join(cat_parts))
         if stale:
             line1_parts.append(f"[{C_DIM}]{stale} stale[/{C_DIM}]")
         line1 = SEP.join(line1_parts)
@@ -1420,8 +1410,7 @@ class OrchestratorApp(App):
 
         # ── Line 2: filter presets ──
         filters = [
-            ("active", "Active"), ("work", "Work"), ("personal", "Personal"),
-            ("all", "All"), ("stale", "Stale"), ("archived", "Archived"),
+            ("stale", "Stale"), ("archived", "Archived"),
         ]
         SEP = f" [{C_FAINT}]·[/{C_FAINT}] "
         preset_parts = []

@@ -384,32 +384,23 @@ class TestTabSwitching:
             assert "Workstreams" in str(rendered)
 
     async def test_archived_filter_shows_archived(self, app_with_store):
-        """Pressing 6 activates archived filter instead of a separate view."""
+        """Pressing 2 activates archived filter."""
         async with app_with_store.run_test(size=(120, 40)) as pilot:
-            await pilot.press("6")
+            await pilot.press("2")
             assert pilot.app.filter_mode == "archived"
 
 
 @pytest.mark.asyncio
 class TestFilters:
-    async def test_filter_all(self, app_with_store):
+    async def test_filter_stale(self, app_with_store):
         async with app_with_store.run_test(size=(120, 40)) as pilot:
             await pilot.press("1")
-            assert pilot.app.filter_mode == "all"
+            assert pilot.app.filter_mode == "stale"
 
-    async def test_filter_work(self, app_with_store):
+    async def test_filter_archived(self, app_with_store):
         async with app_with_store.run_test(size=(120, 40)) as pilot:
             await pilot.press("2")
-            assert pilot.app.filter_mode == "work"
-            table = pilot.app.query_one("#ws-table")
-            assert table.option_count == 1  # Only Alpha is work
-
-    async def test_filter_personal(self, app_with_store):
-        async with app_with_store.run_test(size=(120, 40)) as pilot:
-            await pilot.press("3")
-            assert pilot.app.filter_mode == "personal"
-            table = pilot.app.query_one("#ws-table")
-            assert table.option_count == 1  # Only Beta is personal
+            assert pilot.app.filter_mode == "archived"
 
 
 @pytest.mark.asyncio
@@ -963,42 +954,21 @@ class TestTabBarE2E:
             assert len(pilot.app.tabs.tabs) == 2
 
 
-# ─── E2E: Filter Keys 1-6 ──────────────────────────────────────────
+# ─── E2E: Filter Keys ───────────────────────────────────────────────
 
 
 @pytest.mark.asyncio
 class TestFilterKeysE2E:
-    """Filter keys 1-6 change the active filter, especially 6=archived."""
+    """Filter keys 1=stale, 2=archived; default view is all unarchived."""
 
-    async def test_filter_1_all(self, app_with_store):
+    async def test_filter_1_stale(self, app_with_store):
         async with app_with_store.run_test(size=(120, 40)) as pilot:
             await pilot.press("1")
-            assert pilot.app.filter_mode == "all"
-
-    async def test_filter_2_work(self, app_with_store):
-        async with app_with_store.run_test(size=(120, 40)) as pilot:
-            await pilot.press("2")
-            assert pilot.app.filter_mode == "work"
-
-    async def test_filter_3_personal(self, app_with_store):
-        async with app_with_store.run_test(size=(120, 40)) as pilot:
-            await pilot.press("3")
-            assert pilot.app.filter_mode == "personal"
-
-    async def test_filter_4_active(self, app_with_store):
-        async with app_with_store.run_test(size=(120, 40)) as pilot:
-            await pilot.press("4")
-            assert pilot.app.filter_mode == "active"
-
-    async def test_filter_5_stale(self, app_with_store):
-        async with app_with_store.run_test(size=(120, 40)) as pilot:
-            await pilot.press("5")
             assert pilot.app.filter_mode == "stale"
 
-    async def test_filter_6_archived(self, app_with_store):
-        """Key 6 shows archived — this replaced the old ViewMode.ARCHIVED view."""
+    async def test_filter_2_archived(self, app_with_store):
         async with app_with_store.run_test(size=(120, 40)) as pilot:
-            await pilot.press("6")
+            await pilot.press("2")
             assert pilot.app.filter_mode == "archived"
 
 
