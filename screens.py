@@ -1118,6 +1118,7 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         self._animating_sessions: list[tuple[int, ThreadActivity]] = []
         self._animating_archived: list[tuple[int, ThreadActivity]] = []
         self._notified_count: int = 0
+        self._last_build_fp: tuple | None = None  # fingerprint of last _build_session_list output
         self._content_cache: dict[str, list] = {}  # session_id -> list[SessionMessage]
         self._content_ready: bool = False
         self._content_results: list[SessionSearchResult] = []
@@ -1366,6 +1367,39 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         return frozenset(
             (s.session_id, s.is_live, s.last_message_role, s.message_count)
             for s in self._detail_sessions
+        )
+
+    def _detail_options_fingerprint(self) -> tuple:
+        """Hash of every input that affects the rendered session OptionList.
+
+        If this matches `_last_build_fp`, the OptionList already shows this
+        state — no need to call `_build_session_list` again. Tab-switching
+        re-enters DetailScreen with identical state most of the time, and the
+        rebuild is the dominant cost (160ms+ for 350-session workstreams).
+        """
+        notif_map = self._session_notifications
+        seen_cache = self._last_seen_cache
+        shelved = self._shelved_set
+        return (
+            tuple(
+                (
+                    s.session_id,
+                    s.is_live,
+                    s.last_message_role,
+                    s.message_count,
+                    s.assistant_message_count,
+                    s.last_activity,
+                    s.last_commit_sha,
+                    s.tokens_display,
+                    s.context_tokens,
+                    s.session_id in shelved,
+                    seen_cache.get(s.session_id, ""),
+                    # Notification identity — distinct dt means different render
+                    (notif_map[s.session_id].id, notif_map[s.session_id].dt)
+                        if s.session_id in notif_map else None,
+                )
+                for s in self._detail_sessions
+            ),
         )
 
     def _apply_liveness_result(self, new_fp: frozenset):
@@ -1645,6 +1679,9 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
                         seen = _is_session_seen(s, self._last_seen_cache)
                         prompt = _render_session_option(s, act, self._throbber_frame, ws_repo_path=self.ws.repo_path, seen=seen, line_width=alw, archived=True)
                         arch_olist.replace_option_prompt_at_index(i, prompt)
+            # In-place rebuild leaves the OptionList in sync with current state,
+            # so update the fingerprint to let _load_detail_sessions short-circuit.
+            self._last_build_fp = self._detail_options_fingerprint()
 
 
     @staticmethod
@@ -1714,12 +1751,14 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         if self._detail_sessions:
             olist.display = True
             no_sess.display = False
-            old_sid = self._highlighted_session_id(olist)
-            old_idx = olist.highlighted
-            old_scroll_y = olist.scroll_y
-            self._build_session_list()
-            self._restore_highlight_by_sid(olist, self._detail_sessions, old_sid, old_idx)
-            olist.scroll_y = old_scroll_y
+            new_fp = self._detail_options_fingerprint()
+            if new_fp != self._last_build_fp:
+                old_sid = self._highlighted_session_id(olist)
+                old_idx = olist.highlighted
+                old_scroll_y = olist.scroll_y
+                self._build_session_list()
+                self._restore_highlight_by_sid(olist, self._detail_sessions, old_sid, old_idx)
+                olist.scroll_y = old_scroll_y
         else:
             olist.display = False
             no_sess.display = True
@@ -1947,6 +1986,7 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         elif prev_highlighted is not None:
             olist.highlighted = min(prev_highlighted, len(options) - 1)
         self._animating_sessions = animating
+        self._last_build_fp = self._detail_options_fingerprint()
 
     _ARCHIVED_PAGE_SIZE = 30
 
@@ -2491,6 +2531,7 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         if olist.option_count > 0:
             olist.highlighted = olist.option_count - 1
         self._peek_mode = True
+        self._last_build_fp = None  # OptionList no longer reflects session state
         sess_label = self.query_one("#detail-sessions-label", Static)
         sess_label.update(
             f"[bold {C_BLUE}]Conversation[/bold {C_BLUE}] "
@@ -2560,11 +2601,13 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
                 olist.highlighted = 0
             # Update the session list to match results for selection handling
             self._detail_sessions = [r.session for r in self._content_results]
+            self._last_build_fp = None  # OptionList holds search results, not session list
         else:
             olist.display = False
             no_sess.update(f"[{C_DIM}]No matches[/{C_DIM}]")
             no_sess.display = True
             self._detail_sessions = []
+            self._last_build_fp = None
 
         # Hide archived pane during search (results span full width)
         self.query_one("#detail-archived-pane").display = False
