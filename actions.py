@@ -300,11 +300,12 @@ def find_sessions_for_ws(ws: Workstream, all_sessions: list[ClaudeSession]) -> l
                 ws_dirs.add(expanded)
 
     if ws_dirs:
+        from state import _path_matches_dir
         for s in all_sessions:
             if s.session_id in seen:
                 continue
             sp = s.project_path.rstrip("/")
-            if sp in ws_dirs or any(sp.startswith(d + "/") for d in ws_dirs):
+            if any(_path_matches_dir(sp, d) for d in ws_dirs):
                 found.append(s)
                 seen.add(s.session_id)
 

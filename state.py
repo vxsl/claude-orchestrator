@@ -63,6 +63,20 @@ def _git_toplevel(path: str) -> str | None:
     return toplevel
 
 
+def _path_matches_dir(session_path: str, ws_dir: str) -> bool:
+    """Return True if a session path belongs to a workstream's directory.
+
+    Repo dirs match the dir itself plus any subdirectory. Non-repo dirs
+    (e.g. ~ or one-off scratch dirs) match only the exact path — otherwise
+    a Home workstream would over-claim every nested repo's sessions.
+    """
+    if session_path == ws_dir:
+        return True
+    if _git_toplevel(ws_dir) is None:
+        return False
+    return session_path.startswith(ws_dir + "/")
+
+
 # ── Fuzzy matching ──────────────────────────────────────────────────
 
 def fuzzy_match(query: str, text: str) -> int | None:
@@ -1058,7 +1072,7 @@ class AppState:
             matched = set()
             for t in self.threads:
                 tp = t.project_path.rstrip("/")
-                if tp in ws_dirs or any(tp.startswith(d + "/") for d in ws_dirs):
+                if any(_path_matches_dir(tp, d) for d in ws_dirs):
                     matched.add(t.thread_id)
                 elif explicit_sids:
                     for s in t.sessions:
