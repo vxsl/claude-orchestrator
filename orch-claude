@@ -219,6 +219,13 @@ else
 fi
 CLAUDE_ARGS+=(--append-system-prompt "$CONTEXT")
 CLAUDE_ARGS+=(-n "orch:${WS_NAME}")
+# Skip permission prompts in orch-launched sessions. Stronger than the
+# `defaultMode: bypassPermissions` setting — overrides Claude Code's
+# structural-safety checks (e.g. $() substitution, for/while loops) that
+# bypass mode does not. Set ORCH_REQUIRE_PERMISSIONS=1 to opt out per-session.
+if [[ "${ORCH_REQUIRE_PERMISSIONS:-}" != "1" ]]; then
+    CLAUDE_ARGS+=(--dangerously-skip-permissions)
+fi
 if [[ -n "$PROMPT" ]]; then
     CLAUDE_ARGS+=("$PROMPT")
 fi
