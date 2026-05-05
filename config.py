@@ -37,6 +37,7 @@ DEFAULT_KEYS: dict[str, tuple[str, str, bool, bool]] = {
     "open_links": ("o", "", False, False),
     "toggle_archive": ("u", "Archive", False, False),
     "delete_item": ("d", "", False, False),
+    "toggle_trust": ("t", "", False, False),
     # Filters
     "filter('stale')": ("1", "", False, False),
     "filter('archived')": ("2", "", False, False),

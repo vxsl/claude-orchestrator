@@ -429,6 +429,7 @@ def _render_ws_option(
     tmux_check=None,
     line_width: int = 0,
     git_status=None,
+    trusted: bool = False,
 ) -> Text:
     """Render a workstream as a formatted 3-line OptionList entry.
 
@@ -484,7 +485,8 @@ def _render_ws_option(
         name_markup = f"[bold {C_GREEN}]{name_esc}[/bold {C_GREEN}]"
     else:
         name_markup = f"[{name_bold}{name_color}]{name_esc}[/{name_bold}{name_color}]"
-    line1 = f" {icon} {name_markup}{branch_markup}"
+    trust_markup = f" [{C_YELLOW}]⚠[/{C_YELLOW}]" if trusted else ""
+    line1 = f" {icon} {name_markup}{trust_markup}{branch_markup}"
 
     # ── Line 2: metadata chain separated by dim dots ──
     sep = f" [{C_FAINT}]·[/{C_FAINT}] "

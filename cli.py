@@ -695,6 +695,43 @@ def cmd_import(args):
     print(f"  {_c('green', '\u2713')} Imported {len(imported)} workstreams.")
 
 
+# ─── Trust ───────────────────────────────────────────────────────────
+
+def cmd_trust(args):
+    """Manage the trusted-projects list. Trusted cwds launch Claude with
+    --dangerously-skip-permissions to override Claude Code's structural
+    safety prompts."""
+    import trust
+
+    action = args.trust_action or "list"
+
+    if action == "list":
+        paths = trust.list_trusted()
+        if not paths:
+            print(_c("dim", "  No trusted projects."))
+            print(_c("dim", "  Add one with: orch trust add [path]  (defaults to cwd)"))
+            return
+        print(f"  {_c('bold', 'Trusted projects:')}")
+        for p in paths:
+            print(f"  {_c('green', '✓')} {p}")
+        return
+
+    raw = args.path if getattr(args, "path", None) else os.getcwd()
+    norm = str(Path(raw).expanduser().resolve())
+
+    if action == "add":
+        if trust.add(norm):
+            print(f"  {_c('green', '✓')} Trusted: {norm}")
+            print(_c("dim", "  New orch sessions in this tree will skip permission prompts."))
+        else:
+            print(f"  {_c('dim', 'Already trusted:')} {norm}")
+    elif action in ("rm", "remove"):
+        if trust.remove(norm):
+            print(f"  {_c('yellow', '×')} Removed: {norm}")
+        else:
+            print(f"  {_c('dim', 'Not in trust list:')} {norm}")
+
+
 # ─── Cleanup ─────────────────────────────────────────────────────────
 
 def cmd_cleanup_idle(args):
@@ -1141,6 +1178,29 @@ you can still resume any killed session with `claude --resume <id>`.
     p_cleanup.add_argument("--dry-run", action="store_true",
                            help="Preview only, do not kill")
 
+    # trust
+    p_trust = sub.add_parser("trust", help="Manage trusted projects (skip permission prompts)",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""\
+examples:
+  orch trust                           List trusted projects
+  orch trust list                      List trusted projects
+  orch trust add                       Trust the current directory
+  orch trust add ~/dev/money           Trust a specific path
+  orch trust rm ~/dev/money            Remove a path from the trust list
+
+trusted cwds launch Claude with --dangerously-skip-permissions, which
+overrides Claude Code's structural-safety prompts (e.g. for-loops, $()
+substitution) that the bypassPermissions setting cannot suppress.
+trust applies to the path and all descendants.
+""")
+    p_trust_sub = p_trust.add_subparsers(dest="trust_action")
+    p_trust_sub.add_parser("list", help="List trusted projects")
+    p_trust_add = p_trust_sub.add_parser("add", help="Add a project to the trust list")
+    p_trust_add.add_argument("path", nargs="?", help="Absolute or relative path (default: cwd)")
+    p_trust_rm = p_trust_sub.add_parser("rm", aliases=["remove"], help="Remove a project from the trust list")
+    p_trust_rm.add_argument("path", nargs="?", help="Path (default: cwd)")
+
     # completions
     p_comp = sub.add_parser("completions", help="Generate shell completion script",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -1178,6 +1238,7 @@ examples:
         "import": cmd_import,
         "seed": cmd_seed,
         "cleanup-idle": cmd_cleanup_idle,
+        "trust": cmd_trust,
         "completions": cmd_completions,
     }
 

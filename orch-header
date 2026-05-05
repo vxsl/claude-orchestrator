@@ -170,8 +170,10 @@ def render(args, start_time, session_cache):
     gap1 = max(2, cols - len(display_title) - 1 - r1_plain - 1)
     line1 = f'{BG} {BLD}{W}{display_title}{X}{" " * gap1}{r1_text} '
 
-    # ── Line 2: ORCH  ws  status  category  │  msgs tokens duration age ───────
+    # ── Line 2: ORCH  ws  status  category  [no-perms]  │  msgs tokens ... ──
     l2 = f'{BG} {B}ORCH{X}  {P}{args.ws_name}{X}  {sc}{args.ws_status}{X}  {cc}{args.ws_category}{X}'
+    if args.trusted:
+        l2 += f'  {BLD}{Y}⚠ no-perms{X}'
     r2_parts = []
     if msgs > 0:
         r2_parts.append(f'{D}{msgs}↑{asst_msgs}↓{X}')
@@ -239,6 +241,8 @@ def main():
     parser.add_argument('--session-id',  default='')
     parser.add_argument('--jsonl',       default='')
     parser.add_argument('--title',       default='')
+    parser.add_argument('--trusted',     action='store_true',
+                        help='Session launched with --dangerously-skip-permissions')
     args = parser.parse_args()
 
     orch_dir = Path(__file__).resolve().parent

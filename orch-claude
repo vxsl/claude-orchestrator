@@ -37,6 +37,21 @@ done
 ORCH_DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
 CWD="${CWD:-$HOME}"
 
+# ─── Resolve trust status for this cwd ──────────────────────────
+# Trusted projects launch Claude with --dangerously-skip-permissions,
+# which is stronger than `defaultMode: bypassPermissions` and overrides
+# Claude Code's structural-safety prompts (e.g. $() substitution,
+# for/while loops). Manage the list with: orch trust add/rm/list.
+# ORCH_REQUIRE_PERMISSIONS=1 forces strict mode regardless.
+TRUSTED="false"
+if [[ "${ORCH_REQUIRE_PERMISSIONS:-}" != "1" ]]; then
+    TRUSTED=$(python3 -c "
+import sys; sys.path.insert(0, '$ORCH_DIR')
+from trust import is_trusted
+print('true' if is_trusted('$CWD') else 'false')
+" 2>/dev/null) || TRUSTED="false"
+fi
+
 # ─── Sync slash commands to ~/.claude/commands/ ──────────────────
 CMDS_SRC="${ORCH_DIR}/commands"
 CMDS_DST="$HOME/.claude/commands"
@@ -142,6 +157,7 @@ HEADER_ARGS=(
     --jsonl "$JSONL_PATH"
 )
 [[ -n "$INITIAL_TITLE" ]] && HEADER_ARGS+=(--title "$INITIAL_TITLE")
+[[ "$TRUSTED" == "true" ]] && HEADER_ARGS+=(--trusted)
 
 HEADER_PANE=$(tmux split-window -b -l 3 -P -F '#{pane_id}' "${HEADER_ARGS[@]}")
 
@@ -219,11 +235,7 @@ else
 fi
 CLAUDE_ARGS+=(--append-system-prompt "$CONTEXT")
 CLAUDE_ARGS+=(-n "orch:${WS_NAME}")
-# Skip permission prompts in orch-launched sessions. Stronger than the
-# `defaultMode: bypassPermissions` setting — overrides Claude Code's
-# structural-safety checks (e.g. $() substitution, for/while loops) that
-# bypass mode does not. Set ORCH_REQUIRE_PERMISSIONS=1 to opt out per-session.
-if [[ "${ORCH_REQUIRE_PERMISSIONS:-}" != "1" ]]; then
+if [[ "$TRUSTED" == "true" ]]; then
     CLAUDE_ARGS+=(--dangerously-skip-permissions)
 fi
 if [[ -n "$PROMPT" ]]; then

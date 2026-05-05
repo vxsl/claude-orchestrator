@@ -1513,7 +1513,7 @@ class OrchestratorApp(App):
             olist.highlighted = 0
 
     @staticmethod
-    def _ws_fingerprint(ws, ws_sessions, has_tmux, git_st, lw, last_seen=None) -> tuple:
+    def _ws_fingerprint(ws, ws_sessions, has_tmux, git_st, lw, last_seen=None, trusted=False) -> tuple:
         """Cheap fingerprint capturing all inputs to _render_ws_option."""
         sess_fp = tuple(
             (s.session_id, s.is_live, s.last_message_role, s.last_activity,
@@ -1524,7 +1524,7 @@ class OrchestratorApp(App):
         git_fp = (git_st.branch, git_st.is_dirty, git_st.ahead) if git_st else None
         from datetime import date as _date
         return (ws.id, ws.name, ws.archived, ws.category, len(ws_sessions),
-                sess_fp, has_tmux, git_fp, lw, _date.today())
+                sess_fp, has_tmux, git_fp, lw, _date.today(), trusted)
 
     @perf_trace()
     def _do_refresh_ws_table(self):
@@ -1550,6 +1550,7 @@ class OrchestratorApp(App):
         today_flags = []
         new_cache = {}
         rerendered_ids: set[str] = set()
+        import trust as _trust
         for ws in items:
             ws_sessions = self.state.sessions_for_ws(ws)
             git_st = None
@@ -1557,7 +1558,8 @@ class OrchestratorApp(App):
             if repo:
                 git_st = self.state.git_status_cache.get(repo)
             has_tmux = self.state.ws_has_tmux(ws)
-            fp = self._ws_fingerprint(ws, ws_sessions, has_tmux, git_st, lw, last_seen)
+            trusted = _trust.is_trusted(repo) if repo else False
+            fp = self._ws_fingerprint(ws, ws_sessions, has_tmux, git_st, lw, last_seen, trusted)
             cached = render_cache.get(ws.id)
             if cached and cached[0] == fp:
                 prompt = cached[1]
@@ -1567,6 +1569,7 @@ class OrchestratorApp(App):
                     tmux_check=self.state.ws_has_tmux,
                     line_width=lw,
                     git_status=git_st,
+                    trusted=trusted,
                 )
                 rerendered_ids.add(ws.id)
             new_cache[ws.id] = (fp, prompt)
@@ -1978,6 +1981,54 @@ class OrchestratorApp(App):
                 ConfirmScreen(f"[bold {C_RED}]Delete[/bold {C_RED}] [bold]{_rich_escape(ws.name)}[/bold]?"),
                 callback=on_confirm,
             )
+
+    def action_toggle_trust(self):
+        """Toggle the trusted-projects entry for the focused workstream's cwd.
+        Trusted cwds launch Claude with --dangerously-skip-permissions."""
+        import trust
+        from pathlib import Path
+
+        ws = self._selected_ws()
+        if not ws:
+            return
+        cwd = ws.repo_path
+        if not cwd:
+            self.notify(
+                f"No cwd set for {ws.name} — link a worktree or repo first",
+                severity="warning", timeout=3,
+            )
+            return
+        try:
+            norm = str(Path(cwd).expanduser().resolve())
+        except Exception:
+            self.notify(f"Invalid cwd: {cwd}", severity="error", timeout=3)
+            return
+
+        currently_trusted = trust.is_trusted(norm)
+
+        if currently_trusted:
+            msg = (
+                f"[bold]Untrust[/bold] [bold {C_YELLOW}]{_rich_escape(norm)}[/bold {C_YELLOW}]?\n"
+                f"[{C_DIM}]New sessions will require permission prompts.[/{C_DIM}]"
+            )
+        else:
+            msg = (
+                f"[bold {C_YELLOW}]⚠ Trust[/bold {C_YELLOW}] [bold]{_rich_escape(norm)}[/bold]?\n"
+                f"[{C_DIM}]All sessions launched in this tree will skip[/{C_DIM}]\n"
+                f"[{C_DIM}]all permission prompts (--dangerously-skip-permissions).[/{C_DIM}]"
+            )
+
+        def on_confirm(confirmed: bool):
+            if not confirmed:
+                return
+            now_trusted = trust.toggle(norm)
+            if now_trusted:
+                self.notify(f"Trusted: {norm}", timeout=3)
+            else:
+                self.notify(f"Untrusted: {norm}", timeout=3)
+            self._refresh_ws_table()
+
+        self.push_screen(ConfirmScreen(msg), callback=on_confirm)
 
     # ── Brain dump ──
 
