@@ -383,6 +383,17 @@ class OrchestratorApp(App):
     def on_mount(self):
         ws_table = self.query_one("#ws-table", OptionList)
 
+        # Defensive cleanup: prior bugs (e.g. prunable-worktree runaway) have
+        # filled the store with empty archived placeholders. Sweep them once
+        # at startup so subsequent loads/saves stay fast.
+        try:
+            pruned = self.state.store.prune_orphan_archived()
+        except Exception:
+            pruned = 0
+        if pruned:
+            self.state.store.save()
+            self.notify(f"Pruned {pruned} orphan archived workstreams", timeout=3)
+
         self._refresh_ws_table()
         self._load_sessions()
 
