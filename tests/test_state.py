@@ -16,7 +16,7 @@ from threads import Thread, ThreadActivity
 from state import (
     AppState, fuzzy_match, fuzzy_filter,
     extract_snippet, search_session_content, content_search,
-    SearchHit, SessionSearchResult,
+    SearchHit, SessionSearchResult, _path_matches_dir,
 )
 from sessions import SessionMessage
 
@@ -1800,3 +1800,22 @@ class TestDiscoverNonRepoWorkstreams:
             changed = state.discover_non_repo_workstreams()
         assert changed is False
         assert len(state.store.active) == 0
+
+
+class TestPathMatchesDir:
+    """A non-repo workstream must not over-claim subdirectory sessions."""
+
+    def test_repo_dir_matches_subdirectory(self):
+        with patch("state._git_toplevel", return_value="/repo"):
+            assert _path_matches_dir("/repo/sub", "/repo") is True
+            assert _path_matches_dir("/repo", "/repo") is True
+
+    def test_non_repo_dir_only_matches_exact(self):
+        """Home dir (~) should not claim sessions from /home/kyle/dev/foo."""
+        with patch("state._git_toplevel", return_value=None):
+            assert _path_matches_dir("/home/kyle", "/home/kyle") is True
+            assert _path_matches_dir("/home/kyle/dev/foo", "/home/kyle") is False
+
+    def test_no_match_for_unrelated_path(self):
+        with patch("state._git_toplevel", return_value="/repo"):
+            assert _path_matches_dir("/other", "/repo") is False

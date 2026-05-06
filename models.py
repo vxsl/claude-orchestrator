@@ -225,19 +225,30 @@ class Store:
         self.path = path or Path.home() / "dev" / "claude-orchestrator" / "data.json"
         self.workstreams: list[Workstream] = []
         self._known_todo_ids: set[str] = set()  # todo IDs seen at last load
+        self._loaded_mtime: float = 0.0  # mtime at last successful load
         self.load()
 
-    def load(self):
-        if self.path.exists():
-            try:
-                data = json.loads(self.path.read_text())
-                self.workstreams = [Workstream.from_dict(w) for w in data.get("workstreams", [])]
-            except (json.JSONDecodeError, KeyError, TypeError) as e:
-                print(f"Warning: could not load {self.path}: {e}")
-                self.workstreams = []
-        else:
+    def load(self, *, force: bool = False):
+        """Load workstreams from disk. Skips re-read when mtime is unchanged."""
+        if not self.path.exists():
+            self.workstreams = []
+            self._known_todo_ids = set()
+            self._loaded_mtime = 0.0
+            return
+        try:
+            current_mtime = self.path.stat().st_mtime
+        except OSError:
+            current_mtime = 0.0
+        if not force and current_mtime == self._loaded_mtime and self.workstreams:
+            return  # disk hasn't changed since our last load
+        try:
+            data = json.loads(self.path.read_text())
+            self.workstreams = [Workstream.from_dict(w) for w in data.get("workstreams", [])]
+        except (json.JSONDecodeError, KeyError, TypeError) as e:
+            print(f"Warning: could not load {self.path}: {e}")
             self.workstreams = []
         self._known_todo_ids = {t.id for ws in self.workstreams for t in ws.todos}
+        self._loaded_mtime = current_mtime
 
     def save(self):
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -248,6 +259,10 @@ class Store:
         self.path.write_text(json.dumps(data, indent=2) + "\n")
         # Update known IDs so next save knows about everything we just wrote
         self._known_todo_ids = {t.id for ws in self.workstreams for t in ws.todos}
+        try:
+            self._loaded_mtime = self.path.stat().st_mtime
+        except OSError:
+            self._loaded_mtime = 0.0
 
     def _merge_external_todos(self):
         """Merge externally-added entries into in-memory workstreams before saving.
@@ -322,6 +337,36 @@ class Store:
         self.backup()
         self.workstreams = [w for w in self.workstreams if w.id != ws_id]
         self.save()
+
+    def prune_orphan_archived(self) -> int:
+        """Drop archived workstreams whose only links are to deleted paths and
+        which carry no user content (notes/todos/description/session refs).
+
+        Defensive against the prunable-worktree-runaway pattern that bloated
+        data.json with tens of thousands of empty placeholders. Returns the
+        number of workstreams dropped. Caller is responsible for calling save().
+        """
+        def is_orphan(w: Workstream) -> bool:
+            if not w.archived:
+                return False
+            if w.thread_ids or w.notes or w.todos:
+                return False
+            if w.description or w.archived_sessions:
+                return False
+            if w.shelved_sessions or w.deleted_sessions:
+                return False
+            wt_links = [l for l in w.links if l.kind in ("worktree", "file")]
+            if not wt_links:
+                return False
+            for link in wt_links:
+                expanded = os.path.expanduser(link.value).rstrip("/")
+                if os.path.isdir(expanded):
+                    return False  # at least one path still exists
+            return True
+
+        before = len(self.workstreams)
+        self.workstreams = [w for w in self.workstreams if not is_orphan(w)]
+        return before - len(self.workstreams)
 
     def get(self, ws_id: str) -> Optional[Workstream]:
         """Get by exact ID or prefix match."""

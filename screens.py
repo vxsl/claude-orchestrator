@@ -1463,10 +1463,98 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         return hasattr(app, 'state') and not app.state.sessions_loaded
 
     def _tick_throbber(self):
-        """Animate thinking-session icons at ~10fps."""
-        if self._animating_sessions or self._animating_archived:
-            self._throbber_frame += 1
-            self._rebuild_all_options()
+        """Animate thinking-session icons at ~10fps.
+
+        Targets only the rows that have an animating activity instead of
+        rebuilding every option. With ~30 sessions and 1-2 animating, this
+        cuts per-tick markup work from N rows to K rows.
+        """
+        if not (self._animating_sessions or self._animating_archived):
+            return
+        self._throbber_frame += 1
+
+        # Don't overwrite content-search results or peek content.
+        if self._content_search_active or self._peek_mode:
+            return
+
+        elevated_acts = (ThreadActivity.AWAITING_INPUT, ThreadActivity.RESPONSE_READY)
+        last_seen = self._last_seen_cache
+        notif_map = self._session_notifications
+        shelved = self._shelved_set
+        repo = self.ws.repo_path
+        sessions_by_sid = {s.session_id: s for s in self._detail_sessions}
+        archived_by_sid = {s.session_id: s for s in self._archived_sessions}
+
+        try:
+            olist = self.query_one("#detail-sessions", OptionList)
+        except Exception:
+            return
+        try:
+            arch_olist = self.query_one("#detail-archived", OptionList)
+        except Exception:
+            arch_olist = None
+
+        lw = self._session_line_width("#detail-sessions")
+
+        with self.app.batch_update():
+            for idx, _act in self._animating_sessions:
+                if idx >= olist.option_count:
+                    continue
+                try:
+                    opt = olist.get_option_at_index(idx)
+                except Exception:
+                    continue
+                sid = opt.id or ""
+                if not sid or sid.startswith("__"):
+                    continue  # separator
+                s = sessions_by_sid.get(sid)
+                if not s:
+                    continue
+                cur_act = session_activity(s, last_seen)
+                seen = _is_session_seen(s, last_seen)
+                if sid in notif_map:
+                    prompt = _render_notified_session_option(
+                        s, cur_act, notif_map[sid], self._throbber_frame,
+                        ws_repo_path=repo, seen=seen, line_width=lw,
+                    )
+                elif not seen and cur_act in elevated_acts:
+                    prompt = _render_notified_session_option(
+                        s, cur_act, None, self._throbber_frame,
+                        ws_repo_path=repo, seen=seen, line_width=lw,
+                    )
+                else:
+                    is_shelved = sid in shelved
+                    prompt = _render_session_option(
+                        s, cur_act, self._throbber_frame,
+                        ws_repo_path=repo, seen=seen, line_width=lw,
+                        shelved=is_shelved,
+                    )
+                olist.replace_option_prompt_at_index(idx, prompt)
+
+            if arch_olist is not None and self._animating_archived:
+                alw = self._session_line_width("#detail-archived")
+                for idx, _act in self._animating_archived:
+                    if idx >= arch_olist.option_count:
+                        continue
+                    try:
+                        opt = arch_olist.get_option_at_index(idx)
+                    except Exception:
+                        continue
+                    oid = opt.id or ""
+                    if not oid.startswith("a:"):
+                        continue
+                    sid = oid[2:]
+                    s = archived_by_sid.get(sid)
+                    if not s:
+                        continue
+                    cur_act = session_activity(s, last_seen)
+                    seen = _is_session_seen(s, last_seen)
+                    prompt = _render_session_option(
+                        s, cur_act, self._throbber_frame,
+                        ws_repo_path=repo, seen=seen, line_width=alw,
+                        archived=True,
+                    )
+                    arch_olist.replace_option_prompt_at_index(idx, prompt)
 
     def _tick_loading(self):
         """Animate the loading spinner while sessions are being discovered."""

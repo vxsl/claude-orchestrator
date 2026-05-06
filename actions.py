@@ -300,11 +300,12 @@ def find_sessions_for_ws(ws: Workstream, all_sessions: list[ClaudeSession]) -> l
                 ws_dirs.add(expanded)
 
     if ws_dirs:
+        from state import _path_matches_dir
         for s in all_sessions:
             if s.session_id in seen:
                 continue
             sp = s.project_path.rstrip("/")
-            if sp in ws_dirs or any(sp.startswith(d + "/") for d in ws_dirs):
+            if any(_path_matches_dir(sp, d) for d in ws_dirs):
                 found.append(s)
                 seen.add(s.session_id)
 
@@ -701,6 +702,13 @@ def discover_worktrees(repo_paths: list[str]) -> list[dict]:
 
             if wt.get("bare"):
                 continue
+            # Prunable worktrees: git tracks them, but the directory has been
+            # deleted. Creating a workstream for one would just get auto-archived
+            # on the next poll (path-doesn't-exist check in
+            # discover_and_enrich_worktrees), then re-created next time, then
+            # archived again — a runaway loop that fills data.json with dupes.
+            if wt.get("prunable"):
+                continue
 
             branch = wt.get("branch", "")
             is_primary = (path == repo.rstrip("/"))
@@ -747,7 +755,7 @@ def run_dev_tool(tool_name: str, args: list[str] | None = None,
 def get_worktree_list(repo_path: str) -> list[dict]:
     """Get all git worktrees for a repo.
 
-    Returns list of dicts with: path, branch, bare, HEAD.
+    Returns list of dicts with: path, branch, bare, HEAD, prunable.
     """
     worktrees = []
     try:
@@ -774,6 +782,8 @@ def get_worktree_list(repo_path: str) -> list[dict]:
                 current["branch"] = branch
             elif line == "bare":
                 current["bare"] = True
+            elif line == "prunable" or line.startswith("prunable "):
+                current["prunable"] = True
         if current:
             worktrees.append(current)
     except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
