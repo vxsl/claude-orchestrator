@@ -34,6 +34,7 @@ class TodoItem:
     context: str = ""  # extra instructions for spawning a session
     created_at: str = field(default_factory=lambda: datetime.now().isoformat())
     origin: str = "manual"  # "manual" or "crystallized"
+    report: str = ""  # implementer's writeback (auto-mode loop)
 
 
 @dataclass
@@ -80,6 +81,7 @@ class Workstream:
     created_at: str = field(default_factory=lambda: datetime.now().isoformat())
     updated_at: str = field(default_factory=lambda: datetime.now().isoformat())
     last_user_activity: str = ""  # timestamp of last user message (for stable sorting)
+    auto_done_reason: str = ""  # set by `orch distill done` to signal auto-mode loop should exit
 
     def __post_init__(self):
         # Sanitize name: strip whitespace, fix "UB-XXXX: UB-XXXX" redundancy
@@ -180,10 +182,12 @@ class Workstream:
         d.setdefault("last_user_activity", "")
         d.setdefault("repo_path", "")
         d.setdefault("todos", [])
+        d.setdefault("auto_done_reason", "")
         todos = []
         for t in d["todos"]:
             if isinstance(t, dict):
                 t.setdefault("origin", "manual")
+                t.setdefault("report", "")
                 todos.append(TodoItem(**t))
             else:
                 todos.append(t)

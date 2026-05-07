@@ -520,9 +520,51 @@ def cmd_distill(args):
         print(f"  {_c('green', '✓')} Continuation context saved for {_c('bold', ws.name)}")
         print(f"    {_c('dim', 'Next session on this workstream will pick it up automatically.')}")
 
+    elif mode == "done":
+        reason = (args.reason or "").strip() or "Coordinator declared the workstream complete."
+        ws.auto_done_reason = reason
+        store.update(ws)
+        print(f"  {_c('green', '✓')} Auto-mode termination signaled for {_c('bold', ws.name)}")
+        print(f"    {_c('dim', 'reason:')} {reason}")
+
     else:
         print(_c("red", f"  Unknown distill mode: {mode}"))
         sys.exit(1)
+
+
+def cmd_report(args):
+    """Implementer writeback to a crystallized todo (auto-mode loop)."""
+    store = Store()
+    todo_id = args.todo_id
+    text = args.text
+    if text == "-":
+        text = sys.stdin.read()
+    text = (text or "").strip()
+    if not text:
+        print(_c("red", "  Report text is empty."))
+        sys.exit(1)
+
+    # Find the todo across all workstreams. Todo IDs are 8-char UUIDs;
+    # collisions are vanishingly rare. Scope to ORCH_WS_ID first if set.
+    scoped_id = os.environ.get("ORCH_WS_ID", "")
+    candidates = []
+    if scoped_id:
+        ws = store.get(scoped_id)
+        if ws:
+            candidates.append(ws)
+    if not candidates:
+        candidates = store.workstreams
+
+    for ws in candidates:
+        for todo in ws.todos:
+            if todo.id == todo_id or todo.id.startswith(todo_id):
+                todo.report = text
+                todo.done = True
+                store.update(ws)
+                print(f"  {_c('green', '✓')} Report saved for todo {_c('bold', todo.id)} on {_c('bold', ws.name)}")
+                return
+    print(_c("red", f"  No todo found with ID {todo_id}"))
+    sys.exit(1)
 
 
 def cmd_export(args):
@@ -1104,19 +1146,20 @@ and description as context. uses the worktree path as working directory.
     p_spawn.add_argument("id", help="Workstream ID (or prefix)")
 
     # distill
-    p_distill = sub.add_parser("distill", help="Distill session context (compact or crystallize)",
+    p_distill = sub.add_parser("distill", help="Distill session context (compact, crystallize, done)",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""\
 examples:
   orch distill crystallize --text "Refactor auth middleware" --context "..."
   orch distill compact --summary "We investigated X and decided Y..."
+  orch distill done --reason "all crystallized todos are complete"
   echo "long context" | orch distill crystallize --text "task" --context -
 
 auto-detects workstream from ORCH_WS_ID env var (set by orch-claude),
 or pass --ws-id explicitly.
 """)
-    p_distill.add_argument("distill_mode", choices=["compact", "crystallize"],
-                           help="compact: save context for next session. crystallize: save as todo.")
+    p_distill.add_argument("distill_mode", choices=["compact", "crystallize", "done"],
+                           help="compact: save context. crystallize: save as todo. done: signal auto-mode to exit.")
     p_distill.add_argument("--ws-id", dest="ws_id",
                            help="Workstream ID (default: ORCH_WS_ID env var)")
     p_distill.add_argument("--text", "-t",
@@ -1125,6 +1168,25 @@ or pass --ws-id explicitly.
                            help="Detailed context (crystallize) or ignored. Use '-' for stdin.")
     p_distill.add_argument("--summary", "-s",
                            help="Continuation summary (compact mode). Use '-' for stdin.")
+    p_distill.add_argument("--reason", "-r",
+                           help="Why the workstream is done (done mode, optional)")
+
+    # report (auto-mode implementer writeback)
+    p_report = sub.add_parser("report", help="Implementer writeback to a crystallized todo (auto-mode)",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""\
+examples:
+  orch report --todo-id abc12345 --text "Implemented X by doing Y. Tests pass."
+  echo "long report" | orch report --todo-id abc12345 --text -
+
+writes the report onto the todo and marks it done. used by implementer sessions
+in auto-mode to signal completion back to the coordinator. ORCH_WS_ID scopes
+the search if set; otherwise scans all workstreams.
+""")
+    p_report.add_argument("--todo-id", dest="todo_id", required=True,
+                          help="Todo ID (8-char UUID, prefix-matched)")
+    p_report.add_argument("--text", "-t", required=True,
+                          help="Report text. Use '-' for stdin.")
 
     # export
     p_export = sub.add_parser("export", help="Export active workstreams as markdown",
@@ -1234,6 +1296,7 @@ examples:
         "watch": cmd_watch,
         "spawn": cmd_spawn,
         "distill": cmd_distill,
+        "report": cmd_report,
         "export": cmd_export,
         "import": cmd_import,
         "seed": cmd_seed,
