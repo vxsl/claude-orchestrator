@@ -2307,13 +2307,105 @@ class OrchestratorApp(App):
         )
         self._auto_modes[ws_id] = mode
         self.notify("[auto] auto mode started", timeout=3)
+
+        # Watchdog: detect & auto-respond to claude usage-quota prompts.
+        watchdog_cancel = _asyncio.Event()
+        watchdog_task = _asyncio.create_task(
+            self._watch_quota_stalls(ws_id, watchdog_cancel),
+        )
+
         try:
             result = await mode.run()
             self.notify(f"[auto] loop ended: {result}", timeout=6)
         except Exception as e:
             self.notify(f"[auto] loop error: {e}", timeout=6)
         finally:
+            watchdog_cancel.set()
+            try:
+                await _asyncio.wait_for(watchdog_task, timeout=2)
+            except (_asyncio.TimeoutError, _asyncio.CancelledError):
+                watchdog_task.cancel()
             self._auto_modes.pop(ws_id, None)
+
+    async def _watch_quota_stalls(self, ws_id: str, cancel) -> None:
+        """Detect & auto-respond to quota stalls in any live session for
+        this workstream while auto-mode is running.
+
+        Polls every 15s. Requires two consecutive observations before
+        injecting Enter (so a transient mention of 'limit' doesn't
+        trigger and the user gets ~30s to intervene manually). Once
+        injected, won't re-fire on the same session until the stall
+        clears.
+        """
+        import asyncio as _asyncio
+        import subprocess as _subprocess
+        from auto_mode import detect_quota_stall
+        from terminal import TerminalWidget
+
+        INTERVAL = 15.0
+        OBSERVATIONS_BEFORE_RESPOND = 2
+
+        observed: dict[str, int] = {}      # session_id → consecutive stall observations
+        responded: set[str] = set()        # session_ids we've already injected for
+
+        while not cancel.is_set():
+            try:
+                await _asyncio.wait_for(cancel.wait(), timeout=INTERVAL)
+                return  # canceled
+            except _asyncio.TimeoutError:
+                pass  # interval elapsed; do a poll
+
+            try:
+                ws = self.state.store.get(ws_id)
+                if ws is None:
+                    continue
+                sessions = self.state.sessions_for_ws(ws)
+                live_sids = {s.session_id for s in sessions if s.is_live}
+
+                # Drop bookkeeping for sessions that are no longer live
+                for sid in list(observed):
+                    if sid not in live_sids:
+                        observed.pop(sid, None)
+                        responded.discard(sid)
+
+                for s in sessions:
+                    if not s.is_live:
+                        continue
+                    sid = s.session_id
+                    r = _subprocess.run(
+                        ["tmux", "-L", TerminalWidget.TMUX_SOCKET,
+                         "capture-pane", "-t", sid, "-p", "-S", "-100"],
+                        timeout=3, capture_output=True, text=True,
+                    )
+                    if r.returncode != 0:
+                        continue
+                    if detect_quota_stall(r.stdout):
+                        observed[sid] = observed.get(sid, 0) + 1
+                        if (observed[sid] >= OBSERVATIONS_BEFORE_RESPOND
+                                and sid not in responded):
+                            self.notify(
+                                f"[auto] quota stall in {sid[:8]} — sending Enter to wait",
+                                timeout=8,
+                            )
+                            try:
+                                _subprocess.run(
+                                    ["tmux", "-L", TerminalWidget.TMUX_SOCKET,
+                                     "send-keys", "-t", sid, "Enter"],
+                                    timeout=5, capture_output=True, check=True,
+                                )
+                                responded.add(sid)
+                            except Exception as e:
+                                self.notify(f"[auto] watchdog inject failed: {e}", timeout=4)
+                    else:
+                        if sid in responded:
+                            self.notify(f"[auto] {sid[:8]} resumed", timeout=4)
+                        observed.pop(sid, None)
+                        responded.discard(sid)
+            except _asyncio.CancelledError:
+                return
+            except Exception:
+                # Don't let watchdog crashes nuke the loop. Best-effort detection.
+                pass
 
     def action_spawn(self):
         ws = self._selected_ws()

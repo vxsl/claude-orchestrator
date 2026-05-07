@@ -13,6 +13,7 @@ from auto_mode import (
     build_coordinator_followup,
     build_coordinator_kickoff,
     build_implementer_brief,
+    detect_quota_stall,
     find_next_todo,
 )
 from models import Store, TodoItem, Workstream
@@ -83,6 +84,42 @@ class TestPromptBuilders:
         out = build_coordinator_kickoff(ws)
         assert "my-ws" in out
         assert "extract-orch-todo" in out or "crystallize" in out
+
+
+# ─── quota stall detection ───────────────────────────────────────────
+
+class TestDetectQuotaStall:
+    def test_empty_no_match(self):
+        assert detect_quota_stall("") is False
+        assert detect_quota_stall(None or "") is False
+
+    def test_normal_content_no_match(self):
+        assert detect_quota_stall("Working on the auth refactor. Tests pass.") is False
+
+    def test_5_hour_limit_matches(self):
+        pane = "Claude TUI ...\n5-hour limit reached.\n  a) wait until reset\n  b) ...\n"
+        assert detect_quota_stall(pane) is True
+
+    def test_usage_limit_matches(self):
+        assert detect_quota_stall("Your usage limit reached.") is True
+        assert detect_quota_stall("USAGE LIMIT REACHED — please wait.") is True
+
+    def test_wait_until_reset_matches(self):
+        assert detect_quota_stall(
+            "Please wait until your limit resets at 14:00 UTC."
+        ) is True
+
+    def test_rate_limit_matches(self):
+        assert detect_quota_stall("Error: rate limit reached") is True
+
+    def test_partial_word_no_match(self):
+        # "limit" alone shouldn't trigger — too generic
+        assert detect_quota_stall("The limit on this list is 100 items") is False
+
+    def test_case_insensitive(self):
+        assert detect_quota_stall("USAGE LIMIT REACHED") is True
+        assert detect_quota_stall("usage limit reached") is True
+        assert detect_quota_stall("Usage Limit Reached") is True
 
 
 # ─── AutoMode loop ──────────────────────────────────────────────────

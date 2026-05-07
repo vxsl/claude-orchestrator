@@ -21,6 +21,35 @@ from typing import Awaitable, Callable, Optional
 from models import Store, TodoItem, Workstream
 
 
+# Patterns indicating Claude has stalled on a usage-quota prompt and is
+# blocked waiting for the user to choose how to proceed. Lowercased
+# before matching. Conservative — only the most distinctive phrases so
+# benign session content (e.g. someone discussing rate limits) doesn't
+# trigger false positives.
+QUOTA_STALL_PATTERNS: tuple[str, ...] = (
+    "5-hour limit reached",
+    "usage limit reached",
+    "your usage limit",
+    "wait until your limit resets",
+    "limit will reset at",
+    "rate limit reached",
+)
+
+
+def detect_quota_stall(pane_text: str) -> bool:
+    """Return True if pane content suggests Claude is blocked on a
+    quota / usage-limit interactive prompt.
+
+    Caller is expected to have observed the same stall across two
+    consecutive polls before acting, so brief mentions of these
+    phrases in normal conversation don't trigger an unwanted Enter.
+    """
+    if not pane_text:
+        return False
+    lower = pane_text.lower()
+    return any(p in lower for p in QUOTA_STALL_PATTERNS)
+
+
 def find_next_todo(ws: Workstream) -> Optional[TodoItem]:
     """Next un-done crystallized todo, or None.
 
