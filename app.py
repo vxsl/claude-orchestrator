@@ -254,6 +254,8 @@ class OrchestratorApp(App):
         # usually for one ws — the remaining ~70 ws have unchanged
         # activity and shouldn't re-walk their sessions.
         self._ws_activity_cache: dict[str, tuple[int, "ThreadActivity", bool]] = {}
+        self._auto_modes: dict = {}  # ws_id → auto_mode.AutoMode (running loops)
+        self._auto_coord_sid: dict[str, str] = {}  # ws_id → coordinator session id
 
     def on_key(self, event) -> None:
         # Swallow tab / shift+tab so they don't cycle focus among widgets
@@ -2214,7 +2216,95 @@ class OrchestratorApp(App):
         self.push_screen(screen, callback=_on_dismiss)
         self._sync_tab_bar()
 
+    # ── Auto mode (coordinator/implementer loop) ──
 
+    def toggle_auto_mode(self, ws_id: str, screen_session_id: str) -> None:
+        """Cancel an existing auto-mode loop for this ws, or start a new one.
+
+        ws_id is the workstream. screen_session_id is the session the user
+        pressed ctrl+y on (used as coordinator only on first start). On
+        re-toggle from an implementer screen, the original coordinator
+        session is reused if it's still alive in tmux — that prevents an
+        implementer from accidentally promoting itself when the user
+        re-presses ctrl+y.
+        """
+        if not ws_id:
+            self.notify("[auto] workstream has no id", timeout=3)
+            return
+
+        running = self._auto_modes.get(ws_id)
+        if running is not None:
+            running.cancel()
+            self.notify("[auto] cancellation requested — will exit on next poll", timeout=3)
+            return
+
+        # First start (or restart after end). Reuse prior coordinator if alive.
+        from terminal import TerminalWidget
+        coord_sid = screen_session_id
+        prior = self._auto_coord_sid.get(ws_id)
+        if prior and prior != screen_session_id:
+            try:
+                if TerminalWidget.tmux_session_alive(prior):
+                    coord_sid = prior
+            except Exception:
+                pass
+        self._auto_coord_sid[ws_id] = coord_sid
+        self._run_auto_mode(ws_id, coord_sid)
+
+    @work(thread=False, exclusive=True, group="auto_mode")
+    async def _run_auto_mode(self, ws_id: str, coord_sid: str) -> None:
+        import asyncio as _asyncio
+        import subprocess as _subprocess
+        from auto_mode import AutoMode
+        from terminal import TerminalWidget
+
+        def inject(text: str) -> None:
+            # Write to coordinator's tmux session directly so we don't
+            # depend on its TerminalWidget still being mounted.
+            try:
+                _subprocess.run(
+                    ["tmux", "-L", TerminalWidget.TMUX_SOCKET,
+                     "send-keys", "-t", coord_sid, text, "Enter"],
+                    timeout=5, capture_output=True,
+                )
+            except Exception as e:
+                self.notify(f"[auto] inject failed: {e}", timeout=4)
+
+        async def spawn_implementer(brief: str) -> None:
+            done = _asyncio.Event()
+            loop = _asyncio.get_running_loop()
+
+            def cb(_result):
+                loop.call_soon_threadsafe(done.set)
+
+            ws = self.state.store.get(ws_id)
+            if ws is None:
+                done.set()
+                return
+            self.launch_claude_session(
+                ws, prompt=brief, reuse_pending=False, callback=cb,
+            )
+            await done.wait()
+
+        def notify(msg: str) -> None:
+            self.notify(f"[auto] {msg}", timeout=4)
+
+        mode = AutoMode(
+            store=self.state.store,
+            ws_id=ws_id,
+            spawn_implementer=spawn_implementer,
+            inject_coordinator=inject,
+            notify=notify,
+        )
+        self._auto_modes[ws_id] = mode
+        self.notify("[auto] auto mode started", timeout=3)
+        try:
+            result = await mode.run()
+            self.notify(f"[auto] loop ended: {result}", timeout=6)
+        except Exception as e:
+            self.notify(f"[auto] loop error: {e}", timeout=6)
+        finally:
+            self._auto_modes.pop(ws_id, None)
 
     def action_spawn(self):
         ws = self._selected_ws()

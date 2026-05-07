@@ -448,7 +448,6 @@ class ClaudeSessionScreen(Screen):
         self._zoomed_panel: str | None = None
         self._start_time = time.time()
         self._reattach_tmux = reattach_tmux  # reattach to surviving tmux session
-        self._auto_mode = None  # auto_mode.AutoMode | None — set while loop is running
 
         # Pre-compute everything compose() needs (no I/O in compose)
         self._sync_slash_commands()
@@ -870,60 +869,10 @@ class ClaudeSessionScreen(Screen):
     # ── C-y: auto mode (coordinator/implementer loop) ─────────────
 
     def action_toggle_auto_mode(self) -> None:
-        if self._auto_mode is not None:
-            self._auto_mode.cancel()
-            self.app.notify("[auto] cancellation requested — will exit on next poll", timeout=3)
-            return
-        if not self._ws.id:
-            self.app.notify("[auto] workstream has no id — can't run auto mode", timeout=3)
-            return
-        self._run_auto_mode()
-
-    def _inject_coordinator(self, text: str) -> None:
-        """Type text into this (coordinator) session's PTY, followed by Enter."""
-        try:
-            term = self.query_one("#cs-terminal", TerminalWidget)
-            term._write_to_pty(text + "\r")
-        except Exception:
-            pass
-
-    async def _spawn_implementer(self, brief: str) -> None:
-        """Push a fresh implementer ClaudeSessionScreen on top; resolve on dismiss."""
-        import asyncio
-        done = asyncio.Event()
-        loop = asyncio.get_running_loop()
-
-        def cb(_result):
-            loop.call_soon_threadsafe(done.set)
-
-        self.app.launch_claude_session(
-            self._ws, prompt=brief, reuse_pending=False, callback=cb,
-        )
-        await done.wait()
-
-    @work(thread=False, exclusive=True, group="auto_mode")
-    async def _run_auto_mode(self) -> None:
-        from auto_mode import AutoMode
-
-        def notify(msg: str) -> None:
-            self.app.notify(f"[auto] {msg}", timeout=4)
-
-        mode = AutoMode(
-            store=self._store,
-            ws_id=self._ws.id,
-            spawn_implementer=self._spawn_implementer,
-            inject_coordinator=self._inject_coordinator,
-            notify=notify,
-        )
-        self._auto_mode = mode
-        self.app.notify("[auto] auto mode started", timeout=3)
-        try:
-            result = await mode.run()
-            self.app.notify(f"[auto] loop ended: {result}", timeout=6)
-        except Exception as e:
-            self.app.notify(f"[auto] loop error: {e}", timeout=6)
-        finally:
-            self._auto_mode = None
+        # Delegate to the App so state is per-workstream, not per-screen.
+        # Pressing ctrl+y on an implementer screen cancels the running loop
+        # rather than starting a parallel one (which would spawn duplicates).
+        self.app.toggle_auto_mode(self._ws.id, self._session_id)
 
 
 # ── Helpers ───────────────────────────────────────────────────────────
