@@ -3420,6 +3420,68 @@ class ConfirmScreen(ModalScreen[bool]):
         self.dismiss(False)
 
 
+# ─── Auto-mode start: backlog vs fresh chooser ───────────────────────
+
+class AutoModeStartScreen(ModalScreen[str]):
+    """Asks how to start auto-mode when the workstream has a backlog of
+    crystallized todos. Returns one of: 'backlog', 'fresh', '' (cancel).
+    """
+
+    BINDINGS = [
+        Binding("b", "use_backlog", "Use backlog"),
+        Binding("f", "start_fresh", "Start fresh"),
+        Binding("escape,n,backspace,ctrl+h", "cancel", "Cancel"),
+    ]
+
+    DEFAULT_CSS = f"""
+    AutoModeStartScreen {{ align: center middle; }}
+    #auto-start-container {{
+        width: 64; height: auto; padding: 1 2;
+        background: {BG_BASE}; border: round {C_BLUE} 50%;
+    }}
+    #auto-start-title {{ text-style: bold; padding-bottom: 1; }}
+    #auto-start-msg {{ padding-bottom: 1; }}
+    .auto-opt {{ padding: 0 0 0 2; }}
+    #auto-start-hint {{ text-align: center; color: {C_DIM}; padding-top: 1; }}
+    """
+
+    def __init__(self, ws_name: str, backlog_count: int):
+        super().__init__()
+        self.ws_name = ws_name
+        self.backlog_count = backlog_count
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="auto-start-container"):
+            yield Static(f"Auto mode: [bold]{self.ws_name}[/bold]", id="auto-start-title")
+            n = self.backlog_count
+            plural = "todo" if n == 1 else "todos"
+            yield Static(
+                f"This workstream has [bold]{n}[/bold] crystallized {plural} in the backlog.",
+                id="auto-start-msg",
+            )
+            yield Static(
+                f"  [{C_BLUE}]b[/{C_BLUE}]  use existing backlog ({n} {plural})",
+                classes="auto-opt",
+            )
+            yield Static(
+                f"  [{C_BLUE}]f[/{C_BLUE}]  start fresh — skip backlog, coordinator crystallizes new",
+                classes="auto-opt",
+            )
+            yield Static(
+                f"[{C_DIM}]esc / n: cancel[/{C_DIM}]",
+                id="auto-start-hint",
+            )
+
+    def action_use_backlog(self) -> None:
+        self.dismiss("backlog")
+
+    def action_start_fresh(self) -> None:
+        self.dismiss("fresh")
+
+    def action_cancel(self) -> None:
+        self.dismiss("")
+
+
 # ─── Current Sessions Screen ─────────────────────────────────────────
 
 class CurrentSessionsScreen(_VimOptionListMixin, ModalScreen[None]):

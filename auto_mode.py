@@ -50,16 +50,26 @@ def detect_quota_stall(pane_text: str) -> bool:
     return any(p in lower for p in QUOTA_STALL_PATTERNS)
 
 
-def find_next_todo(ws: Workstream) -> Optional[TodoItem]:
+def find_next_todo(
+    ws: Workstream,
+    skip_ids: Optional[set] = None,
+) -> Optional[TodoItem]:
     """Next un-done crystallized todo, or None.
 
     Manual todos are intentionally skipped — auto mode only consumes
     crystallized briefs (implementers need rich context, not bare text).
+
+    skip_ids: todo IDs the loop should ignore (used by 'start fresh' mode
+    to leave existing backlog untouched while still processing todos
+    crystallized DURING the run).
     """
+    skip = skip_ids or set()
     for todo in ws.todos:
         if todo.archived or todo.done:
             continue
         if todo.origin != "crystallized":
+            continue
+        if todo.id in skip:
             continue
         return todo
     return None
@@ -116,6 +126,7 @@ class AutoMode:
         inject_coordinator: Callable[[str], None],
         notify: Optional[Callable[[str], None]] = None,
         poll_interval: float = 2.0,
+        skip_todo_ids: Optional[set] = None,
     ):
         self.store = store
         self.ws_id = ws_id
@@ -123,6 +134,7 @@ class AutoMode:
         self.inject_coordinator = inject_coordinator
         self.notify = notify or (lambda _: None)
         self.poll_interval = poll_interval
+        self.skip_todo_ids: set = set(skip_todo_ids) if skip_todo_ids else set()
 
         self.canceled = False
         self.iteration = 0
@@ -143,7 +155,7 @@ class AutoMode:
                 return None, "workstream not found"
             if ws.auto_done_reason:
                 return None, ws.auto_done_reason
-            todo = find_next_todo(ws)
+            todo = find_next_todo(ws, self.skip_todo_ids)
             if todo is not None:
                 return todo, ""
             await asyncio.sleep(self.poll_interval)
@@ -162,7 +174,7 @@ class AutoMode:
             ws.auto_done_reason = ""
             self.store.update(ws)
 
-        todo = find_next_todo(ws)
+        todo = find_next_todo(ws, self.skip_todo_ids)
         if todo is None:
             self.inject_coordinator(build_coordinator_kickoff(ws))
             self.notify("waiting for coordinator to crystallize first todo")

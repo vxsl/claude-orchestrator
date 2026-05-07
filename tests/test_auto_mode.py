@@ -54,6 +54,19 @@ class TestFindNextTodo:
         ws.todos = [TodoItem(text="a", origin="crystallized", done=True)]
         assert find_next_todo(ws) is None
 
+    def test_skip_ids_are_filtered(self):
+        ws = Workstream(name="x")
+        ws.todos = [
+            TodoItem(text="a", origin="crystallized", id="aaa00001"),
+            TodoItem(text="b", origin="crystallized", id="bbb00002"),
+        ]
+        # With no skip, picks first
+        assert find_next_todo(ws).text == "a"
+        # With skip on first, picks second
+        assert find_next_todo(ws, {"aaa00001"}).text == "b"
+        # With skip on both, returns None
+        assert find_next_todo(ws, {"aaa00001", "bbb00002"}) is None
+
 
 # ─── prompt builders ─────────────────────────────────────────────────
 

@@ -2221,6 +2221,10 @@ class OrchestratorApp(App):
     def toggle_auto_mode(self, ws_id: str, screen_session_id: str) -> None:
         """Cancel an existing auto-mode loop for this ws, or start a new one.
 
+        On start: if the workstream has a non-empty crystallized-undone
+        backlog, prompts the user to use it or skip it ("start fresh").
+        With no backlog, starts immediately.
+
         ws_id is the workstream. screen_session_id is the session the user
         pressed ctrl+y on (used as coordinator only on first start). On
         re-toggle from an implementer screen, the original coordinator
@@ -2238,7 +2242,35 @@ class OrchestratorApp(App):
             self.notify("[auto] cancellation requested — will exit on next poll", timeout=3)
             return
 
-        # First start (or restart after end). Reuse prior coordinator if alive.
+        ws = self.state.store.get(ws_id)
+        if ws is None:
+            self.notify("[auto] workstream not found", timeout=3)
+            return
+        backlog_ids = {
+            t.id for t in ws.todos
+            if t.origin == "crystallized" and not t.done and not t.archived
+        }
+
+        if not backlog_ids:
+            self._start_auto_mode(ws_id, screen_session_id, skip_ids=set())
+            return
+
+        # Non-empty backlog — let the user choose
+        from screens import AutoModeStartScreen
+
+        def on_choice(choice: str) -> None:
+            if choice == "backlog":
+                self._start_auto_mode(ws_id, screen_session_id, skip_ids=set())
+            elif choice == "fresh":
+                self._start_auto_mode(ws_id, screen_session_id, skip_ids=backlog_ids)
+            # else cancel
+
+        self.push_screen(
+            AutoModeStartScreen(ws.name, len(backlog_ids)),
+            callback=on_choice,
+        )
+
+    def _start_auto_mode(self, ws_id: str, screen_session_id: str, skip_ids: set) -> None:
         from terminal import TerminalWidget
         coord_sid = screen_session_id
         prior = self._auto_coord_sid.get(ws_id)
@@ -2249,10 +2281,10 @@ class OrchestratorApp(App):
             except Exception:
                 pass
         self._auto_coord_sid[ws_id] = coord_sid
-        self._run_auto_mode(ws_id, coord_sid)
+        self._run_auto_mode(ws_id, coord_sid, skip_ids)
 
     @work(thread=False, exclusive=True, group="auto_mode")
-    async def _run_auto_mode(self, ws_id: str, coord_sid: str) -> None:
+    async def _run_auto_mode(self, ws_id: str, coord_sid: str, skip_ids: set | None = None) -> None:
         import asyncio as _asyncio
         import subprocess as _subprocess
         from auto_mode import AutoMode
@@ -2304,9 +2336,16 @@ class OrchestratorApp(App):
             spawn_implementer=spawn_implementer,
             inject_coordinator=inject,
             notify=notify,
+            skip_todo_ids=skip_ids or set(),
         )
         self._auto_modes[ws_id] = mode
-        self.notify("[auto] auto mode started", timeout=3)
+        if skip_ids:
+            self.notify(
+                f"[auto] auto mode started (skipping {len(skip_ids)} backlog todos)",
+                timeout=4,
+            )
+        else:
+            self.notify("[auto] auto mode started", timeout=3)
 
         # Watchdog: detect & auto-respond to claude usage-quota prompts.
         watchdog_cancel = _asyncio.Event()
