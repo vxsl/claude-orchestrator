@@ -1038,7 +1038,11 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         color: {C_DIM};
     }}
     #detail-archived-pane {{
-        display: none;
+        /* Visibility is toggled in code (hidden during search). Do NOT set
+           display: none here — if the pane is hidden during compose, the
+           sessions pane measures at full width during _load_detail_sessions
+           and renders OptionList rows too wide; once the pane is shown,
+           sessions shrinks to 2fr but the rendered rows wrap. */
     }}
     #detail-lower {{
         height: 1fr;
@@ -1834,57 +1838,73 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         if self._peek_mode:
             return
 
-        olist = self.query_one("#detail-sessions", OptionList)
-        no_sess = self.query_one("#detail-no-sessions", Static)
-        if self._detail_sessions:
-            olist.display = True
-            no_sess.display = False
-            new_fp = self._detail_options_fingerprint()
-            if new_fp != self._last_build_fp:
-                old_sid = self._highlighted_session_id(olist)
-                old_idx = olist.highlighted
-                old_scroll_y = olist.scroll_y
-                self._build_session_list()
-                self._restore_highlight_by_sid(olist, self._detail_sessions, old_sid, old_idx)
-                olist.scroll_y = old_scroll_y
-        else:
-            olist.display = False
-            no_sess.display = True
-            if self._sessions_loading():
-                from rendering import THROBBER_FRAMES
-                frame = THROBBER_FRAMES[self._loading_frame % len(THROBBER_FRAMES)]
-                no_sess.update(f"[{C_CYAN}]{frame}[/{C_CYAN}] [{C_DIM}]Discovering sessions...[/{C_DIM}]")
-            else:
-                no_sess.update(f"[{C_DIM}]No sessions[/{C_DIM}]")
-
+        # Settle the archived pane visibility BEFORE measuring/building either
+        # OptionList. _build_session_list / _build_archived_list synchronously
+        # read OptionList.size.width, and that size is stale until the layout
+        # reflows after a display change. If we built first and toggled the
+        # pane second, sessions would render at full width and then wrap once
+        # the pane reflowed in at 1fr.
         arch_olist = self.query_one("#detail-archived", OptionList)
         no_arch = self.query_one("#detail-no-archived", Static)
         arch_pane = self.query_one("#detail-archived-pane")
+        arch_pane_was_hidden = not arch_pane.display
         arch_pane.display = True
-        if self._archived_sessions:
-            arch_olist.display = True
-            no_arch.display = False
-            # Skip rebuild if archived set hasn't changed
-            arch_fp = tuple(
-                (s.session_id, s.is_live, s.last_message_role)
-                for s in self._archived_sessions[:getattr(self, '_archived_show_count', self._ARCHIVED_PAGE_SIZE)]
-            )
-            if arch_fp != getattr(self, '_last_arch_fp', None):
-                self._last_arch_fp = arch_fp
-                old_sid = self._highlighted_session_id(arch_olist)
-                old_arch_idx = arch_olist.highlighted
-                old_arch_scroll_y = arch_olist.scroll_y
-                self._build_archived_list()
-                self._restore_highlight_by_sid(arch_olist, self._archived_sessions, old_sid, old_arch_idx)
-                arch_olist.scroll_y = old_arch_scroll_y
-        else:
-            arch_olist.display = False
-            no_arch.display = True
-            if self._active_pane == "archived":
-                self._active_pane = "sessions"
-                self.query_one("#detail-sessions", OptionList).focus()
 
-        self._update_pane_labels()
+        olist = self.query_one("#detail-sessions", OptionList)
+        no_sess = self.query_one("#detail-no-sessions", Static)
+
+        def _build_lists():
+            if self._detail_sessions:
+                olist.display = True
+                no_sess.display = False
+                new_fp = self._detail_options_fingerprint()
+                if new_fp != self._last_build_fp:
+                    old_sid = self._highlighted_session_id(olist)
+                    old_idx = olist.highlighted
+                    old_scroll_y = olist.scroll_y
+                    self._build_session_list()
+                    self._restore_highlight_by_sid(olist, self._detail_sessions, old_sid, old_idx)
+                    olist.scroll_y = old_scroll_y
+            else:
+                olist.display = False
+                no_sess.display = True
+                if self._sessions_loading():
+                    from rendering import THROBBER_FRAMES
+                    frame = THROBBER_FRAMES[self._loading_frame % len(THROBBER_FRAMES)]
+                    no_sess.update(f"[{C_CYAN}]{frame}[/{C_CYAN}] [{C_DIM}]Discovering sessions...[/{C_DIM}]")
+                else:
+                    no_sess.update(f"[{C_DIM}]No sessions[/{C_DIM}]")
+
+            if self._archived_sessions:
+                arch_olist.display = True
+                no_arch.display = False
+                arch_fp = tuple(
+                    (s.session_id, s.is_live, s.last_message_role)
+                    for s in self._archived_sessions[:getattr(self, '_archived_show_count', self._ARCHIVED_PAGE_SIZE)]
+                )
+                if arch_fp != getattr(self, '_last_arch_fp', None):
+                    self._last_arch_fp = arch_fp
+                    old_sid = self._highlighted_session_id(arch_olist)
+                    old_arch_idx = arch_olist.highlighted
+                    old_arch_scroll_y = arch_olist.scroll_y
+                    self._build_archived_list()
+                    self._restore_highlight_by_sid(arch_olist, self._archived_sessions, old_sid, old_arch_idx)
+                    arch_olist.scroll_y = old_arch_scroll_y
+            else:
+                arch_olist.display = False
+                no_arch.display = True
+                if self._active_pane == "archived":
+                    self._active_pane = "sessions"
+                    self.query_one("#detail-sessions", OptionList).focus()
+
+            self._update_pane_labels()
+
+        if arch_pane_was_hidden:
+            # Layout-reflow is async after a display change. Defer the build
+            # so OptionList.size reports the post-reflow width when measured.
+            self.call_after_refresh(_build_lists)
+        else:
+            _build_lists()
         if _PERF_ENABLED:
             _perf_log.warning(
                 "DetailScreen._load_detail_sessions: %.1fms (sessions=%d, archived=%d)",
@@ -2506,9 +2526,19 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         # Restore normal session lists and archived pane
         self._detail_sessions = list(self._all_sessions)
         self._archived_sessions = list(self._all_archived)
+        showed_pane = False
         if self._archived_sessions:
-            self.query_one("#detail-archived-pane").display = True
-        self._rebuild_session_lists()
+            arch_pane = self.query_one("#detail-archived-pane")
+            if not arch_pane.display:
+                arch_pane.display = True
+                showed_pane = True
+        # If we just toggled the pane visible, defer the rebuild so the layout
+        # has reflowed before _build_session_list measures the OptionList width
+        # — otherwise rows render at the old (full-width) size and wrap.
+        if showed_pane:
+            self.call_after_refresh(self._rebuild_session_lists)
+        else:
+            self._rebuild_session_lists()
         self._update_help_bar()
         # Return focus to the sessions list
         self.query_one("#detail-sessions", OptionList).focus()
@@ -2532,9 +2562,18 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
             self._content_results = []
             self._detail_sessions = list(self._all_sessions)
             self._archived_sessions = list(self._all_archived)
+            showed_pane = False
             if self._archived_sessions:
-                self.query_one("#detail-archived-pane").display = True
-            self._rebuild_session_lists()
+                arch_pane = self.query_one("#detail-archived-pane")
+                if not arch_pane.display:
+                    arch_pane.display = True
+                    showed_pane = True
+            # See _cancel_search for why we defer the rebuild after toggling
+            # the archived pane visible: layout must reflow before width measure.
+            if showed_pane:
+                self.call_after_refresh(self._rebuild_session_lists)
+            else:
+                self._rebuild_session_lists()
             return
         if self._content_ready:
             self._run_content_search_sync()
