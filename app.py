@@ -2260,12 +2260,21 @@ class OrchestratorApp(App):
 
         def inject(text: str) -> None:
             # Write to coordinator's tmux session directly so we don't
-            # depend on its TerminalWidget still being mounted.
+            # depend on its TerminalWidget still being mounted. Wrap in
+            # bracketed-paste markers so claude's TUI treats embedded
+            # newlines as paste content, not Enter; then send Enter
+            # separately to submit.
+            paste = f"\x1b[200~{text}\x1b[201~"
             try:
                 _subprocess.run(
                     ["tmux", "-L", TerminalWidget.TMUX_SOCKET,
-                     "send-keys", "-t", coord_sid, text, "Enter"],
-                    timeout=5, capture_output=True,
+                     "send-keys", "-t", coord_sid, "-l", paste],
+                    timeout=5, capture_output=True, check=True,
+                )
+                _subprocess.run(
+                    ["tmux", "-L", TerminalWidget.TMUX_SOCKET,
+                     "send-keys", "-t", coord_sid, "Enter"],
+                    timeout=5, capture_output=True, check=True,
                 )
             except Exception as e:
                 self.notify(f"[auto] inject failed: {e}", timeout=4)
