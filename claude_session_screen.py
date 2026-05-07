@@ -541,6 +541,13 @@ class ClaudeSessionScreen(Screen):
 
         args += ["-n", f"orch:{self._ws.name}"]
 
+        try:
+            from trust import is_trusted
+            if is_trusted(self._cwd):
+                args.append("--dangerously-skip-permissions")
+        except Exception:
+            pass
+
         if self._prompt and len(self._prompt) > 4000:
             prompt_path = spawn_dir / f"{self._session_id}.prompt"
             prompt_path.write_text(self._prompt)
