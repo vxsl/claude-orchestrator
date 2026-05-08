@@ -7,6 +7,10 @@ Drives the coordinator/implementer cycle for a workstream:
 - loop injects that summary into the coordinator's PTY and waits
 - coordinator runs `orch distill done` to terminate the loop
 
+If the coordinator goes silent after a followup (it generates text but
+takes neither of the two protocol actions), the loop re-injects a
+short nudge every NUDGE_INTERVAL_S seconds until something changes.
+
 Pure logic — no Textual imports. The TUI wires three callables:
   spawn_implementer(todo, brief) -> awaitable[None]
       Resolves whichever is sooner: todo.report becomes non-empty, OR
@@ -23,6 +27,8 @@ import asyncio
 from typing import Awaitable, Callable, Optional
 
 from models import Store, TodoItem, Workstream
+
+NUDGE_INTERVAL_S = 180.0  # 3 minutes of coordinator silence → re-prompt
 
 
 # Patterns indicating Claude has stalled on a usage-quota prompt and is
@@ -123,9 +129,23 @@ def build_coordinator_followup(todo: TodoItem, report: str) -> str:
     return (
         f"[auto-mode] Implementer for todo '{todo.text}' has finished.\n\n"
         f"Report:\n{report}\n\n"
-        f"Decide what's next: crystallize another todo with "
-        f"/user:extract-orch-todo (or `orch distill crystallize`), or run "
-        f"`orch distill done --reason '...'` if the workstream is complete."
+        f"⚠ AUTO-MODE PROTOCOL — take exactly ONE action right now:\n"
+        f"  (a) /user:extract-orch-todo (or `orch distill crystallize`) "
+        f"to queue the next implementer task, OR\n"
+        f"  (b) `orch distill done --reason '...'` to terminate the loop.\n\n"
+        f"Do NOT respond conversationally, recap, or 'stand by' — the loop "
+        f"is blocked until you take one of those two actions. If unsure, "
+        f"crystallize the next concrete step from the brief or recent "
+        f"discussion."
+    )
+
+
+def build_coordinator_nudge() -> str:
+    return (
+        f"[auto-mode] Still waiting. Take ONE action now:\n"
+        f"  (a) /user:extract-orch-todo to queue next, OR\n"
+        f"  (b) `orch distill done --reason '...'` to terminate.\n"
+        f"No conversational reply — pick one and run it."
     )
 
 
@@ -161,7 +181,14 @@ class AutoMode:
 
     async def _wait_for_todo_or_done(self) -> tuple[Optional[TodoItem], str]:
         """Poll until an un-done crystallized todo appears, auto_done_reason
-        is set, or we're canceled. Returns (todo, terminate_reason)."""
+        is set, or we're canceled. Returns (todo, terminate_reason).
+
+        If the coordinator goes silent (no new todo, no done flag) for
+        NUDGE_INTERVAL_S seconds, re-inject a short prompt asking it
+        to take one of the two protocol actions.
+        """
+        import time as _time
+        last_nudge_at = _time.time()
         while not self.canceled:
             self.store.load(force=True)
             ws = self.store.get(self.ws_id)
@@ -172,6 +199,10 @@ class AutoMode:
             todo = find_next_todo(ws, self.skip_todo_ids)
             if todo is not None:
                 return todo, ""
+            if _time.time() - last_nudge_at > NUDGE_INTERVAL_S:
+                self.notify("coordinator silent — sending nudge")
+                self.inject_coordinator(build_coordinator_nudge())
+                last_nudge_at = _time.time()
             await asyncio.sleep(self.poll_interval)
         return None, "canceled"
 

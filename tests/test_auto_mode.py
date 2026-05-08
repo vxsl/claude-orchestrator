@@ -10,8 +10,10 @@ import pytest
 
 from auto_mode import (
     AutoMode,
+    NUDGE_INTERVAL_S,
     build_coordinator_followup,
     build_coordinator_kickoff,
+    build_coordinator_nudge,
     build_implementer_brief,
     detect_quota_stall,
     find_next_todo,
@@ -91,6 +93,23 @@ class TestPromptBuilders:
         assert "I shipped it." in out
         assert "task" in out
         assert "distill done" in out
+
+    def test_followup_is_imperative_not_conversational(self):
+        # The followup must NOT use language that lets the coordinator
+        # respond conversationally and 'stand by' instead of acting.
+        todo = TodoItem(text="task", origin="crystallized")
+        out = build_coordinator_followup(todo, "report")
+        # Hard guards — pin the imperative phrasing
+        assert "MUST" in out or "must" in out or "exactly ONE" in out or "Take" in out
+        assert "Do NOT" in out or "do not" in out or "Do not" in out
+        assert "stand by" in out.lower() or "conversational" in out.lower()
+
+    def test_nudge_is_short_and_imperative(self):
+        out = build_coordinator_nudge()
+        assert "extract-orch-todo" in out or "crystallize" in out
+        assert "distill done" in out
+        # Should be much shorter than the full followup
+        assert len(out) < 400
 
     def test_kickoff_mentions_extract(self):
         ws = Workstream(name="my-ws")
@@ -261,6 +280,51 @@ class TestAutoModeLoop:
 
         results = asyncio.run(runner())
         assert results[0] == "canceled"
+
+    def test_nudge_fires_when_coordinator_silent(self, store, monkeypatch):
+        """If the coordinator stalls (no new todo, no done flag) past the
+        nudge interval, the loop re-injects a short prompt asking it
+        to act."""
+        # Tiny interval so the test runs fast
+        monkeypatch.setattr("auto_mode.NUDGE_INTERVAL_S", 0.05)
+
+        ws = _ws_with_todos(store, [
+            TodoItem(text="task", origin="crystallized", id="aaa11111"),
+        ])
+
+        async def spawn(_todo, _brief):
+            fresh = store.get(ws.id)
+            for t in fresh.todos:
+                if t.id == "aaa11111":
+                    t.report = "did the thing"
+                    t.done = True
+            store.update(fresh)
+
+        injected = []
+        nudges_seen = 0
+
+        def coord(text):
+            nonlocal nudges_seen
+            injected.append(text)
+            # Look for the nudge marker. After we see a nudge, finally declare done.
+            if "Still waiting" in text:
+                nudges_seen += 1
+                if nudges_seen >= 1:
+                    fresh = store.get(ws.id)
+                    fresh.auto_done_reason = "stop after nudge"
+                    store.update(fresh)
+
+        mode = AutoMode(
+            store=store, ws_id=ws.id,
+            spawn_implementer=spawn,
+            inject_coordinator=coord,
+            poll_interval=0.01,
+        )
+        result = asyncio.run(mode.run())
+        assert result == "stop after nudge"
+        # We should have seen at least one nudge in the injected stream
+        assert any("Still waiting" in t for t in injected), \
+            f"expected a nudge after silence; injected={[t[:60] for t in injected]}"
 
     def test_attempted_todo_not_respawned_in_same_run(self, store):
         """If an implementer doesn't report (e.g. user detaches, impl
