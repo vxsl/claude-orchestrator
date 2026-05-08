@@ -3422,12 +3422,11 @@ class ConfirmScreen(ModalScreen[bool]):
 
 # ─── Auto-mode start: per-todo picker ────────────────────────────────
 
-class AutoModeStartScreen(ModalScreen[set]):
+class AutoModeStartScreen(_VimOptionListMixin, ModalScreen[set]):
     """When auto-mode starts on a workstream with a non-empty backlog,
-    let the user pick which crystallized todos this run should consume.
-    Default: all checked (= old 'use backlog' behavior — Enter = run all).
-    Returns: set of todo IDs to RUN (or None on cancel). The caller
-    computes skip_ids = all_backlog_ids - returned_set.
+    let the user pick which todos this run should consume. Default:
+    none checked (opt-in). Returns: set of todo IDs to RUN (or None on
+    cancel). The caller computes skip_ids = all_backlog_ids - returned_set.
     """
 
     _option_list_id = "auto-start-list"
@@ -3470,7 +3469,7 @@ class AutoModeStartScreen(ModalScreen[set]):
         self.ws_name = ws_name
         # Snapshot at construction; safe across rebuilds.
         self._todos: list[TodoItem] = list(todos)
-        self._selected: set[str] = {t.id for t in todos}  # default: all
+        self._selected: set[str] = set()  # default: none — opt-in
 
     def compose(self) -> ComposeResult:
         with Vertical(id="auto-start-container"):
