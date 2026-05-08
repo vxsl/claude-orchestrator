@@ -179,6 +179,38 @@ class AutoMode:
     def cancel(self) -> None:
         self.canceled = True
 
+    async def _read_report(self, todo_id: str) -> str:
+        """Read the implementer's writeback for `todo_id`, retrying briefly
+        when the load returns no workstreams or no matching todo.
+
+        Defends against the same race wait_for_report handles: a concurrent
+        writer (coordinator's `orch distill crystallize`, another impl's
+        `orch report`, the TUI's description refresher) can leave data.json
+        partially written for a few ms. Store.load() catches the
+        JSONDecodeError and silently sets workstreams=[] — a one-shot read
+        at that instant looks identical to "todo missing, no report" and
+        falsely emits the no-writeback fallback.
+
+        A clear hit (workstream + todo both present, report empty) means
+        the implementer truly didn't report — return '' immediately.
+        """
+        for _ in range(5):
+            try:
+                self.store.load(force=True)
+            except Exception:
+                await asyncio.sleep(0.3)
+                continue
+            ws = self.store.get(self.ws_id)
+            if ws is None:
+                await asyncio.sleep(0.3)
+                continue
+            cur = next((t for t in ws.todos if t.id == todo_id), None)
+            if cur is None:
+                await asyncio.sleep(0.3)
+                continue
+            return cur.report or ""
+        return ""
+
     async def _wait_for_todo_or_done(self) -> tuple[Optional[TodoItem], str]:
         """Poll until an un-done crystallized todo appears, auto_done_reason
         is set, or we're canceled. Returns (todo, terminate_reason).
@@ -254,14 +286,11 @@ class AutoMode:
             # loop on the next iteration.
             self.skip_todo_ids.add(todo.id)
 
-            self.store.load(force=True)
-            ws = self.store.get(self.ws_id)
-            cur = next((t for t in ws.todos if t.id == todo.id), None) if ws else None
-            report = (cur.report if cur and cur.report else
-                      "(implementer did not run `orch report` — no writeback)")
+            report_text = await self._read_report(todo.id)
+            report = report_text or "(implementer did not run `orch report` — no writeback)"
             self.last_report = report
 
-            self.inject_coordinator(build_coordinator_followup(cur or todo, report))
+            self.inject_coordinator(build_coordinator_followup(todo, report))
             self.notify(f"iter {self.iteration}: report received, awaiting coordinator")
 
             next_todo, reason = await self._wait_for_todo_or_done()

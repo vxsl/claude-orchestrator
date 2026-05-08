@@ -439,6 +439,64 @@ class TestAutoModeLoop:
         # find_next_todo would skip this todo on next iteration only if done=True.
         # Coordinator's distill done short-circuited before that mattered.
 
+    def test_report_read_retries_on_transient_load_failure(self, store, monkeypatch):
+        """models.Store.load swallows JSONDecodeError and silently sets
+        workstreams=[] when a concurrent writer (other agent's crystallize,
+        another impl's report, the TUI's desc refresher) leaves data.json
+        partially written. Without retries, the post-spawn read in
+        AutoMode.run() falsely emits 'no writeback' even though the
+        implementer's report is sitting on disk. This pins the retry."""
+        ws = _ws_with_todos(store, [
+            TodoItem(text="task one", origin="crystallized", id="abc12345"),
+        ])
+
+        async def spawn(_todo, _brief):
+            # Implementer writes the report normally.
+            fresh = store.get(ws.id)
+            fresh.todos[0].report = "real implementer report"
+            fresh.todos[0].done = True
+            store.update(fresh)
+            # Now arrange for the next two store.load() calls to behave
+            # like a partial-JSON read (workstreams cleared, no exception).
+            real_load = store.load
+            fails_left = [2]
+
+            def flaky_load(*a, **kw):
+                if fails_left[0] > 0:
+                    fails_left[0] -= 1
+                    store.workstreams = []
+                    return
+                real_load(*a, **kw)
+
+            monkeypatch.setattr(store, "load", flaky_load)
+
+        injected = []
+
+        def inject(text):
+            injected.append(text)
+            if "Implementer for todo" in text:
+                fresh = store.get(ws.id)
+                if fresh is not None:
+                    fresh.auto_done_reason = "complete"
+                    store.update(fresh)
+
+        mode = AutoMode(
+            store=store, ws_id=ws.id,
+            spawn_implementer=spawn,
+            inject_coordinator=inject,
+            poll_interval=0.01,
+        )
+        result = asyncio.run(mode.run())
+        assert result == "complete"
+        followup = next(
+            (t for t in injected if "Implementer for todo" in t), None,
+        )
+        assert followup is not None, f"no followup injected; saw: {injected}"
+        assert "real implementer report" in followup, (
+            f"loop dropped the report on transient load miss; followup={followup!r}"
+        )
+        assert "no writeback" not in followup
+
     def test_runs_any_origin_when_selected(self, store):
         # Origin is informational; loop runs whatever's not skipped.
         # Manual todos are eligible — caller (picker) decides what's in scope.
