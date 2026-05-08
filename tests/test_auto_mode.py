@@ -40,13 +40,26 @@ class TestFindNextTodo:
         ]
         assert find_next_todo(ws).text == "b"
 
-    def test_skips_manual(self):
+    def test_origin_does_not_filter(self):
+        # Origin is informational only; both manual and crystallized are eligible.
         ws = Workstream(name="x")
         ws.todos = [
             TodoItem(text="a", origin="manual"),
             TodoItem(text="b", origin="crystallized"),
         ]
-        assert find_next_todo(ws).text == "b"
+        # First un-done un-skipped wins, regardless of origin.
+        assert find_next_todo(ws).text == "a"
+
+    def test_skip_ids_work_for_any_origin(self):
+        ws = Workstream(name="x")
+        ws.todos = [
+            TodoItem(text="manual", origin="manual", id="man00001"),
+            TodoItem(text="crystal", origin="crystallized", id="cry00002"),
+        ]
+        # Skip the manual → only crystallized eligible
+        assert find_next_todo(ws, {"man00001"}).text == "crystal"
+        # Skip the crystallized → only manual eligible
+        assert find_next_todo(ws, {"cry00002"}).text == "manual"
 
     def test_returns_none_when_empty(self):
         assert find_next_todo(Workstream(name="x")) is None
@@ -426,25 +439,39 @@ class TestAutoModeLoop:
         # find_next_todo would skip this todo on next iteration only if done=True.
         # Coordinator's distill done short-circuited before that mattered.
 
-    def test_skips_manual_todos(self, store):
+    def test_runs_any_origin_when_selected(self, store):
+        # Origin is informational; loop runs whatever's not skipped.
+        # Manual todos are eligible — caller (picker) decides what's in scope.
         ws = _ws_with_todos(store, [
-            TodoItem(text="manual one", origin="manual"),
-            TodoItem(text="real", origin="crystallized", id="real0001"),
+            TodoItem(text="manual one", origin="manual", id="man00001"),
+            TodoItem(text="crystal", origin="crystallized", id="cry00002"),
         ])
-        spawned = []
+        spawned_briefs = []
 
         async def spawn(_todo, brief):
-            spawned.append(brief)
-            fresh = store.get(ws.id)
-            for t in fresh.todos:
-                if t.id == "real0001":
-                    t.done = True
-                    t.report = "done"
-            fresh.auto_done_reason = "stop"
-            store.update(fresh)
+            spawned_briefs.append(brief)
+            # Mark whichever todo this brief refers to as done+reported
+            import re
+            m = re.search(r"orch report --todo-id (\S+)", brief)
+            if m:
+                tid = m.group(1)
+                fresh = store.get(ws.id)
+                for t in fresh.todos:
+                    if t.id == tid:
+                        t.done = True
+                        t.report = "done"
+                store.update(fresh)
 
-        def inject(_):
-            pass
+        injected = []
+
+        def inject(text):
+            injected.append(text)
+            # After both have run, declare done
+            fresh = store.get(ws.id)
+            n_done = sum(1 for t in fresh.todos if t.done)
+            if n_done >= 2 and not fresh.auto_done_reason:
+                fresh.auto_done_reason = "stop"
+                store.update(fresh)
 
         mode = AutoMode(
             store=store, ws_id=ws.id,
@@ -453,9 +480,10 @@ class TestAutoModeLoop:
         )
         result = asyncio.run(mode.run())
         assert result == "stop"
-        assert len(spawned) == 1
-        assert "real" in spawned[0]
-        assert "manual one" not in spawned[0]
+        # Both ran — manual first (insertion order), then crystallized.
+        assert len(spawned_briefs) == 2
+        assert "manual one" in spawned_briefs[0]
+        assert "crystal" in spawned_briefs[1]
 
 
 # ─── CLI: orch report and orch distill done ─────────────────────────

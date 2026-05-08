@@ -3502,9 +3502,14 @@ class AutoModeStartScreen(ModalScreen[set]):
     def _row(self, t: TodoItem) -> str:
         check = f"[{C_GREEN}]◉[/{C_GREEN}]" if t.id in self._selected else f"[{C_DIM}]○[/{C_DIM}]"
         age = _relative_time_short(t.created_at)
-        text = _rich_escape(t.text[:90])
+        text = _rich_escape(t.text[:80])
         text_color = C_LIGHT if t.id in self._selected else C_DIM
-        return f"{check}  [{text_color}]{text}[/{text_color}]    [{C_FAINT}]{age}[/{C_FAINT}]"
+        # Origin tag — visible at a glance; crystallized vs manual.
+        is_crystal = getattr(t, "origin", "manual") == "crystallized"
+        tag_color = C_GOLD if is_crystal else C_BLUE
+        tag = "c" if is_crystal else "m"
+        tag_str = f"[{tag_color}]{tag}[/{tag_color}]"
+        return f"{check} {tag_str}  [{text_color}]{text}[/{text_color}]    [{C_FAINT}]{age}[/{C_FAINT}]"
 
     def _rebuild(self) -> None:
         olist = self.query_one("#auto-start-list", OptionList)

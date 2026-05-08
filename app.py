@@ -2248,7 +2248,7 @@ class OrchestratorApp(App):
             return
         backlog = [
             t for t in ws.todos
-            if t.origin == "crystallized" and not t.done and not t.archived
+            if not t.done and not t.archived
         ]
         backlog_ids = {t.id for t in backlog}
 

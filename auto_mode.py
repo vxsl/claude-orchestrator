@@ -64,20 +64,20 @@ def find_next_todo(
     ws: Workstream,
     skip_ids: Optional[set] = None,
 ) -> Optional[TodoItem]:
-    """Next un-done crystallized todo, or None.
+    """Next un-done un-archived non-skipped todo, or None.
 
-    Manual todos are intentionally skipped — auto mode only consumes
-    crystallized briefs (implementers need rich context, not bare text).
+    Origin (manual vs crystallized) is informational only — the picker
+    decides at start what's in scope. Inside the loop, any newly-added
+    todo (manual or crystallized) is eligible to be picked up unless
+    explicitly in skip_ids.
 
-    skip_ids: todo IDs the loop should ignore (used by 'start fresh' mode
-    to leave existing backlog untouched while still processing todos
-    crystallized DURING the run).
+    skip_ids: todo IDs the loop should ignore (used both by 'start fresh'
+    mode and as a defensive guard against re-attempting a todo whose
+    implementer never reported).
     """
     skip = skip_ids or set()
     for todo in ws.todos:
         if todo.archived or todo.done:
-            continue
-        if todo.origin != "crystallized":
             continue
         if todo.id in skip:
             continue
@@ -219,10 +219,10 @@ class AutoMode:
             ws.auto_done_reason = ""
             self.store.update(ws)
 
-        # Count pending un-skipped crystallized todos for the kickoff message.
+        # Count pending un-skipped todos (any origin) for the kickoff message.
         pending = [
             t for t in ws.todos
-            if t.origin == "crystallized" and not t.done and not t.archived
+            if not t.done and not t.archived
             and t.id not in self.skip_todo_ids
         ]
         self.inject_coordinator(build_coordinator_kickoff(ws, pending_count=len(pending)))
