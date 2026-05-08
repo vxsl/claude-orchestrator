@@ -2313,16 +2313,22 @@ class OrchestratorApp(App):
                 self.notify(f"[auto] inject failed: {e}", timeout=4)
 
         async def spawn_implementer(todo, brief: str) -> None:
-            """Spawn implementer; resolve when its report is written OR its
-            screen dismisses, whichever first. The implementer may continue
-            running after `orch report` (slow cleanup, lingering shells).
-            That's fine — the loop advances on report and the next iteration
-            stacks a new implementer screen on top."""
-            done = _asyncio.Event()
+            """Spawn implementer; resolve when its report is written OR
+            the implementer's claude process actually exits. User
+            detaching the screen via ctrl+h is NOT a resolution signal —
+            it should let the user navigate back to the orch main view
+            without the loop yanking a new implementer screen on top of
+            them. The detached impl keeps running in tmux and will
+            eventually report or exit, at which point the loop advances."""
+            exited = _asyncio.Event()
             loop = _asyncio.get_running_loop()
 
-            def cb(_result):
-                loop.call_soon_threadsafe(done.set)
+            def cb(result):
+                # Detach is the user pressing ctrl+h; they are NOT signaling
+                # 'this implementer is done.' Do not advance the loop.
+                if isinstance(result, dict) and result.get("detached"):
+                    return
+                loop.call_soon_threadsafe(exited.set)
 
             ws = self.state.store.get(ws_id)
             if ws is None:
@@ -2343,21 +2349,20 @@ class OrchestratorApp(App):
                     await _asyncio.sleep(2)
 
             report_task = _asyncio.create_task(wait_for_report())
-            dismiss_task = _asyncio.create_task(done.wait())
+            exit_task = _asyncio.create_task(exited.wait())
             try:
                 await _asyncio.wait(
-                    [report_task, dismiss_task],
+                    [report_task, exit_task],
                     return_when=_asyncio.FIRST_COMPLETED,
                 )
-                if report_task.done() and not dismiss_task.done():
+                if report_task.done() and not exit_task.done():
                     self.notify(
                         "[auto] report received — advancing while implementer wraps up",
                         timeout=4,
                     )
             finally:
                 report_task.cancel()
-                # Don't cancel dismiss_task — leave it pending so the screen's
-                # eventual dismiss callback still fires harmlessly.
+                # Don't cancel exit_task — natural exit will set it harmlessly.
 
         def notify(msg: str) -> None:
             self.notify(f"[auto] {msg}", timeout=4)

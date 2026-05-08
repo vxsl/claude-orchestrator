@@ -216,6 +216,13 @@ class AutoMode:
                 self.final_status = "canceled"
                 return self.final_status
 
+            # Belt-and-suspenders: never re-attempt the same todo within
+            # one run, even if the implementer didn't write a report (so
+            # find_next_todo would still see it as un-done). Without this,
+            # an impl that fails to report could be respawned in a tight
+            # loop on the next iteration.
+            self.skip_todo_ids.add(todo.id)
+
             self.store.load(force=True)
             ws = self.store.get(self.ws_id)
             cur = next((t for t in ws.todos if t.id == todo.id), None) if ws else None

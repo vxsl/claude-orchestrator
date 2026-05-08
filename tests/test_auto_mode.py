@@ -262,6 +262,54 @@ class TestAutoModeLoop:
         results = asyncio.run(runner())
         assert results[0] == "canceled"
 
+    def test_attempted_todo_not_respawned_in_same_run(self, store):
+        """If an implementer doesn't report (e.g. user detaches, impl
+        crashes), the todo stays un-done on disk. The loop should NOT
+        respawn the same todo on the next iteration — that creates
+        the duplicate-implementer-spam pathology."""
+        ws = _ws_with_todos(store, [
+            TodoItem(text="will not report", origin="crystallized", id="aaa11111"),
+            TodoItem(text="second todo", origin="crystallized", id="bbb22222"),
+        ])
+        spawned_ids = []
+
+        async def spawn_no_report(_todo, brief):
+            # Extract todo id from the brief footer (mirrors what `orch report` would do)
+            import re
+            m = re.search(r"orch report --todo-id (\S+)", brief)
+            if m:
+                spawned_ids.append(m.group(1))
+            # Do NOT write a report — simulating user detach or impl crash.
+
+        injected = []
+
+        def coord(text):
+            injected.append(text)
+            # After the second iteration's followup, declare done so loop exits.
+            # Both todos un-done, neither reported — loop must move on after each.
+            fresh = store.get(ws.id)
+            if fresh.auto_done_reason:
+                return
+            # Once both are in skip_ids, declare done.
+            if len(injected) >= 3:  # kickoff + followup #1 + followup #2
+                fresh.auto_done_reason = "stop after both attempted"
+                store.update(fresh)
+
+        mode = AutoMode(
+            store=store, ws_id=ws.id,
+            spawn_implementer=spawn_no_report,
+            inject_coordinator=coord,
+            poll_interval=0.01,
+        )
+        result = asyncio.run(mode.run())
+        # Loop should run BOTH todos exactly once each — not respawn the first.
+        assert len(spawned_ids) == 2, f"expected 2 spawns, got {spawned_ids}"
+        assert spawned_ids[0] == "aaa11111"
+        assert spawned_ids[1] == "bbb22222"
+        # Skip set should contain both attempted ids
+        assert "aaa11111" in mode.skip_todo_ids
+        assert "bbb22222" in mode.skip_todo_ids
+
     def test_caller_decides_when_to_resolve_spawn(self, store):
         """The loop hands off to spawn_implementer; whatever the caller's
         contract is for resolution (screen dismiss vs report-written, or
