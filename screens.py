@@ -3420,66 +3420,159 @@ class ConfirmScreen(ModalScreen[bool]):
         self.dismiss(False)
 
 
-# ─── Auto-mode start: backlog vs fresh chooser ───────────────────────
+# ─── Auto-mode start: per-todo picker ────────────────────────────────
 
-class AutoModeStartScreen(ModalScreen[str]):
-    """Asks how to start auto-mode when the workstream has a backlog of
-    crystallized todos. Returns one of: 'backlog', 'fresh', '' (cancel).
+class AutoModeStartScreen(ModalScreen[set]):
+    """When auto-mode starts on a workstream with a non-empty backlog,
+    let the user pick which crystallized todos this run should consume.
+    Default: all checked (= old 'use backlog' behavior — Enter = run all).
+    Returns: set of todo IDs to RUN (or None on cancel). The caller
+    computes skip_ids = all_backlog_ids - returned_set.
     """
 
+    _option_list_id = "auto-start-list"
+
     BINDINGS = [
-        Binding("b", "use_backlog", "Use backlog"),
-        Binding("f", "start_fresh", "Start fresh"),
-        Binding("escape,n,backspace,ctrl+h", "cancel", "Cancel"),
-    ]
+        Binding("space", "toggle_current", "Toggle", priority=True),
+        Binding("a", "select_all", "All"),
+        Binding("n", "select_none", "None"),
+        Binding("enter", "confirm", "Run selected", priority=True),
+        Binding("escape,backspace,ctrl+h", "cancel", "Cancel"),
+    ] + _VimOptionListMixin.VIM_BINDINGS
 
     DEFAULT_CSS = f"""
     AutoModeStartScreen {{ align: center middle; }}
     #auto-start-container {{
-        width: 64; height: auto; padding: 1 2;
-        background: {BG_BASE}; border: round {C_BLUE} 50%;
+        width: 80%; height: 80%; min-height: 16;
+        padding: 0; background: {BG_BASE}; border: round {C_BLUE} 50%;
     }}
-    #auto-start-title {{ text-style: bold; padding-bottom: 1; }}
-    #auto-start-msg {{ padding-bottom: 1; }}
-    .auto-opt {{ padding: 0 0 0 2; }}
-    #auto-start-hint {{ text-align: center; color: {C_DIM}; padding-top: 1; }}
+    #auto-start-title {{
+        height: 2; padding: 0 2; background: {BG_RAISED};
+        text-style: bold; color: {C_BLUE};
+    }}
+    #auto-start-list {{
+        height: 1fr;
+        margin: 0 1; padding: 0; border: none;
+        background: {BG_BASE};
+    }}
+    #auto-start-list > .option-list--option-highlighted {{
+        background: {BG_SURFACE};
+    }}
+    #auto-start-help {{
+        height: 1; padding: 0 2;
+        background: {BG_CHROME}; color: {C_DIM};
+        dock: bottom;
+    }}
     """
 
-    def __init__(self, ws_name: str, backlog_count: int):
+    def __init__(self, ws_name: str, todos: list[TodoItem]):
         super().__init__()
         self.ws_name = ws_name
-        self.backlog_count = backlog_count
+        # Snapshot at construction; safe across rebuilds.
+        self._todos: list[TodoItem] = list(todos)
+        self._selected: set[str] = {t.id for t in todos}  # default: all
 
     def compose(self) -> ComposeResult:
         with Vertical(id="auto-start-container"):
-            yield Static(f"Auto mode: [bold]{self.ws_name}[/bold]", id="auto-start-title")
-            n = self.backlog_count
-            plural = "todo" if n == 1 else "todos"
-            yield Static(
-                f"This workstream has [bold]{n}[/bold] crystallized {plural} in the backlog.",
-                id="auto-start-msg",
-            )
-            yield Static(
-                f"  [{C_BLUE}]b[/{C_BLUE}]  use existing backlog ({n} {plural})",
-                classes="auto-opt",
-            )
-            yield Static(
-                f"  [{C_BLUE}]f[/{C_BLUE}]  start fresh — skip backlog, coordinator crystallizes new",
-                classes="auto-opt",
-            )
-            yield Static(
-                f"[{C_DIM}]esc / n: cancel[/{C_DIM}]",
-                id="auto-start-hint",
-            )
+            yield Static(self._title_text(), id="auto-start-title")
+            yield OptionList(id="auto-start-list")
+            yield Static(self._help_text(), id="auto-start-help")
 
-    def action_use_backlog(self) -> None:
-        self.dismiss("backlog")
+    def on_mount(self) -> None:
+        self._rebuild()
+        olist = self.query_one("#auto-start-list", OptionList)
+        olist.focus()
 
-    def action_start_fresh(self) -> None:
-        self.dismiss("fresh")
+    def _title_text(self) -> str:
+        n_sel = len(self._selected)
+        n_total = len(self._todos)
+        return (
+            f"Auto mode: {_rich_escape(self.ws_name)}    "
+            f"[{C_DIM}]{n_sel}/{n_total} selected — Space toggle, "
+            f"a all, n none, Enter run, Esc cancel[/{C_DIM}]"
+        )
+
+    def _help_text(self) -> str:
+        pairs = [
+            ("Space", "toggle"), ("a", "all"), ("n", "none"),
+            ("Enter", "run"), ("Esc", "cancel"),
+        ]
+        return "  ".join(f"[{C_YELLOW}]{k}[/{C_YELLOW}] {v}" for k, v in pairs)
+
+    def _row(self, t: TodoItem) -> str:
+        check = f"[{C_GREEN}]◉[/{C_GREEN}]" if t.id in self._selected else f"[{C_DIM}]○[/{C_DIM}]"
+        age = _relative_time_short(t.created_at)
+        text = _rich_escape(t.text[:90])
+        text_color = C_LIGHT if t.id in self._selected else C_DIM
+        return f"{check}  [{text_color}]{text}[/{text_color}]    [{C_FAINT}]{age}[/{C_FAINT}]"
+
+    def _rebuild(self) -> None:
+        olist = self.query_one("#auto-start-list", OptionList)
+        old_idx = olist.highlighted
+        olist.clear_options()
+        olist.add_options([Option(self._row(t), id=t.id) for t in self._todos])
+        if old_idx is not None and olist.option_count > 0:
+            olist.highlighted = min(old_idx, olist.option_count - 1)
+        elif olist.option_count > 0:
+            olist.highlighted = 0
+        self.query_one("#auto-start-title", Static).update(self._title_text())
+
+    def _highlighted_id(self) -> str | None:
+        olist = self.query_one("#auto-start-list", OptionList)
+        if olist.highlighted is None or olist.option_count == 0:
+            return None
+        try:
+            return olist.get_option_at_index(olist.highlighted).id
+        except Exception:
+            return None
+
+    def action_toggle_current(self) -> None:
+        tid = self._highlighted_id()
+        if tid is None:
+            return
+        if tid in self._selected:
+            self._selected.discard(tid)
+        else:
+            self._selected.add(tid)
+        self._rebuild()
+
+    def action_select_all(self) -> None:
+        self._selected = {t.id for t in self._todos}
+        self._rebuild()
+
+    def action_select_none(self) -> None:
+        self._selected = set()
+        self._rebuild()
+
+    def action_confirm(self) -> None:
+        self.dismiss(set(self._selected))
 
     def action_cancel(self) -> None:
-        self.dismiss("")
+        self.dismiss(None)
+
+
+def _relative_time_short(iso_str: str) -> str:
+    """Compact age string (e.g. '2h', '3d') for the auto-mode picker."""
+    try:
+        dt = datetime.fromisoformat(iso_str)
+        if dt.tzinfo is None:
+            dt = dt.astimezone()
+        delta = datetime.now().astimezone() - dt
+        s = int(delta.total_seconds())
+        if s < 60:
+            return f"{s}s"
+        m = s // 60
+        if m < 60:
+            return f"{m}m"
+        h = m // 60
+        if h < 24:
+            return f"{h}h"
+        d = h // 24
+        if d < 30:
+            return f"{d}d"
+        return dt.strftime("%Y-%m-%d")
+    except (ValueError, TypeError):
+        return "?"
 
 
 # ─── Current Sessions Screen ─────────────────────────────────────────

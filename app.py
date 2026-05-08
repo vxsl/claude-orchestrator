@@ -2246,27 +2246,28 @@ class OrchestratorApp(App):
         if ws is None:
             self.notify("[auto] workstream not found", timeout=3)
             return
-        backlog_ids = {
-            t.id for t in ws.todos
+        backlog = [
+            t for t in ws.todos
             if t.origin == "crystallized" and not t.done and not t.archived
-        }
+        ]
+        backlog_ids = {t.id for t in backlog}
 
         if not backlog_ids:
             self._start_auto_mode(ws_id, screen_session_id, skip_ids=set())
             return
 
-        # Non-empty backlog — let the user choose
+        # Non-empty backlog — let the user pick which todos to include
         from screens import AutoModeStartScreen
 
-        def on_choice(choice: str) -> None:
-            if choice == "backlog":
-                self._start_auto_mode(ws_id, screen_session_id, skip_ids=set())
-            elif choice == "fresh":
-                self._start_auto_mode(ws_id, screen_session_id, skip_ids=backlog_ids)
-            # else cancel
+        def on_choice(selected) -> None:
+            # selected: set[str] of todo IDs the user wants to RUN, or None on cancel
+            if selected is None:
+                return
+            skip_ids = backlog_ids - selected
+            self._start_auto_mode(ws_id, screen_session_id, skip_ids=skip_ids)
 
         self.push_screen(
-            AutoModeStartScreen(ws.name, len(backlog_ids)),
+            AutoModeStartScreen(ws.name, backlog),
             callback=on_choice,
         )
 
