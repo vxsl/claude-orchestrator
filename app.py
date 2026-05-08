@@ -2311,7 +2311,12 @@ class OrchestratorApp(App):
             except Exception as e:
                 self.notify(f"[auto] inject failed: {e}", timeout=4)
 
-        async def spawn_implementer(brief: str) -> None:
+        async def spawn_implementer(todo, brief: str) -> None:
+            """Spawn implementer; resolve when its report is written OR its
+            screen dismisses, whichever first. The implementer may continue
+            running after `orch report` (slow cleanup, lingering shells).
+            That's fine — the loop advances on report and the next iteration
+            stacks a new implementer screen on top."""
             done = _asyncio.Event()
             loop = _asyncio.get_running_loop()
 
@@ -2320,12 +2325,38 @@ class OrchestratorApp(App):
 
             ws = self.state.store.get(ws_id)
             if ws is None:
-                done.set()
                 return
             self.launch_claude_session(
                 ws, prompt=brief, reuse_pending=False, callback=cb,
             )
-            await done.wait()
+
+            async def wait_for_report():
+                while True:
+                    self.state.store.load(force=True)
+                    cur_ws = self.state.store.get(ws_id)
+                    if cur_ws is None:
+                        return
+                    cur = next((t for t in cur_ws.todos if t.id == todo.id), None)
+                    if cur and cur.report:
+                        return
+                    await _asyncio.sleep(2)
+
+            report_task = _asyncio.create_task(wait_for_report())
+            dismiss_task = _asyncio.create_task(done.wait())
+            try:
+                await _asyncio.wait(
+                    [report_task, dismiss_task],
+                    return_when=_asyncio.FIRST_COMPLETED,
+                )
+                if report_task.done() and not dismiss_task.done():
+                    self.notify(
+                        "[auto] report received — advancing while implementer wraps up",
+                        timeout=4,
+                    )
+            finally:
+                report_task.cancel()
+                # Don't cancel dismiss_task — leave it pending so the screen's
+                # eventual dismiss callback still fires harmlessly.
 
         def notify(msg: str) -> None:
             self.notify(f"[auto] {msg}", timeout=4)

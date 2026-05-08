@@ -158,7 +158,7 @@ class TestAutoModeLoop:
         injected = []
         spawn_calls = []
 
-        async def spawn(_brief):
+        async def spawn(_todo, _brief):
             spawn_calls.append(_brief)
             # If reached, simulate immediate dismiss
             return
@@ -191,7 +191,7 @@ class TestAutoModeLoop:
         spawn_briefs = []
         injected = []
 
-        async def spawn(brief):
+        async def spawn(_todo, brief):
             spawn_briefs.append(brief)
             # Simulate the implementer running `orch report` before exiting
             fresh = store.get(ws.id)
@@ -226,7 +226,7 @@ class TestAutoModeLoop:
         ws = _ws_with_todos(store, [])  # no todos → loop will kickoff and wait
         injected = []
 
-        async def spawn(_brief):
+        async def spawn(_todo, _brief):
             raise AssertionError("should not spawn")
 
         def inject(text):
@@ -249,6 +249,58 @@ class TestAutoModeLoop:
         results = asyncio.run(runner())
         assert results[0] == "canceled"
 
+    def test_caller_decides_when_to_resolve_spawn(self, store):
+        """The loop hands off to spawn_implementer; whatever the caller's
+        contract is for resolution (screen dismiss vs report-written, or
+        a race between them) is handled in the TUI wiring. The loop just
+        awaits the awaitable. This test pins the contract: as long as
+        spawn_implementer resolves and the report is on the todo, the
+        loop reads it correctly even if the implementer is still
+        notionally 'running'."""
+        ws = _ws_with_todos(store, [
+            TodoItem(text="task one", origin="crystallized", id="abc12345"),
+        ])
+        spawn_briefs = []
+
+        async def spawn_resolves_on_report(_todo, brief):
+            spawn_briefs.append(brief)
+            # Simulate the TUI behavior: report arrives BEFORE the
+            # implementer screen dismisses. spawn_implementer returns
+            # at this point; the screen is still notionally up.
+            fresh = store.get(ws.id)
+            for t in fresh.todos:
+                if t.id == "abc12345":
+                    t.report = "report written but impl still running"
+            store.update(fresh)
+            # Return without setting any 'dismiss' signal — the loop should still advance.
+
+        injected = []
+        coord_done = []
+
+        def inject(text):
+            injected.append(text)
+            if "Implementer for todo" in text:
+                fresh = store.get(ws.id)
+                fresh.auto_done_reason = "advanced on report"
+                store.update(fresh)
+                coord_done.append(True)
+
+        mode = AutoMode(
+            store=store, ws_id=ws.id,
+            spawn_implementer=spawn_resolves_on_report,
+            inject_coordinator=inject,
+            poll_interval=0.01,
+        )
+        result = asyncio.run(mode.run())
+        assert result == "advanced on report"
+        assert mode.iteration == 1
+        # The followup contained the report, even though impl never marked done itself.
+        assert any("report written but impl still running" in t for t in injected)
+        # Note: in real flow the orch report CLI sets done=True. Here we only set
+        # report and not done — but the loop still proceeds because
+        # find_next_todo would skip this todo on next iteration only if done=True.
+        # Coordinator's distill done short-circuited before that mattered.
+
     def test_skips_manual_todos(self, store):
         ws = _ws_with_todos(store, [
             TodoItem(text="manual one", origin="manual"),
@@ -256,7 +308,7 @@ class TestAutoModeLoop:
         ])
         spawned = []
 
-        async def spawn(brief):
+        async def spawn(_todo, brief):
             spawned.append(brief)
             fresh = store.get(ws.id)
             for t in fresh.todos:

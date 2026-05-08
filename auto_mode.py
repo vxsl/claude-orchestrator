@@ -8,7 +8,11 @@ Drives the coordinator/implementer cycle for a workstream:
 - coordinator runs `orch distill done` to terminate the loop
 
 Pure logic — no Textual imports. The TUI wires three callables:
-  spawn_implementer(brief) -> awaitable[None]   (resolves on implementer dismiss)
+  spawn_implementer(todo, brief) -> awaitable[None]
+      Resolves whichever is sooner: todo.report becomes non-empty, OR
+      the implementer's screen dismisses. Either signal advances the loop.
+      Implementer may continue running in the background after report —
+      that's fine; the next iteration will push another screen on top.
   inject_coordinator(text) -> None              (typed into coordinator's PTY)
   notify(line) -> None                          (status surfacing)
 """
@@ -122,7 +126,7 @@ class AutoMode:
         self,
         store: Store,
         ws_id: str,
-        spawn_implementer: Callable[[str], Awaitable[None]],
+        spawn_implementer: Callable[[TodoItem, str], Awaitable[None]],
         inject_coordinator: Callable[[str], None],
         notify: Optional[Callable[[str], None]] = None,
         poll_interval: float = 2.0,
@@ -189,7 +193,7 @@ class AutoMode:
             brief = build_implementer_brief(todo)
             self.notify(f"iter {self.iteration}: spawning implementer for '{todo.text[:60]}'")
 
-            await self.spawn_implementer(brief)
+            await self.spawn_implementer(todo, brief)
             if self.canceled:
                 self.final_status = "canceled"
                 return self.final_status
