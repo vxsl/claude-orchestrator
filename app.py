@@ -2314,19 +2314,21 @@ class OrchestratorApp(App):
 
         async def spawn_implementer(todo, brief: str) -> None:
             """Spawn implementer; resolve when its report is written OR
-            the implementer's claude process actually exits. User
-            detaching the screen via ctrl+h is NOT a resolution signal —
-            it should let the user navigate back to the orch main view
-            without the loop yanking a new implementer screen on top of
-            them. The detached impl keeps running in tmux and will
-            eventually report or exit, at which point the loop advances."""
+            the implementer's claude process produces a fully-parsed
+            ClaudeSession on natural exit. Anything else (detach, parse
+            failure → None result, exception) is NOT a resolution
+            signal — leaves the loop waiting for the report so transient
+            issues don't spuriously advance the loop."""
+            from sessions import ClaudeSession
             exited = _asyncio.Event()
             loop = _asyncio.get_running_loop()
 
             def cb(result):
-                # Detach is the user pressing ctrl+h; they are NOT signaling
-                # 'this implementer is done.' Do not advance the loop.
-                if isinstance(result, dict) and result.get("detached"):
+                # Only a confirmed ClaudeSession (claude process exited
+                # cleanly and the JSONL parsed) counts as 'done'. Detach
+                # ({"detached": True}) and unexpected None/dict results
+                # leave the loop awaiting the report.
+                if not isinstance(result, ClaudeSession):
                     return
                 loop.call_soon_threadsafe(exited.set)
 
@@ -2338,13 +2340,29 @@ class OrchestratorApp(App):
             )
 
             async def wait_for_report():
+                # Concurrent writers (coordinator's crystallize, other
+                # impls' reports) can produce a transient state where
+                # store.load reads partial JSON or returns no
+                # workstreams. We retry quietly rather than treat that
+                # as 'todo gone' — the alternative is a false advance,
+                # which spawns the next implementer prematurely.
                 while True:
-                    self.state.store.load(force=True)
+                    try:
+                        self.state.store.load(force=True)
+                    except Exception:
+                        await _asyncio.sleep(2)
+                        continue
                     cur_ws = self.state.store.get(ws_id)
                     if cur_ws is None:
-                        return
+                        # Likely transient (concurrent writer). Keep waiting.
+                        await _asyncio.sleep(2)
+                        continue
                     cur = next((t for t in cur_ws.todos if t.id == todo.id), None)
-                    if cur and cur.report:
+                    if cur is None:
+                        # Same — could be transient. Don't advance.
+                        await _asyncio.sleep(2)
+                        continue
+                    if cur.report:
                         return
                     await _asyncio.sleep(2)
 
