@@ -256,6 +256,7 @@ class OrchestratorApp(App):
         self._ws_activity_cache: dict[str, tuple[int, "ThreadActivity", bool]] = {}
         self._auto_modes: dict = {}  # ws_id → auto_mode.AutoMode (running loops)
         self._auto_coord_sid: dict[str, str] = {}  # ws_id → coordinator session id
+        self._auto_impl_sids: dict[str, set[str]] = {}  # ws_id → implementer session ids
 
     def on_key(self, event) -> None:
         # Swallow tab / shift+tab so they don't cycle focus among widgets
@@ -2087,6 +2088,21 @@ class OrchestratorApp(App):
 
     # ── Spawn & resume ──
 
+    def auto_role_for(self, ws_id: str, sid: str) -> str | None:
+        """Return 'coordinator', 'implementer', or None for a session.
+
+        Used by the workstream detail view to badge sessions that were
+        spawned as part of an auto-mode loop. Tracking is in-memory for
+        the orch process lifetime — lost on restart, by design.
+        """
+        if not ws_id or not sid:
+            return None
+        if self._auto_coord_sid.get(ws_id) == sid:
+            return "coordinator"
+        if sid in self._auto_impl_sids.get(ws_id, ()):
+            return "implementer"
+        return None
+
     @work(thread=False)
     async def launch_claude_session(
         self,
@@ -2096,6 +2112,7 @@ class OrchestratorApp(App):
         cwd: str | None = None,
         callback=None,
         reuse_pending: bool = True,
+        auto_role: str | None = None,
     ) -> None:
         """Push a ClaudeSessionScreen for the given workstream.
 
@@ -2105,6 +2122,10 @@ class OrchestratorApp(App):
         callers (e.g. spawning a crystallized todo) set this False — a
         todo is a new task, never a continuation of whatever fresh session
         happens to be cached.
+
+        auto_role: when set ("coordinator" or "implementer"), tag the
+        resulting session id under that role for this workstream so the
+        detail view can style it.
         """
         from claude_session_screen import ClaudeSessionScreen
         from terminal import TerminalWidget
@@ -2170,6 +2191,13 @@ class OrchestratorApp(App):
         # hijack the workstream's "press c for fresh" slot with a specific task.
         if reuse_pending and session_id is None and ws.id:
             self._ws_pending_session[ws.id] = screen._session_id
+
+        if auto_role and ws.id:
+            sid = screen._session_id
+            if auto_role == "coordinator":
+                self._auto_coord_sid[ws.id] = sid
+            elif auto_role == "implementer":
+                self._auto_impl_sids.setdefault(ws.id, set()).add(sid)
 
         def _on_dismiss(result):
             if isinstance(result, dict) and result.get("detached"):
@@ -2337,6 +2365,7 @@ class OrchestratorApp(App):
                 return
             self.launch_claude_session(
                 ws, prompt=brief, reuse_pending=False, callback=cb,
+                auto_role="implementer",
             )
 
             async def wait_for_report():

@@ -609,6 +609,22 @@ _BADGE_WIDTHS = {
 }
 
 
+def _auto_role_chip(auto_role: str | None, faint: bool = False) -> tuple[str, int]:
+    """Rich-markup chip identifying a session's auto-mode role.
+
+    Returns (markup, visible_cell_width). Width is fixed at 6 so callers
+    can subtract it from the title budget without per-role math.
+    """
+    if not auto_role:
+        return "", 0
+    color = C_FAINT if faint else (C_CYAN if auto_role == "coordinator" else C_ORANGE)
+    if auto_role == "coordinator":
+        return f"[bold {color}]coord[/bold {color}] ", 6
+    if auto_role == "implementer":
+        return f"[bold {color}]impl[/bold {color}]  ", 6
+    return "", 0
+
+
 _BAR_CATS = [
     ("mutate", C_ORANGE),
     ("bash",   "#8fa0b0"),
@@ -672,6 +688,7 @@ def _render_session_option(
     s: ClaudeSession, act: ThreadActivity, throbber_frame: int = 0,
     title_width: int = 48, ws_repo_path: str = "", seen: bool = False,
     line_width: int = 0, shelved: bool = False, archived: bool = False,
+    auto_role: str | None = None,
 ) -> str:
     """Render a session as a formatted multi-line OptionList entry.
 
@@ -694,8 +711,9 @@ def _render_session_option(
         badge = f"[{C_SHELF}]shelved[/{C_SHELF}]"
         badge_w = 8
         model = _short_model(s.model)
-        title_raw = _session_title(s)[:title_width]
-        title_pad = " " * (title_width - len(title_raw))
+        chip, chip_w = _auto_role_chip(auto_role, faint=True)
+        title_raw = _session_title(s)[:title_width - chip_w]
+        title_pad = " " * (title_width - chip_w - len(title_raw))
         title_esc = _rich_escape(title_raw)
         sid = s.session_id[:8]
         tokens_plain = s.tokens_display
@@ -706,7 +724,7 @@ def _render_session_option(
         age_col = f"{age_str:>4}"
         age_w = 2 + 4
         fill = max(2, LINE_WIDTH - prefix_w - title_width - age_w - badge_w)
-        line1 = f" {icon} {title_fmt}{title_pad}  [{C_FAINT}]{age_col}[/{C_FAINT}]{' ' * fill}{badge}"
+        line1 = f" {icon} {chip}{title_fmt}{title_pad}  [{C_FAINT}]{age_col}[/{C_FAINT}]{' ' * fill}{badge}"
         model_color = C_FAINT  # shelved: everything faint
         model_part = f"[{model_color}]{model:<8}[/{model_color}]"
         tok_pad = " " * max(1, 8 - len(tokens_plain))
@@ -768,8 +786,9 @@ def _render_session_option(
         badge = _activity_badge(act, seen=seen)
         badge_w = _BADGE_WIDTHS.get(act, 0)
     model = _short_model(s.model)
-    title_raw = _session_title(s)[:title_width]
-    title_pad = " " * (title_width - len(title_raw))  # pad to fixed column
+    chip, chip_w = _auto_role_chip(auto_role, faint=archived)
+    title_raw = _session_title(s)[:title_width - chip_w]
+    title_pad = " " * (title_width - chip_w - len(title_raw))  # pad to fixed column
     title_esc = _rich_escape(title_raw)
     sid = s.session_id[:8]
     tokens_plain = s.tokens_display
@@ -801,10 +820,10 @@ def _render_session_option(
     age_w = 2 + 4  # "  " + age_col
     if badge:
         fill = max(2, LINE_WIDTH - prefix_w - title_width - age_w - badge_w)
-        line1 = f" {icon} {title_fmt}{title_pad}  [{s_dim}]{age_col}[/{s_dim}]{' ' * fill}{badge}"
+        line1 = f" {icon} {chip}{title_fmt}{title_pad}  [{s_dim}]{age_col}[/{s_dim}]{' ' * fill}{badge}"
     else:
         fill = max(2, LINE_WIDTH - prefix_w - title_width - age_w - 8)
-        line1 = f" {icon} {title_fmt}{title_pad}  [{s_dim}]{age_col}[/{s_dim}]{' ' * fill}[{C_FAINT}]{sid}[/{C_FAINT}]"
+        line1 = f" {icon} {chip}{title_fmt}{title_pad}  [{s_dim}]{age_col}[/{s_dim}]{' ' * fill}[{C_FAINT}]{sid}[/{C_FAINT}]"
 
     # Line 2: model + stats dim, tokens colored
     # sid shown here only when a badge occupies line 1's right slot
@@ -1033,7 +1052,7 @@ def _render_notified_session_option(
     s: ClaudeSession, act: ThreadActivity, notif=None,
     throbber_frame: int = 0, title_width: int = 48,
     ws_repo_path: str = "", seen: bool = False,
-    line_width: int = 0,
+    line_width: int = 0, auto_role: str | None = None,
 ) -> str:
     """Render a session in elevated/notified style.
 
@@ -1058,7 +1077,8 @@ def _render_notified_session_option(
     badge = _activity_badge(act, seen=seen)
     badge_w = _BADGE_WIDTHS.get(act, 0)
     model = _short_model(s.model)
-    title_raw = _session_title(s)[:title_width]
+    chip, chip_w = _auto_role_chip(auto_role)
+    title_raw = _session_title(s)[:title_width - chip_w]
     title_esc = _rich_escape(title_raw)
     sid = s.session_id[:8]
     tokens_plain = s.tokens_display
@@ -1072,11 +1092,11 @@ def _render_notified_session_option(
     # Line 1: badge if present, else sid fills the right slot
     prefix_w = 3
     if badge:
-        fill = max(2, LINE_WIDTH - prefix_w - len(title_raw) - badge_w)
-        line1 = f" {icon} {title_fmt}{' ' * fill}{badge}"
+        fill = max(2, LINE_WIDTH - prefix_w - chip_w - len(title_raw) - badge_w)
+        line1 = f" {icon} {chip}{title_fmt}{' ' * fill}{badge}"
     else:
-        fill = max(2, LINE_WIDTH - prefix_w - len(title_raw) - 8)
-        line1 = f" {icon} {title_fmt}{' ' * fill}[{C_FAINT}]{sid}[/{C_FAINT}]"
+        fill = max(2, LINE_WIDTH - prefix_w - chip_w - len(title_raw) - 8)
+        line1 = f" {icon} {chip}{title_fmt}{' ' * fill}[{C_FAINT}]{sid}[/{C_FAINT}]"
 
     # Line 2: sid shown here only when badge occupies line 1's right slot
     model_color = C_OPUS if model == "opus" else C_MID

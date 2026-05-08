@@ -1512,22 +1512,25 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
                     continue
                 cur_act = session_activity(s, last_seen)
                 seen = _is_session_seen(s, last_seen)
+                role = self.app.auto_role_for(self.ws.id, sid)
                 if sid in notif_map:
                     prompt = _render_notified_session_option(
                         s, cur_act, notif_map[sid], self._throbber_frame,
                         ws_repo_path=repo, seen=seen, line_width=lw,
+                        auto_role=role,
                     )
                 elif not seen and cur_act in elevated_acts:
                     prompt = _render_notified_session_option(
                         s, cur_act, None, self._throbber_frame,
                         ws_repo_path=repo, seen=seen, line_width=lw,
+                        auto_role=role,
                     )
                 else:
                     is_shelved = sid in shelved
                     prompt = _render_session_option(
                         s, cur_act, self._throbber_frame,
                         ws_repo_path=repo, seen=seen, line_width=lw,
-                        shelved=is_shelved,
+                        shelved=is_shelved, auto_role=role,
                     )
                 olist.replace_option_prompt_at_index(idx, prompt)
 
@@ -1549,10 +1552,11 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
                         continue
                     cur_act = session_activity(s, last_seen)
                     seen = _is_session_seen(s, last_seen)
+                    role = self.app.auto_role_for(self.ws.id, sid)
                     prompt = _render_session_option(
                         s, cur_act, self._throbber_frame,
                         ws_repo_path=repo, seen=seen, line_width=alw,
-                        archived=True,
+                        archived=True, auto_role=role,
                     )
                     arch_olist.replace_option_prompt_at_index(idx, prompt)
 
@@ -1697,10 +1701,11 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
                         act = session_activity(s, self._last_seen_cache)
                         seen = _is_session_seen(s, self._last_seen_cache)
                         notif = self._session_notifications[s.session_id]
+                        role = self.app.auto_role_for(self.ws.id, s.session_id)
                         prompt = _render_notified_session_option(
                             s, act, notif, self._throbber_frame,
                             ws_repo_path=self.ws.repo_path, seen=seen,
-                            line_width=lw,
+                            line_width=lw, auto_role=role,
                         )
                         olist.replace_option_prompt_at_index(idx, prompt)
                     idx += 1
@@ -1709,10 +1714,11 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
                     if idx < olist.option_count:
                         act = session_activity(s, self._last_seen_cache)
                         seen = _is_session_seen(s, self._last_seen_cache)
+                        role = self.app.auto_role_for(self.ws.id, s.session_id)
                         prompt = _render_notified_session_option(
                             s, act, None, self._throbber_frame,
                             ws_repo_path=self.ws.repo_path, seen=seen,
-                            line_width=lw,
+                            line_width=lw, auto_role=role,
                         )
                         olist.replace_option_prompt_at_index(idx, prompt)
                     idx += 1
@@ -1724,7 +1730,8 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
                     if idx < olist.option_count:
                         act = session_activity(s, self._last_seen_cache)
                         seen = _is_session_seen(s, self._last_seen_cache)
-                        prompt = _render_session_option(s, act, self._throbber_frame, ws_repo_path=self.ws.repo_path, seen=seen, line_width=lw)
+                        role = self.app.auto_role_for(self.ws.id, s.session_id)
+                        prompt = _render_session_option(s, act, self._throbber_frame, ws_repo_path=self.ws.repo_path, seen=seen, line_width=lw, auto_role=role)
                         olist.replace_option_prompt_at_index(idx, prompt)
                     idx += 1
 
@@ -1734,7 +1741,8 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
                         if idx < olist.option_count:
                             act = session_activity(s, self._last_seen_cache)
                             seen = _is_session_seen(s, self._last_seen_cache)
-                            prompt = _render_session_option(s, act, self._throbber_frame, ws_repo_path=self.ws.repo_path, seen=seen, line_width=lw)
+                            role = self.app.auto_role_for(self.ws.id, s.session_id)
+                            prompt = _render_session_option(s, act, self._throbber_frame, ws_repo_path=self.ws.repo_path, seen=seen, line_width=lw, auto_role=role)
                             olist.replace_option_prompt_at_index(idx, prompt)
                         idx += 1
 
@@ -1744,7 +1752,8 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
                         if idx < olist.option_count:
                             act = session_activity(s, self._last_seen_cache)
                             seen = _is_session_seen(s, self._last_seen_cache)
-                            prompt = _render_session_option(s, act, self._throbber_frame, ws_repo_path=self.ws.repo_path, seen=seen, line_width=lw)
+                            role = self.app.auto_role_for(self.ws.id, s.session_id)
+                            prompt = _render_session_option(s, act, self._throbber_frame, ws_repo_path=self.ws.repo_path, seen=seen, line_width=lw, auto_role=role)
                             olist.replace_option_prompt_at_index(idx, prompt)
                         idx += 1
 
@@ -1754,7 +1763,8 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
                         if idx < olist.option_count:
                             act = session_activity(s, self._last_seen_cache)
                             seen = _is_session_seen(s, self._last_seen_cache)
-                            prompt = _render_session_option(s, act, self._throbber_frame, ws_repo_path=self.ws.repo_path, seen=seen, line_width=lw, shelved=True)
+                            role = self.app.auto_role_for(self.ws.id, s.session_id)
+                            prompt = _render_session_option(s, act, self._throbber_frame, ws_repo_path=self.ws.repo_path, seen=seen, line_width=lw, shelved=True, auto_role=role)
                             olist.replace_option_prompt_at_index(idx, prompt)
                         idx += 1
 
@@ -1765,7 +1775,8 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
                     if i < arch_olist.option_count:
                         act = session_activity(s, self._last_seen_cache)
                         seen = _is_session_seen(s, self._last_seen_cache)
-                        prompt = _render_session_option(s, act, self._throbber_frame, ws_repo_path=self.ws.repo_path, seen=seen, line_width=alw, archived=True)
+                        role = self.app.auto_role_for(self.ws.id, s.session_id)
+                        prompt = _render_session_option(s, act, self._throbber_frame, ws_repo_path=self.ws.repo_path, seen=seen, line_width=alw, archived=True, auto_role=role)
                         arch_olist.replace_option_prompt_at_index(i, prompt)
             # In-place rebuild leaves the OptionList in sync with current state,
             # so update the fingerprint to let _load_detail_sessions short-circuit.
@@ -1993,10 +2004,11 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
                 animating.append((idx, act))
             seen = _is_session_seen(s, self._last_seen_cache)
             notif = self._session_notifications[s.session_id]
+            role = self.app.auto_role_for(self.ws.id, s.session_id)
             prompt = _render_notified_session_option(
                 s, act, notif, self._throbber_frame,
                 ws_repo_path=self.ws.repo_path, seen=seen,
-                line_width=lw,
+                line_width=lw, auto_role=role,
             )
             options.append(Option(prompt, id=s.session_id))
             idx += 1
@@ -2006,10 +2018,11 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
             if act in (ThreadActivity.THINKING, ThreadActivity.AWAITING_INPUT):
                 animating.append((idx, act))
             seen = _is_session_seen(s, self._last_seen_cache)
+            role = self.app.auto_role_for(self.ws.id, s.session_id)
             prompt = _render_notified_session_option(
                 s, act, None, self._throbber_frame,
                 ws_repo_path=self.ws.repo_path, seen=seen,
-                line_width=lw,
+                line_width=lw, auto_role=role,
             )
             options.append(Option(prompt, id=s.session_id))
             idx += 1
@@ -2027,7 +2040,8 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
             if act == ThreadActivity.AWAITING_INPUT:
                 animating.append((idx, act))
             seen = _is_session_seen(s, self._last_seen_cache)
-            prompt = _render_session_option(s, act, self._throbber_frame, ws_repo_path=self.ws.repo_path, seen=seen, line_width=lw)
+            role = self.app.auto_role_for(self.ws.id, s.session_id)
+            prompt = _render_session_option(s, act, self._throbber_frame, ws_repo_path=self.ws.repo_path, seen=seen, line_width=lw, auto_role=role)
             options.append(Option(prompt, id=s.session_id))
             idx += 1
 
@@ -2038,7 +2052,8 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
                 act = session_activity(s, self._last_seen_cache)
                 animating.append((idx, act))
                 seen = _is_session_seen(s, self._last_seen_cache)
-                prompt = _render_session_option(s, act, self._throbber_frame, ws_repo_path=self.ws.repo_path, seen=seen, line_width=lw)
+                role = self.app.auto_role_for(self.ws.id, s.session_id)
+                prompt = _render_session_option(s, act, self._throbber_frame, ws_repo_path=self.ws.repo_path, seen=seen, line_width=lw, auto_role=role)
                 options.append(Option(prompt, id=s.session_id))
                 idx += 1
 
@@ -2052,7 +2067,8 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
                 if act == ThreadActivity.AWAITING_INPUT:
                     animating.append((idx, act))
                 seen = _is_session_seen(s, self._last_seen_cache)
-                prompt = _render_session_option(s, act, self._throbber_frame, ws_repo_path=self.ws.repo_path, seen=seen, line_width=lw)
+                role = self.app.auto_role_for(self.ws.id, s.session_id)
+                prompt = _render_session_option(s, act, self._throbber_frame, ws_repo_path=self.ws.repo_path, seen=seen, line_width=lw, auto_role=role)
                 options.append(Option(prompt, id=s.session_id))
                 idx += 1
 
@@ -2062,7 +2078,8 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
             for s in quiet_shelved:
                 act = session_activity(s, self._last_seen_cache)
                 seen = _is_session_seen(s, self._last_seen_cache)
-                prompt = _render_session_option(s, act, self._throbber_frame, ws_repo_path=self.ws.repo_path, seen=seen, line_width=lw, shelved=True)
+                role = self.app.auto_role_for(self.ws.id, s.session_id)
+                prompt = _render_session_option(s, act, self._throbber_frame, ws_repo_path=self.ws.repo_path, seen=seen, line_width=lw, shelved=True, auto_role=role)
                 options.append(Option(prompt, id=s.session_id))
                 idx += 1
 
@@ -2090,7 +2107,8 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
             if act in (ThreadActivity.THINKING, ThreadActivity.AWAITING_INPUT):
                 animating.append((i, act))
             seen = _is_session_seen(s, self._last_seen_cache)
-            prompt = _render_session_option(s, act, self._throbber_frame, ws_repo_path=self.ws.repo_path, seen=seen, line_width=alw, archived=True)
+            role = self.app.auto_role_for(self.ws.id, s.session_id)
+            prompt = _render_session_option(s, act, self._throbber_frame, ws_repo_path=self.ws.repo_path, seen=seen, line_width=alw, archived=True, auto_role=role)
             options.append(Option(prompt, id=f"a:{s.session_id}"))
         remaining = len(self._archived_sessions) - limit
         if remaining > 0:
