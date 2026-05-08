@@ -98,7 +98,17 @@ def build_implementer_brief(todo: TodoItem) -> str:
     return "\n".join(parts)
 
 
-def build_coordinator_kickoff(ws: Workstream) -> str:
+def build_coordinator_kickoff(ws: Workstream, pending_count: int = 0) -> str:
+    if pending_count > 0:
+        plural = "todo" if pending_count == 1 else "todos"
+        return (
+            f"[auto-mode started] You are now the coordinator for workstream "
+            f"'{ws.name}'. {pending_count} crystallized {plural} already queued — "
+            f"the loop will run them sequentially. After each one finishes, you'll "
+            f"receive the implementer's report and a prompt to crystallize more or "
+            f"run `orch distill done --reason '...'` to terminate. To stop early, "
+            f"run `orch distill done` at any point."
+        )
     return (
         f"[auto-mode started] You are now the coordinator for workstream "
         f"'{ws.name}'. Crystallize the first concrete task with "
@@ -178,9 +188,17 @@ class AutoMode:
             ws.auto_done_reason = ""
             self.store.update(ws)
 
+        # Count pending un-skipped crystallized todos for the kickoff message.
+        pending = [
+            t for t in ws.todos
+            if t.origin == "crystallized" and not t.done and not t.archived
+            and t.id not in self.skip_todo_ids
+        ]
+        self.inject_coordinator(build_coordinator_kickoff(ws, pending_count=len(pending)))
+        self.notify(f"started ({len(pending)} todos queued)")
+
         todo = find_next_todo(ws, self.skip_todo_ids)
         if todo is None:
-            self.inject_coordinator(build_coordinator_kickoff(ws))
             self.notify("waiting for coordinator to crystallize first todo")
             todo, reason = await self._wait_for_todo_or_done()
             if reason or todo is None:

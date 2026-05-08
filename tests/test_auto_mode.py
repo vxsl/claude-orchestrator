@@ -98,6 +98,19 @@ class TestPromptBuilders:
         assert "my-ws" in out
         assert "extract-orch-todo" in out or "crystallize" in out
 
+    def test_kickoff_with_pending_count(self):
+        ws = Workstream(name="busy-ws")
+        out = build_coordinator_kickoff(ws, pending_count=3)
+        assert "busy-ws" in out
+        assert "3" in out
+        assert "queued" in out or "todos" in out
+
+    def test_kickoff_singular_when_one_pending(self):
+        ws = Workstream(name="x")
+        out = build_coordinator_kickoff(ws, pending_count=1)
+        # "1 crystallized todo" not "1 crystallized todos"
+        assert "1 crystallized todo " in out
+
 
 # ─── quota stall detection ───────────────────────────────────────────
 
