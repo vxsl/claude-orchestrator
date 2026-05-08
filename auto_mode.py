@@ -1,15 +1,21 @@
 """Auto-mode loop runner.
 
 Drives the coordinator/implementer cycle for a workstream:
-- coordinator decides what to crystallize next
-- loop spawns an implementer for each crystallized todo
+- coordinator decides what to dispatch next (every iteration, including the first)
+- loop spawns an implementer for the chosen todo
 - implementer runs `orch report` to write a summary back
 - loop injects that summary into the coordinator's PTY and waits
-- coordinator runs `orch distill done` to terminate the loop
+- coordinator picks again, or runs `orch distill done` to terminate
+
+The loop never auto-advances through a pre-existing pending queue — every
+iteration requires the coordinator to take one of three actions:
+  (a) `orch distill crystallize` (or /user:extract-orch-todo) to queue a NEW todo
+  (b) `orch distill next --todo-id <id>` to dispatch an EXISTING pending todo
+  (c) `orch distill done --reason '...'` to terminate
 
 If the coordinator goes silent after a followup (it generates text but
-takes neither of the two protocol actions), the loop re-injects a
-short nudge every NUDGE_INTERVAL_S seconds until something changes.
+takes none of those three actions), the loop re-injects a short nudge
+every NUDGE_INTERVAL_S seconds until something changes.
 
 Pure logic — no Textual imports. The TUI wires three callables:
   spawn_implementer(todo, brief) -> awaitable[None]
@@ -104,49 +110,92 @@ def build_implementer_brief(todo: TodoItem) -> str:
     return "\n".join(parts)
 
 
-def build_coordinator_kickoff(ws: Workstream, pending_count: int = 0) -> str:
-    if pending_count > 0:
-        plural = "todo" if pending_count == 1 else "todos"
+def _format_pending_list(todos: list) -> str:
+    """One line per pending todo, with ID and truncated text — for prompts."""
+    lines = []
+    for t in todos:
+        text = t.text.strip().replace("\n", " ")
+        if len(text) > 80:
+            text = text[:77] + "..."
+        lines.append(f"  - {t.id}  {text}")
+    return "\n".join(lines)
+
+
+def build_coordinator_kickoff(ws: Workstream, pending_todos: Optional[list] = None) -> str:
+    pending = pending_todos or []
+    if pending:
+        plural = "todo" if len(pending) == 1 else "todos"
+        listing = _format_pending_list(pending)
         return (
             f"[auto-mode started] You are now the coordinator for workstream "
-            f"'{ws.name}'. {pending_count} crystallized {plural} already queued — "
-            f"the loop will run them sequentially. After each one finishes, you'll "
-            f"receive the implementer's report and a prompt to crystallize more or "
-            f"run `orch distill done --reason '...'` to terminate. To stop early, "
-            f"run `orch distill done` at any point."
+            f"'{ws.name}'. {len(pending)} pending {plural} already queued — but "
+            f"the loop will NOT auto-dispatch them. You decide what runs next.\n\n"
+            f"Pending {plural}:\n{listing}\n\n"
+            f"⚠ AUTO-MODE PROTOCOL — take exactly ONE action now:\n"
+            f"  (a) `orch distill next --todo-id <id>` to dispatch one of the pending todos above, OR\n"
+            f"  (b) /user:extract-orch-todo (or `orch distill crystallize`) to queue a fresh task, OR\n"
+            f"  (c) `orch distill done --reason '...'` to terminate without running anything."
         )
     return (
         f"[auto-mode started] You are now the coordinator for workstream "
         f"'{ws.name}'. Crystallize the first concrete task with "
         f"/user:extract-orch-todo (or `orch distill crystallize`). An "
-        f"implementer will pick it up automatically. When the implementer "
+        f"implementer will pick it up automatically. After each implementer "
         f"reports back, you'll be prompted again. Run "
         f"`orch distill done --reason '...'` when the workstream is complete."
     )
 
 
-def build_coordinator_followup(todo: TodoItem, report: str) -> str:
-    return (
-        f"[auto-mode] Implementer for todo '{todo.text}' has finished.\n\n"
-        f"Report:\n{report}\n\n"
-        f"⚠ AUTO-MODE PROTOCOL — take exactly ONE action right now:\n"
-        f"  (a) /user:extract-orch-todo (or `orch distill crystallize`) "
-        f"to queue the next implementer task, OR\n"
-        f"  (b) `orch distill done --reason '...'` to terminate the loop.\n\n"
-        f"Do NOT respond conversationally, recap, or 'stand by' — the loop "
-        f"is blocked until you take one of those two actions. If unsure, "
-        f"crystallize the next concrete step from the brief or recent "
-        f"discussion."
-    )
+def build_coordinator_followup(
+    todo: TodoItem,
+    report: str,
+    pending_todos: Optional[list] = None,
+) -> str:
+    pending = pending_todos or []
+    parts = [
+        f"[auto-mode] Implementer for todo '{todo.text}' has finished.",
+        "",
+        "Report:",
+        report,
+        "",
+        "⚠ AUTO-MODE PROTOCOL — read the report above, then take exactly ONE action:",
+    ]
+    if pending:
+        plural = "todo" if len(pending) == 1 else "todos"
+        listing = _format_pending_list(pending)
+        parts += [
+            f"  (a) `orch distill next --todo-id <id>` to dispatch one of these pending {plural}:",
+            listing,
+            f"  (b) /user:extract-orch-todo (or `orch distill crystallize`) to queue a NEW implementer task, OR",
+            f"  (c) `orch distill done --reason '...'` to terminate the loop.",
+        ]
+    else:
+        parts += [
+            f"  (a) /user:extract-orch-todo (or `orch distill crystallize`) to queue the next implementer task, OR",
+            f"  (b) `orch distill done --reason '...'` to terminate the loop.",
+        ]
+    parts += [
+        "",
+        "Do NOT respond conversationally, recap, or 'stand by' — the loop is "
+        "blocked until you take one of those actions. Decide based on the "
+        "report above whether to continue with an existing item, crystallize "
+        "a new step, or terminate.",
+    ]
+    return "\n".join(parts)
 
 
-def build_coordinator_nudge() -> str:
-    return (
-        f"[auto-mode] Still waiting. Take ONE action now:\n"
-        f"  (a) /user:extract-orch-todo to queue next, OR\n"
-        f"  (b) `orch distill done --reason '...'` to terminate.\n"
-        f"No conversational reply — pick one and run it."
-    )
+def build_coordinator_nudge(pending_todos: Optional[list] = None) -> str:
+    pending = pending_todos or []
+    lines = ["[auto-mode] Still waiting. Take ONE action now:"]
+    if pending:
+        lines.append("  (a) `orch distill next --todo-id <id>` to dispatch a pending todo, OR")
+        lines.append("  (b) /user:extract-orch-todo to queue a new task, OR")
+        lines.append("  (c) `orch distill done --reason '...'` to terminate.")
+    else:
+        lines.append("  (a) /user:extract-orch-todo to queue next, OR")
+        lines.append("  (b) `orch distill done --reason '...'` to terminate.")
+    lines.append("No conversational reply — pick one and run it.")
+    return "\n".join(lines)
 
 
 class AutoMode:
@@ -211,13 +260,33 @@ class AutoMode:
             return cur.report or ""
         return ""
 
-    async def _wait_for_todo_or_done(self) -> tuple[Optional[TodoItem], str]:
-        """Poll until an un-done crystallized todo appears, auto_done_reason
-        is set, or we're canceled. Returns (todo, terminate_reason).
+    def _pending_todos(self, ws: Workstream) -> list[TodoItem]:
+        """Pending un-archived un-done todos that haven't been attempted this run."""
+        return [
+            t for t in ws.todos
+            if not t.done and not t.archived and t.id not in self.skip_todo_ids
+        ]
 
-        If the coordinator goes silent (no new todo, no done flag) for
-        NUDGE_INTERVAL_S seconds, re-inject a short prompt asking it
-        to take one of the two protocol actions.
+    async def _wait_for_todo_or_done(
+        self,
+        existing_ids: set[str],
+    ) -> tuple[Optional[TodoItem], str]:
+        """Poll until the coordinator picks something or terminates.
+
+        `existing_ids` is the snapshot of pending todo IDs at the moment
+        the wait started. Those are gated — the loop will NOT dispatch
+        them automatically. The coordinator must explicitly pick one
+        (via `orch distill next --todo-id <id>`, which sets
+        ws.auto_next_todo_id) or crystallize a fresh todo (a new id
+        appears that wasn't in the snapshot).
+
+        Returns (todo, terminate_reason). Terminating reasons:
+          - ws.auto_done_reason set → that string
+          - canceled → "canceled"
+          - workstream missing → "workstream not found"
+
+        If the coordinator goes silent past NUDGE_INTERVAL_S, re-inject
+        a short reminder.
         """
         import time as _time
         last_nudge_at = _time.time()
@@ -228,45 +297,71 @@ class AutoMode:
                 return None, "workstream not found"
             if ws.auto_done_reason:
                 return None, ws.auto_done_reason
-            todo = find_next_todo(ws, self.skip_todo_ids)
-            if todo is not None:
-                return todo, ""
+
+            # (1) Coordinator explicitly picked an existing pending todo.
+            if ws.auto_next_todo_id:
+                picked = next(
+                    (t for t in ws.todos
+                     if t.id == ws.auto_next_todo_id
+                     and not t.done and not t.archived
+                     and t.id not in self.skip_todo_ids),
+                    None,
+                )
+                # Always clear the signal — invalid picks are dropped, not retried,
+                # so the coordinator gets a chance to pick again on the next nudge.
+                ws.auto_next_todo_id = ""
+                self.store.update(ws)
+                if picked is not None:
+                    return picked, ""
+
+            # (2) A fresh todo was crystallized (id not in pre-wait snapshot).
+            for t in self._pending_todos(ws):
+                if t.id not in existing_ids:
+                    return t, ""
+
+            # (3) Silent — nudge.
             if _time.time() - last_nudge_at > NUDGE_INTERVAL_S:
                 self.notify("coordinator silent — sending nudge")
-                self.inject_coordinator(build_coordinator_nudge())
+                pending = [t for t in self._pending_todos(ws) if t.id in existing_ids]
+                self.inject_coordinator(build_coordinator_nudge(pending))
                 last_nudge_at = _time.time()
             await asyncio.sleep(self.poll_interval)
         return None, "canceled"
 
     async def run(self) -> str:
-        """Run the loop to completion. Returns the terminating reason."""
+        """Run the loop to completion. Returns the terminating reason.
+
+        Every iteration — including the first — waits for the coordinator
+        to explicitly pick a todo (via `orch distill next` or a fresh
+        crystallization) or terminate. Pre-existing pending todos do not
+        auto-flow.
+        """
         self.store.load(force=True)
         ws = self.store.get(self.ws_id)
         if not ws:
             self.final_status = "workstream not found"
             return self.final_status
 
-        # Clear stale done flag from a previous run
+        # Clear stale signals from a previous run.
+        dirty = False
         if ws.auto_done_reason:
             ws.auto_done_reason = ""
+            dirty = True
+        if ws.auto_next_todo_id:
+            ws.auto_next_todo_id = ""
+            dirty = True
+        if dirty:
             self.store.update(ws)
 
-        # Count pending un-skipped todos (any origin) for the kickoff message.
-        pending = [
-            t for t in ws.todos
-            if not t.done and not t.archived
-            and t.id not in self.skip_todo_ids
-        ]
-        self.inject_coordinator(build_coordinator_kickoff(ws, pending_count=len(pending)))
-        self.notify(f"started ({len(pending)} todos queued)")
+        pending = self._pending_todos(ws)
+        existing_ids = {t.id for t in pending}
+        self.inject_coordinator(build_coordinator_kickoff(ws, pending_todos=pending))
+        self.notify(f"started ({len(pending)} todos queued, awaiting coordinator pick)")
 
-        todo = find_next_todo(ws, self.skip_todo_ids)
-        if todo is None:
-            self.notify("waiting for coordinator to crystallize first todo")
-            todo, reason = await self._wait_for_todo_or_done()
-            if reason or todo is None:
-                self.final_status = reason or "canceled"
-                return self.final_status
+        todo, reason = await self._wait_for_todo_or_done(existing_ids)
+        if reason or todo is None:
+            self.final_status = reason or "canceled"
+            return self.final_status
 
         while not self.canceled:
             self.iteration += 1
@@ -279,21 +374,33 @@ class AutoMode:
                 self.final_status = "canceled"
                 return self.final_status
 
-            # Belt-and-suspenders: never re-attempt the same todo within
-            # one run, even if the implementer didn't write a report (so
-            # find_next_todo would still see it as un-done). Without this,
-            # an impl that fails to report could be respawned in a tight
-            # loop on the next iteration.
+            # Never re-attempt the same todo within one run, even if its
+            # implementer didn't report. Without this, an impl that
+            # fails to report could be respawned in a tight loop.
             self.skip_todo_ids.add(todo.id)
 
             report_text = await self._read_report(todo.id)
             report = report_text or "(implementer did not run `orch report` — no writeback)"
             self.last_report = report
 
-            self.inject_coordinator(build_coordinator_followup(todo, report))
-            self.notify(f"iter {self.iteration}: report received, awaiting coordinator")
+            # Snapshot pending todos AS OF NOW — anything created after
+            # this point counts as a fresh coordinator decision and will
+            # advance the loop. Pre-existing pending items are gated and
+            # require explicit `orch distill next --todo-id <id>`.
+            self.store.load(force=True)
+            ws_snap = self.store.get(self.ws_id)
+            if not ws_snap:
+                self.final_status = "workstream not found"
+                return self.final_status
+            pending_snap = self._pending_todos(ws_snap)
+            existing_ids = {t.id for t in pending_snap}
 
-            next_todo, reason = await self._wait_for_todo_or_done()
+            self.inject_coordinator(
+                build_coordinator_followup(todo, report, pending_todos=pending_snap)
+            )
+            self.notify(f"iter {self.iteration}: report received, awaiting coordinator pick")
+
+            next_todo, reason = await self._wait_for_todo_or_done(existing_ids)
             if reason:
                 self.final_status = reason
                 return self.final_status

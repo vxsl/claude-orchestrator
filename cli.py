@@ -527,6 +527,24 @@ def cmd_distill(args):
         print(f"  {_c('green', '✓')} Auto-mode termination signaled for {_c('bold', ws.name)}")
         print(f"    {_c('dim', 'reason:')} {reason}")
 
+    elif mode == "next":
+        todo_id = (args.todo_id or "").strip()
+        if not todo_id:
+            print(_c("red", "  --todo-id is required for `orch distill next`."))
+            sys.exit(1)
+        match = next(
+            (t for t in ws.todos
+             if (t.id == todo_id or t.id.startswith(todo_id))
+             and not t.done and not t.archived),
+            None,
+        )
+        if match is None:
+            print(_c("red", f"  No pending todo with id {todo_id} on {ws.name}."))
+            sys.exit(1)
+        ws.auto_next_todo_id = match.id
+        store.update(ws)
+        print(f"  {_c('green', '✓')} Auto-mode will dispatch {_c('bold', match.id)} next on {_c('bold', ws.name)}: {match.text}")
+
     else:
         print(_c("red", f"  Unknown distill mode: {mode}"))
         sys.exit(1)
@@ -1146,20 +1164,21 @@ and description as context. uses the worktree path as working directory.
     p_spawn.add_argument("id", help="Workstream ID (or prefix)")
 
     # distill
-    p_distill = sub.add_parser("distill", help="Distill session context (compact, crystallize, done)",
+    p_distill = sub.add_parser("distill", help="Distill session context (compact, crystallize, done, next)",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""\
 examples:
   orch distill crystallize --text "Refactor auth middleware" --context "..."
   orch distill compact --summary "We investigated X and decided Y..."
   orch distill done --reason "all crystallized todos are complete"
+  orch distill next --todo-id abc12345
   echo "long context" | orch distill crystallize --text "task" --context -
 
 auto-detects workstream from ORCH_WS_ID env var (set by orch-claude),
 or pass --ws-id explicitly.
 """)
-    p_distill.add_argument("distill_mode", choices=["compact", "crystallize", "done"],
-                           help="compact: save context. crystallize: save as todo. done: signal auto-mode to exit.")
+    p_distill.add_argument("distill_mode", choices=["compact", "crystallize", "done", "next"],
+                           help="compact: save context. crystallize: save as todo. done: signal auto-mode to exit. next: dispatch a pending todo on the auto-mode loop.")
     p_distill.add_argument("--ws-id", dest="ws_id",
                            help="Workstream ID (default: ORCH_WS_ID env var)")
     p_distill.add_argument("--text", "-t",
@@ -1170,6 +1189,8 @@ or pass --ws-id explicitly.
                            help="Continuation summary (compact mode). Use '-' for stdin.")
     p_distill.add_argument("--reason", "-r",
                            help="Why the workstream is done (done mode, optional)")
+    p_distill.add_argument("--todo-id", dest="todo_id",
+                           help="Pending todo ID to dispatch (next mode)")
 
     # report (auto-mode implementer writeback)
     p_report = sub.add_parser("report", help="Implementer writeback to a crystallized todo (auto-mode)",

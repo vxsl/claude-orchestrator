@@ -82,6 +82,7 @@ class Workstream:
     updated_at: str = field(default_factory=lambda: datetime.now().isoformat())
     last_user_activity: str = ""  # timestamp of last user message (for stable sorting)
     auto_done_reason: str = ""  # set by `orch distill done` to signal auto-mode loop should exit
+    auto_next_todo_id: str = ""  # set by `orch distill next` to dispatch a pending todo without re-crystallizing
 
     def __post_init__(self):
         # Sanitize name: strip whitespace, fix "UB-XXXX: UB-XXXX" redundancy
@@ -183,6 +184,7 @@ class Workstream:
         d.setdefault("repo_path", "")
         d.setdefault("todos", [])
         d.setdefault("auto_done_reason", "")
+        d.setdefault("auto_next_todo_id", "")
         todos = []
         for t in d["todos"]:
             if isinstance(t, dict):
