@@ -936,6 +936,132 @@ class TestDistillDoneCLI:
         s2 = Store(path=target)
         assert s2.workstreams[0].auto_done_reason  # non-empty default
 
+    def test_refuses_when_pending_todos_exist(self, tmp_path, monkeypatch, capsys):
+        target = tmp_path / "dev" / "claude-orchestrator" / "data.json"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        store = Store(path=target)
+        ws = Workstream(name="done-ws")
+        ws.todos = [
+            TodoItem(text="leftover task", origin="crystallized", id="abc12345"),
+        ]
+        store.add(ws)
+        monkeypatch.setenv("HOME", str(tmp_path))
+        monkeypatch.setenv("ORCH_WS_ID", ws.id)
+
+        from cli import cmd_distill
+
+        class Args:
+            distill_mode = "done"
+            ws_id = None
+            text = None
+            context = None
+            summary = None
+            reason = "I think we're done"
+            todo_id = None
+            force = False
+
+        with pytest.raises(SystemExit):
+            cmd_distill(Args())
+
+        # auto_done_reason must NOT be set
+        s2 = Store(path=target)
+        assert s2.workstreams[0].auto_done_reason == ""
+
+        # Output should mention the pending todo and the recovery action
+        out = capsys.readouterr().out
+        assert "abc12345" in out
+        assert "distill next" in out
+        assert "--force" in out
+
+    def test_skips_archived_and_done_when_counting_pending(self, tmp_path, monkeypatch):
+        target = tmp_path / "dev" / "claude-orchestrator" / "data.json"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        store = Store(path=target)
+        ws = Workstream(name="done-ws")
+        ws.todos = [
+            TodoItem(text="finished", origin="crystallized", done=True, id="don00001"),
+            TodoItem(text="abandoned", origin="crystallized", archived=True, id="arc00001"),
+        ]
+        store.add(ws)
+        monkeypatch.setenv("HOME", str(tmp_path))
+        monkeypatch.setenv("ORCH_WS_ID", ws.id)
+
+        from cli import cmd_distill
+
+        class Args:
+            distill_mode = "done"
+            ws_id = None
+            text = None
+            context = None
+            summary = None
+            reason = "complete"
+            todo_id = None
+            force = False
+
+        # Should succeed — no pending todos remain
+        cmd_distill(Args())
+        s2 = Store(path=target)
+        assert s2.workstreams[0].auto_done_reason == "complete"
+
+    def test_force_overrides_pending_guard(self, tmp_path, monkeypatch, capsys):
+        target = tmp_path / "dev" / "claude-orchestrator" / "data.json"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        store = Store(path=target)
+        ws = Workstream(name="done-ws")
+        ws.todos = [
+            TodoItem(text="leftover", origin="crystallized", id="abc12345"),
+        ]
+        store.add(ws)
+        monkeypatch.setenv("HOME", str(tmp_path))
+        monkeypatch.setenv("ORCH_WS_ID", ws.id)
+
+        from cli import cmd_distill
+
+        class Args:
+            distill_mode = "done"
+            ws_id = None
+            text = None
+            context = None
+            summary = None
+            reason = "really done"
+            todo_id = None
+            force = True
+
+        cmd_distill(Args())
+        s2 = Store(path=target)
+        assert s2.workstreams[0].auto_done_reason == "really done"
+        out = capsys.readouterr().out
+        assert "pending" in out.lower()  # warning about forced termination
+
+
+class TestCoordinatorPromptWording:
+    """Prompts must steer the coordinator away from terminating with pending todos."""
+
+    def test_kickoff_with_pending_warns_about_done_semantics(self):
+        ws = Workstream(name="x")
+        pending = [TodoItem(text="t", origin="crystallized", id="abc12345")]
+        text = build_coordinator_kickoff(ws, pending_todos=pending)
+        assert "HARD-KILL" in text
+        assert "next loop" in text  # phrase warning that there is no "next loop"
+
+    def test_followup_with_pending_warns_about_done_semantics(self):
+        todo = TodoItem(text="ran", origin="crystallized", id="ran00001")
+        pending = [TodoItem(text="t", origin="crystallized", id="abc12345")]
+        text = build_coordinator_followup(todo, "did it", pending_todos=pending)
+        assert "HARD-KILL" in text
+        assert "next loop" in text  # phrase warning that there is no "next loop"
+
+    def test_followup_without_pending_still_marks_done_as_hard_kill(self):
+        todo = TodoItem(text="ran", origin="crystallized", id="ran00001")
+        text = build_coordinator_followup(todo, "did it", pending_todos=[])
+        assert "HARD-KILL" in text
+
+    def test_nudge_with_pending_warns_about_done_semantics(self):
+        pending = [TodoItem(text="t", origin="crystallized", id="abc12345")]
+        text = build_coordinator_nudge(pending_todos=pending)
+        assert "HARD-KILL" in text
+        assert "next loop" in text  # phrase warning that there is no "next loop"
+
 
 class TestDistillNextCLI:
     """`orch distill next --todo-id <id>` — coordinator dispatches an

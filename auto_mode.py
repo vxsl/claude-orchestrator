@@ -134,7 +134,11 @@ def build_coordinator_kickoff(ws: Workstream, pending_todos: Optional[list] = No
             f"⚠ AUTO-MODE PROTOCOL — take exactly ONE action now:\n"
             f"  (a) `orch distill next --todo-id <id>` to dispatch one of the pending todos above, OR\n"
             f"  (b) /user:extract-orch-todo (or `orch distill crystallize`) to queue a fresh task, OR\n"
-            f"  (c) `orch distill done --reason '...'` to terminate without running anything."
+            f"  (c) `orch distill done --reason '...'` to HARD-KILL auto-mode (rare).\n\n"
+            f"NOTE: `distill done` is NOT an end-of-iteration signal. It exits the auto-mode "
+            f"runner entirely — there is no \"next loop.\" Only use it when the workstream is "
+            f"actually finished. While pending todos exist, dispatch one with (a) instead. "
+            f"The CLI will refuse `distill done` while pending todos remain unless you pass --force."
         )
     return (
         f"[auto-mode started] You are now the coordinator for workstream "
@@ -142,7 +146,8 @@ def build_coordinator_kickoff(ws: Workstream, pending_todos: Optional[list] = No
         f"/user:extract-orch-todo (or `orch distill crystallize`). An "
         f"implementer will pick it up automatically. After each implementer "
         f"reports back, you'll be prompted again. Run "
-        f"`orch distill done --reason '...'` when the workstream is complete."
+        f"`orch distill done --reason '...'` only when the workstream is complete "
+        f"and no pending todos remain — it HARD-KILLS the auto-mode runner."
     )
 
 
@@ -167,12 +172,12 @@ def build_coordinator_followup(
             f"  (a) `orch distill next --todo-id <id>` to dispatch one of these pending {plural}:",
             listing,
             f"  (b) /user:extract-orch-todo (or `orch distill crystallize`) to queue a NEW implementer task, OR",
-            f"  (c) `orch distill done --reason '...'` to terminate the loop.",
+            f"  (c) `orch distill done --reason '...'` to HARD-KILL auto-mode (rare; refused while pending todos exist).",
         ]
     else:
         parts += [
             f"  (a) /user:extract-orch-todo (or `orch distill crystallize`) to queue the next implementer task, OR",
-            f"  (b) `orch distill done --reason '...'` to terminate the loop.",
+            f"  (b) `orch distill done --reason '...'` to HARD-KILL auto-mode (only if the workstream is complete).",
         ]
     parts += [
         "",
@@ -180,6 +185,11 @@ def build_coordinator_followup(
         "blocked until you take one of those actions. Decide based on the "
         "report above whether to continue with an existing item, crystallize "
         "a new step, or terminate.",
+        "",
+        "REMINDER: `distill done` is NOT an end-of-iteration marker. It exits "
+        "the auto-mode runner entirely — there is no \"next loop\" that re-fires. "
+        "If pending todos remain, dispatch one with (a). Use `done` only when "
+        "the workstream is actually finished.",
     ]
     return "\n".join(parts)
 
@@ -190,11 +200,12 @@ def build_coordinator_nudge(pending_todos: Optional[list] = None) -> str:
     if pending:
         lines.append("  (a) `orch distill next --todo-id <id>` to dispatch a pending todo, OR")
         lines.append("  (b) /user:extract-orch-todo to queue a new task, OR")
-        lines.append("  (c) `orch distill done --reason '...'` to terminate.")
+        lines.append("  (c) `orch distill done --reason '...'` to HARD-KILL auto-mode (refused while pending todos exist).")
     else:
         lines.append("  (a) /user:extract-orch-todo to queue next, OR")
-        lines.append("  (b) `orch distill done --reason '...'` to terminate.")
+        lines.append("  (b) `orch distill done --reason '...'` to HARD-KILL auto-mode (only if workstream is complete).")
     lines.append("No conversational reply — pick one and run it.")
+    lines.append("`distill done` exits the auto-mode runner — there is no \"next loop.\"")
     return "\n".join(lines)
 
 

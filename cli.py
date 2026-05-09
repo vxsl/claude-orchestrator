@@ -522,10 +522,31 @@ def cmd_distill(args):
 
     elif mode == "done":
         reason = (args.reason or "").strip() or "Coordinator declared the workstream complete."
+        pending = [t for t in ws.todos if not t.done and not t.archived]
+        force = bool(getattr(args, "force", False))
+        if pending and not force:
+            print(_c("red", f"  ✗ Refusing to terminate auto-mode: {len(pending)} pending todo(s) on {ws.name}."))
+            print(_c("dim", "    `orch distill done` is a HARD kill of the auto-mode loop, not"))
+            print(_c("dim", "    an end-of-iteration signal. There is no \"next loop\" — the runner"))
+            print(_c("dim", "    exits and the user has to restart auto-mode manually."))
+            print()
+            print(_c("dim", "    Pending:"))
+            for t in pending:
+                preview = t.text.strip().replace("\n", " ")
+                if len(preview) > 80:
+                    preview = preview[:77] + "..."
+                print(f"      - {_c('bold', t.id)}  {preview}")
+            print()
+            print(_c("dim", "    Take one of these instead:"))
+            print(_c("dim", f"      orch distill next --todo-id <id>   # dispatch one of the above"))
+            print(_c("dim", f"      orch distill done --reason '...' --force   # really terminate (rare)"))
+            sys.exit(1)
         ws.auto_done_reason = reason
         store.update(ws)
         print(f"  {_c('green', '✓')} Auto-mode termination signaled for {_c('bold', ws.name)}")
         print(f"    {_c('dim', 'reason:')} {reason}")
+        if pending and force:
+            print(_c("yellow", f"    ⚠ Terminated with {len(pending)} pending todo(s) still queued (--force)."))
 
     elif mode == "next":
         todo_id = (args.todo_id or "").strip()
@@ -1171,6 +1192,7 @@ examples:
   orch distill crystallize --text "Refactor auth middleware" --context "..."
   orch distill compact --summary "We investigated X and decided Y..."
   orch distill done --reason "all crystallized todos are complete"
+  orch distill done --reason "abandoning workstream" --force   # rare: terminate even with pending todos
   orch distill next --todo-id abc12345
   echo "long context" | orch distill crystallize --text "task" --context -
 
@@ -1178,7 +1200,7 @@ auto-detects workstream from ORCH_WS_ID env var (set by orch-claude),
 or pass --ws-id explicitly.
 """)
     p_distill.add_argument("distill_mode", choices=["compact", "crystallize", "done", "next"],
-                           help="compact: save context. crystallize: save as todo. done: signal auto-mode to exit. next: dispatch a pending todo on the auto-mode loop.")
+                           help="compact: save context. crystallize: save as todo. done: HARD-kill auto-mode (refused if pending todos exist; use --force to override). next: dispatch a pending todo on the auto-mode loop.")
     p_distill.add_argument("--ws-id", dest="ws_id",
                            help="Workstream ID (default: ORCH_WS_ID env var)")
     p_distill.add_argument("--text", "-t",
@@ -1191,6 +1213,8 @@ or pass --ws-id explicitly.
                            help="Why the workstream is done (done mode, optional)")
     p_distill.add_argument("--todo-id", dest="todo_id",
                            help="Pending todo ID to dispatch (next mode)")
+    p_distill.add_argument("--force", "-f", action="store_true",
+                           help="(done mode) Terminate auto-mode even if pending todos remain. Rare — usually you want `distill next` instead.")
 
     # report (auto-mode implementer writeback)
     p_report = sub.add_parser("report", help="Implementer writeback to a crystallized todo (auto-mode)",
