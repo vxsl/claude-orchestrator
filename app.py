@@ -2341,40 +2341,44 @@ class OrchestratorApp(App):
                 self.notify(f"[auto] inject failed: {e}", timeout=4)
 
         async def spawn_implementer(todo, brief: str) -> None:
-            """Spawn implementer; resolve when its report is written OR
-            the implementer's claude process produces a fully-parsed
-            ClaudeSession on natural exit. Anything else (detach, parse
-            failure → None result, exception) is NOT a resolution
-            signal — leaves the loop waiting for the report so transient
-            issues don't spuriously advance the loop."""
-            from sessions import ClaudeSession
-            exited = _asyncio.Event()
-            loop = _asyncio.get_running_loop()
+            """Spawn an implementer headlessly (tmux session, no UI screen).
 
-            def cb(result):
-                # Only a confirmed ClaudeSession (claude process exited
-                # cleanly and the JSONL parsed) counts as 'done'. Detach
-                # ({"detached": True}) and unexpected None/dict results
-                # leave the loop awaiting the report.
-                if not isinstance(result, ClaudeSession):
-                    return
-                loop.call_soon_threadsafe(exited.set)
+            The implementer claude lives in the orch tmux server. The user
+            can attach to it from the workstream detail view if they want
+            to watch — but the loop doesn't force a screen switch.
+
+            Resolves when ANY of:
+              - the todo's report field is written (implementer ran `orch report`)
+              - the tmux session dies (claude exited)
+              - auto-mode is canceled
+
+            Transient store-read failures (concurrent writers leaving
+            data.json half-written) don't count as a resolution — we
+            keep polling rather than spuriously advance the loop.
+            """
+            from claude_session_screen import (
+                spawn_implementer_session, auto_link_session, log_session_exit,
+            )
+            from terminal import TerminalWidget
 
             ws = self.state.store.get(ws_id)
             if ws is None:
                 return
-            self.launch_claude_session(
-                ws, prompt=brief, reuse_pending=False, callback=cb,
-                auto_role="implementer",
-            )
+
+            start_time = _time.time()
+            try:
+                sid, _jsonl_path = spawn_implementer_session(
+                    ws, self.state.store, prompt=brief,
+                )
+            except Exception as e:
+                self.notify(f"[auto] implementer spawn failed: {e}", timeout=6)
+                return
+
+            # Tag for badging in the detail view (in-memory; lost on restart, by design).
+            if ws_id:
+                self._auto_impl_sids.setdefault(ws_id, set()).add(sid)
 
             async def wait_for_report():
-                # Concurrent writers (coordinator's crystallize, other
-                # impls' reports) can produce a transient state where
-                # store.load reads partial JSON or returns no
-                # workstreams. We retry quietly rather than treat that
-                # as 'todo gone' — the alternative is a false advance,
-                # which spawns the next implementer prematurely.
                 while True:
                     try:
                         self.state.store.load(force=True)
@@ -2383,26 +2387,30 @@ class OrchestratorApp(App):
                         continue
                     cur_ws = self.state.store.get(ws_id)
                     if cur_ws is None:
-                        # Likely transient (concurrent writer). Keep waiting.
                         await _asyncio.sleep(2)
                         continue
                     cur = next((t for t in cur_ws.todos if t.id == todo.id), None)
                     if cur is None:
-                        # Same — could be transient. Don't advance.
                         await _asyncio.sleep(2)
                         continue
                     if cur.report:
                         return
                     await _asyncio.sleep(2)
 
+            async def wait_for_tmux_exit():
+                # Poll every 3s for the tmux session to die. tmux_session_alive
+                # is a subprocess call (~50ms); 3s is short enough to feel
+                # responsive without thrashing.
+                while True:
+                    alive = await _asyncio.get_running_loop().run_in_executor(
+                        None, TerminalWidget.tmux_session_alive, sid,
+                    )
+                    if not alive:
+                        return
+                    await _asyncio.sleep(3)
+
             report_task = _asyncio.create_task(wait_for_report())
-            exit_task = _asyncio.create_task(exited.wait())
-            # Race against the AutoMode cancel event too — without this,
-            # pressing ctrl+y to cancel only takes effect after the
-            # implementer naturally finishes (writes its report or exits
-            # claude cleanly), which can be many minutes. `mode` is bound
-            # in the enclosing scope after spawn_implementer is defined;
-            # Python resolves the name at call time so the forward ref is fine.
+            exit_task = _asyncio.create_task(wait_for_tmux_exit())
             cancel_task = _asyncio.create_task(mode.cancel_event.wait())
             try:
                 await _asyncio.wait(
@@ -2410,8 +2418,13 @@ class OrchestratorApp(App):
                     return_when=_asyncio.FIRST_COMPLETED,
                 )
                 if cancel_task.done():
-                    # Don't notify "report received" — we're bailing.
                     return
+                if exit_task.done() and not report_task.done():
+                    # Claude exited without writing a report. Do the same
+                    # post-exit bookkeeping ClaudeSessionScreen does so the
+                    # session is linked + logged.
+                    auto_link_session(self.state.store, ws_id, sid)
+                    log_session_exit(sid, ws.name, start_time, exit_type="headless")
                 if report_task.done() and not exit_task.done():
                     self.notify(
                         "[auto] report received — advancing while implementer wraps up",
@@ -2419,8 +2432,8 @@ class OrchestratorApp(App):
                     )
             finally:
                 report_task.cancel()
+                exit_task.cancel()
                 cancel_task.cancel()
-                # Don't cancel exit_task — natural exit will set it harmlessly.
 
         def notify(msg: str) -> None:
             self.notify(f"[auto] {msg}", timeout=4)

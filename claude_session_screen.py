@@ -114,6 +114,186 @@ def log_session_exit(session_id: str, ws_name: str, start_time: float,
         pass
 
 
+# ── Spawn-arg builders ──────────────────────────────────────────────
+#
+# These shape the system prompt, command line, env, and JSONL path used
+# to spawn a claude session. Used by ClaudeSessionScreen for the
+# interactive flow AND by `spawn_implementer_session` for the headless
+# auto-mode flow — keep them as pure module functions so both paths
+# stay byte-identical.
+
+def build_session_context(ws: Workstream) -> str:
+    """System-prompt context block for a session bound to `ws`."""
+    parts = [f'You are working on the brain workstream: "{ws.name}"']
+    if ws.description:
+        parts.append(f"Description: {ws.description}")
+    if ws.category:
+        parts.append(f"Category: {ws.category.value}")
+    if ws.notes:
+        parts.append(f"Recent notes: {ws.notes[:500]}")
+
+    # Continuation context (one-shot file dropped by a prior session)
+    cont_dir = Path.home() / ".cache" / "claude-orchestrator" / "continuations"
+    cont_file = cont_dir / f"{ws.id}.md"
+    if ws.id and cont_file.exists():
+        try:
+            parts.append(f"\nContinuation context from previous session:\n{cont_file.read_text()}")
+            cont_file.unlink()
+        except Exception:
+            pass
+
+    if ws.id:
+        parts.append(
+            '\nExtract todo: The user can press C-e or type /user:extract-orch-todo '
+            'to distill this conversation into a rich todo item on the workstream. '
+            'The slash command has full instructions. You can also run '
+            '`orch distill crystallize --text "..." --context "..."` directly. '
+            '$ORCH_WS_ID is set automatically.'
+        )
+        parts.append(
+            '\nNotify: Send a desktop notification to the user with '
+            '`~/bin/notification/claude-notify.sh "message"`. '
+            'Use this when you hit a blocker, need a decision, or finish a long task '
+            'and want the user\'s attention. Keep the message short (one line).'
+        )
+
+    parts.append(
+        '\ngitStatus: This is the git status at the start of the conversation. '
+        'Note that this status is a snapshot in time, and will not update during the conversation.\n'
+        + _git_status_snapshot()
+    )
+    parts.append(
+        '\nIMPORTANT — commit your work: Commit early and often. '
+        'Make a git commit as soon as you have a coherent working change, even mid-task. '
+        'When you finish or pause, always commit before stopping. '
+        'Do not leave work uncommitted — other agents share this repo and uncommitted changes are invisible to them.'
+    )
+    return "\n".join(parts)
+
+
+def build_claude_command(
+    session_id: str,
+    cwd: str,
+    sys_prompt: str,
+    prompt: str | None,
+    ws_name: str,
+    is_new: bool,
+) -> str:
+    """Shell command that spawns claude with the given session params.
+
+    The system prompt is always written to a file (claude consumes it
+    via --append-system-prompt-file). A long positional prompt is also
+    spilled to a file and read via command substitution at exec time,
+    because tmux new-session caps the inner command at ~16KB.
+    """
+    args = ["claude"]
+    if is_new:
+        args += ["--session-id", session_id]
+    else:
+        args += ["--resume", session_id]
+
+    spawn_dir = Path.home() / ".cache" / "claude-orchestrator" / "spawn-args"
+    spawn_dir.mkdir(parents=True, exist_ok=True)
+
+    sys_path = spawn_dir / f"{session_id}.sys"
+    sys_path.write_text(sys_prompt)
+    args += ["--append-system-prompt-file", str(sys_path)]
+
+    args += ["-n", f"orch:{ws_name}"]
+
+    try:
+        from trust import is_trusted
+        if is_trusted(cwd):
+            args.append("--dangerously-skip-permissions")
+    except Exception:
+        pass
+
+    if prompt and len(prompt) > 4000:
+        prompt_path = spawn_dir / f"{session_id}.prompt"
+        prompt_path.write_text(prompt)
+        return shlex.join(args) + f' "$(cat {shlex.quote(str(prompt_path))})"'
+    if prompt:
+        args.append(prompt)
+    return shlex.join(args)
+
+
+def build_session_env(ws_id: str, session_id: str) -> dict[str, str]:
+    return {
+        "ORCH_WS_ID": ws_id or "",
+        "ORCH_SESSION_ID": session_id,
+        "CLAUDE_SESSION_ID": session_id,
+        "ORCH_DIR": ORCH_DIR,
+    }
+
+
+def claude_jsonl_path(cwd: str, session_id: str) -> Path:
+    # Claude encodes cwd as a project-dir name by replacing both "/" and "."
+    # with "-" (dots in dir names like "ul.UB-6732-foo" become dashes too).
+    encoded = cwd.replace("/", "-").replace(".", "-")
+    return Path.home() / ".claude" / "projects" / encoded / f"{session_id}.jsonl"
+
+
+def spawn_implementer_session(
+    ws: Workstream,
+    store: Store,
+    prompt: str,
+    cwd: str | None = None,
+) -> tuple[str, Path]:
+    """Spawn a claude session in tmux with no Textual UI attached.
+
+    Used by auto-mode to launch implementer sessions without forcing the
+    user's screen to switch. The session lives in the orch tmux server
+    (TerminalWidget.TMUX_SOCKET) and can be attached to from the
+    workstream detail view if the user wants to watch it.
+
+    Returns (session_id, jsonl_path). Raises RuntimeError on tmux failure.
+    """
+    from actions import ws_working_dir
+    from terminal import TerminalWidget
+
+    session_id = str(uuid.uuid4())
+    cwd_resolved = cwd or ws_working_dir(ws)
+    sys_prompt = build_session_context(ws)
+    cmd = build_claude_command(
+        session_id=session_id,
+        cwd=cwd_resolved,
+        sys_prompt=sys_prompt,
+        prompt=prompt,
+        ws_name=ws.name,
+        is_new=True,
+    )
+    env_vars = build_session_env(ws.id or "", session_id)
+
+    env_prefix = " ".join(
+        f"{k}={shlex.quote(v)}" for k, v in env_vars.items()
+    )
+    inner_cmd = f"env TERM=xterm-256color COLORTERM=truecolor {env_prefix} {cmd}"
+
+    conf = TerminalWidget._tmux_conf_path()
+    tmux_cmd = [
+        "tmux", "-L", TerminalWidget.TMUX_SOCKET, "-f", conf,
+        "new-session", "-d",
+        "-s", session_id,
+        "-x", "200", "-y", "50",
+        "-c", cwd_resolved,
+        inner_cmd,
+    ]
+    env = os.environ.copy()
+    env.update(TERM="xterm-256color", COLORTERM="truecolor")
+    env.pop("TMUX", None)
+    result = subprocess.run(
+        tmux_cmd, env=env, timeout=10, capture_output=True, text=True,
+    )
+    if result.returncode != 0:
+        err = (result.stderr or "").strip() or "(no stderr)"
+        raise RuntimeError(
+            f"tmux new-session failed (rc={result.returncode}): {err} "
+            f"[inner_cmd was {len(inner_cmd)} bytes]"
+        )
+    TerminalWidget._reload_tmux_config(env)
+    return session_id, claude_jsonl_path(cwd_resolved, session_id)
+
+
 # ── Header Widget ────────────────────────────────────────────────────
 
 class SessionHeaderWidget(Static):
@@ -466,112 +646,27 @@ class ClaudeSessionScreen(Screen):
         return ws_working_dir(self._ws)
 
     # ── Context & command building ────────────────────────────────
+    # Delegated to module-level helpers so the headless auto-mode spawn
+    # path (`spawn_implementer_session`) produces byte-identical configs.
 
     def _build_context(self) -> str:
-        ws = self._ws
-        parts = [f'You are working on the brain workstream: "{ws.name}"']
-        if ws.description:
-            parts.append(f"Description: {ws.description}")
-        if ws.category:
-            parts.append(f"Category: {ws.category.value}")
-        if ws.notes:
-            parts.append(f"Recent notes: {ws.notes[:500]}")
-        # Do not duplicate self._prompt here: it is already passed to claude
-        # as the positional arg. Appending it again blows past tmux's ~16KB
-        # new-session command-length limit on long task briefs and causes the
-        # spawn to fail silently (tmux "command too long" → "can't find session").
-
-        # Continuation context
-        cont_dir = Path.home() / ".cache" / "claude-orchestrator" / "continuations"
-        cont_file = cont_dir / f"{ws.id}.md"
-        if ws.id and cont_file.exists():
-            try:
-                parts.append(f"\nContinuation context from previous session:\n{cont_file.read_text()}")
-                cont_file.unlink()
-            except Exception:
-                pass
-
-        # Distill command hints
-        if ws.id:
-            parts.append(
-                '\nExtract todo: The user can press C-e or type /user:extract-orch-todo '
-                'to distill this conversation into a rich todo item on the workstream. '
-                'The slash command has full instructions. You can also run '
-                '`orch distill crystallize --text "..." --context "..."` directly. '
-                '$ORCH_WS_ID is set automatically.'
-            )
-            parts.append(
-                '\nNotify: Send a desktop notification to the user with '
-                '`~/bin/notification/claude-notify.sh "message"`. '
-                'Use this when you hit a blocker, need a decision, or finish a long task '
-                'and want the user\'s attention. Keep the message short (one line).'
-            )
-
-        # Commit reminder — agents frequently forget to commit, leaving all work unstaged
-        parts.append(
-            '\ngitStatus: This is the git status at the start of the conversation. '
-            'Note that this status is a snapshot in time, and will not update during the conversation.\n'
-            + _git_status_snapshot()
-        )
-        parts.append(
-            '\nIMPORTANT — commit your work: Commit early and often. '
-            'Make a git commit as soon as you have a coherent working change, even mid-task. '
-            'When you finish or pause, always commit before stopping. '
-            'Do not leave work uncommitted — other agents share this repo and uncommitted changes are invisible to them.'
-        )
-
-        return "\n".join(parts)
+        return build_session_context(self._ws)
 
     def _build_claude_command(self) -> str:
-        # tmux new-session has a ~16KB command-length limit; long briefs
-        # blow past it and the spawn fails silently. Route the two
-        # potentially-huge args (system prompt, positional prompt) through
-        # files when they'd push us close to the limit.
-        args = ["claude"]
-        if self._is_new:
-            args += ["--session-id", self._session_id]
-        else:
-            args += ["--resume", self._session_id]
-
-        spawn_dir = Path.home() / ".cache" / "claude-orchestrator" / "spawn-args"
-        spawn_dir.mkdir(parents=True, exist_ok=True)
-
-        sys_path = spawn_dir / f"{self._session_id}.sys"
-        sys_path.write_text(self._sys_prompt)
-        args += ["--append-system-prompt-file", str(sys_path)]
-
-        args += ["-n", f"orch:{self._ws.name}"]
-
-        try:
-            from trust import is_trusted
-            if is_trusted(self._cwd):
-                args.append("--dangerously-skip-permissions")
-        except Exception:
-            pass
-
-        if self._prompt and len(self._prompt) > 4000:
-            prompt_path = spawn_dir / f"{self._session_id}.prompt"
-            prompt_path.write_text(self._prompt)
-            # Use command substitution so the shell reads the prompt at exec time,
-            # keeping the tmux command line short.
-            return shlex.join(args) + f' "$(cat {shlex.quote(str(prompt_path))})"'
-        if self._prompt:
-            args.append(self._prompt)
-        return shlex.join(args)
+        return build_claude_command(
+            session_id=self._session_id,
+            cwd=self._cwd,
+            sys_prompt=self._sys_prompt,
+            prompt=self._prompt,
+            ws_name=self._ws.name,
+            is_new=self._is_new,
+        )
 
     def _build_env(self) -> dict[str, str]:
-        return {
-            "ORCH_WS_ID": self._ws.id or "",
-            "ORCH_SESSION_ID": self._session_id,
-            "CLAUDE_SESSION_ID": self._session_id,
-            "ORCH_DIR": ORCH_DIR,
-        }
+        return build_session_env(self._ws.id or "", self._session_id)
 
     def _jsonl_path(self) -> str:
-        # Claude encodes the cwd as a project dir name by replacing both "/" and "."
-        # with "-" (dots in dir names like "ul.UB-6732-foo" become dashes too).
-        encoded_dir = self._cwd.replace("/", "-").replace(".", "-")
-        return str(Path.home() / ".claude" / "projects" / encoded_dir / f"{self._session_id}.jsonl")
+        return str(claude_jsonl_path(self._cwd, self._session_id))
 
     def _detect_git_branch(self) -> str:
         try:
