@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import fcntl
 import json
 import os
 import shutil
 import uuid
+from contextlib import contextmanager
 from dataclasses import dataclass, field, asdict
 from datetime import datetime, timedelta
 from enum import Enum
@@ -275,20 +277,61 @@ def _relative_time(iso_str: str) -> str:
 
 
 class Store:
-    """Simple JSON file store with backup support."""
+    """JSON file store with cross-process concurrency safety.
+
+    Concurrency model: every save acquires an exclusive fcntl flock on a
+    sibling lock file, re-reads disk under the lock, merges external
+    changes into in-memory state, then writes the result via atomic rename.
+    This prevents two processes (or two Store instances in the same
+    process) from clobbering each other's writes.
+
+    Merge semantics:
+      - Workstreams added on disk we never saw → pulled into memory.
+      - Workstreams in memory we know we deleted (via `remove`) → stay
+        deleted; not resurrected.
+      - Todos added on disk we never saw → pulled into the matching ws.
+      - Per-todo `done` and `report` are forward-only: if disk has them
+        set and our in-memory copy doesn't, disk wins. This protects an
+        implementer's writeback from being clobbered by a stale coordinator.
+    """
 
     def __init__(self, path: Optional[Path] = None):
         self.path = path or Path.home() / "dev" / "claude-orchestrator" / "data.json"
         self.workstreams: list[Workstream] = []
-        self._known_todo_ids: set[str] = set()  # todo IDs seen at last load
+        self._known_todo_ids: set[str] = set()  # todo IDs seen at last load/save
+        self._known_ws_ids: set[str] = set()    # ws IDs seen at last load/save
+        self._removed_ws_ids: set[str] = set()  # ws IDs explicitly removed since last load
         self._loaded_mtime: float = 0.0  # mtime at last successful load
         self.load()
+
+    @contextmanager
+    def _flock(self):
+        """Exclusive lock for save() — serializes concurrent writers.
+
+        The lock file is a sibling, not data.json itself. data.json is
+        replaced via atomic rename on each save, which would invalidate
+        a flock held directly on it. The sibling persists across renames.
+        """
+        lock_path = self.path.parent / f".{self.path.name}.lock"
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        fd = os.open(str(lock_path), os.O_RDWR | os.O_CREAT, 0o644)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            yield
+        finally:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_UN)
+            except OSError:
+                pass
+            os.close(fd)
 
     def load(self, *, force: bool = False):
         """Load workstreams from disk. Skips re-read when mtime is unchanged."""
         if not self.path.exists():
             self.workstreams = []
             self._known_todo_ids = set()
+            self._known_ws_ids = set()
+            self._removed_ws_ids = set()
             self._loaded_mtime = 0.0
             return
         try:
@@ -304,70 +347,111 @@ class Store:
             print(f"Warning: could not load {self.path}: {e}")
             self.workstreams = []
         self._known_todo_ids = {t.id for ws in self.workstreams for t in ws.todos}
+        self._known_ws_ids = {ws.id for ws in self.workstreams}
+        self._removed_ws_ids = set()
         self._loaded_mtime = current_mtime
 
     def save(self):
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        # Merge in externally-added todos (e.g. from CLI crystallize) before writing,
-        # so the in-memory state doesn't clobber them.
-        self._merge_external_todos()
-        data = {"workstreams": [w.to_dict() for w in self.workstreams]}
-        self.path.write_text(json.dumps(data, indent=2) + "\n")
-        # Update known IDs so next save knows about everything we just wrote
+        with self._flock():
+            self._merge_external_state()
+            data = {"workstreams": [w.to_dict() for w in self.workstreams]}
+            tmp = self.path.with_name(self.path.name + ".tmp")
+            tmp.write_text(json.dumps(data, indent=2) + "\n")
+            os.replace(tmp, self.path)
         self._known_todo_ids = {t.id for ws in self.workstreams for t in ws.todos}
+        self._known_ws_ids = {ws.id for ws in self.workstreams}
+        self._removed_ws_ids = set()  # everything written now reflects intent
         try:
             self._loaded_mtime = self.path.stat().st_mtime
         except OSError:
             self._loaded_mtime = 0.0
 
-    def _merge_external_todos(self):
-        """Merge externally-added entries into in-memory workstreams before saving.
+    def _merge_external_state(self):
+        """Read disk under flock; pull in external changes before writing.
 
-        Handles todos, archived_sessions, shelved_sessions, and deleted_sessions.
-        Entries that exist on disk but not in memory are merged in (additive only —
-        we never resurrect entries that were explicitly removed in memory).
-        This prevents concurrent writers (CLI, other agents) from clobbering each
-        other's changes when they hold stale in-memory state.
+        Three classes of external state we preserve:
+          - Workstreams added by other processes (not in our memory, not
+            in our _known_ws_ids, not in _removed_ws_ids → pull in).
+          - Todos added by other processes to a workstream we share.
+          - Monotonic completion on shared todos: disk's `done=True` or
+            non-empty `report` wins over our in-memory empty values
+            (defends implementer writeback against coordinator clobber).
+
+        Workstreams we explicitly removed (in _removed_ws_ids) stay
+        removed — disk's copy is NOT resurrected. Workstreams we never
+        explicitly removed but are missing from our memory ARE pulled
+        back from disk — that's the defense against the wholesale-stub-
+        clobber pattern (a stale-snapshot save would otherwise wipe
+        every workstream we didn't directly mutate).
+
+        Optimization: when disk's mtime matches our last load/save mtime,
+        no external writer has touched the file, so nothing to merge.
+        Skipping the merge in that case also prevents our own monotonic
+        forward rule from undoing legitimate in-process toggles (e.g.
+        a todo marked done then un-done by the same Store instance).
         """
         if not self.path.exists():
             return
         try:
+            current_mtime = self.path.stat().st_mtime
+        except OSError:
+            current_mtime = 0.0
+        if current_mtime == self._loaded_mtime and self._loaded_mtime != 0.0:
+            return  # disk unchanged since our last touch — nothing external to pull in
+        try:
             disk_data = json.loads(self.path.read_text())
         except (json.JSONDecodeError, OSError):
             return
-        disk_ws_map = {}
-        for wd in disk_data.get("workstreams", []):
-            disk_ws_map[wd.get("id", "")] = wd
+        disk_ws_list = disk_data.get("workstreams", [])
+        disk_ws_map = {wd.get("id", ""): wd for wd in disk_ws_list if wd.get("id")}
+
+        # 1) Pull in workstreams that exist on disk but not in memory,
+        #    unless we explicitly removed them.
+        mem_ws_ids = {ws.id for ws in self.workstreams}
+        for wid, wd in disk_ws_map.items():
+            if wid in mem_ws_ids:
+                continue
+            if wid in self._removed_ws_ids:
+                continue
+            try:
+                new_ws = Workstream.from_dict(wd)
+            except (KeyError, TypeError, ValueError):
+                continue
+            self.workstreams.append(new_ws)
+            self._known_ws_ids.add(wid)
+            for t in new_ws.todos:
+                self._known_todo_ids.add(t.id)
+
+        # 2) For workstreams in both memory and disk: merge todos.
         for ws in self.workstreams:
             disk_wd = disk_ws_map.get(ws.id)
             if not disk_wd:
                 continue
-            # Merge todos (additive, skip known-deleted)
-            mem_ids = {t.id for t in ws.todos}
+            mem_todos_by_id = {t.id: t for t in ws.todos}
             for td in disk_wd.get("todos", []):
                 if not isinstance(td, dict) or not td.get("id"):
                     continue
                 tid = td["id"]
-                # Only merge if: not in memory AND not previously known (truly external)
-                if tid not in mem_ids and tid not in self._known_todo_ids:
-                    td.setdefault("origin", "manual")
+                if tid in mem_todos_by_id:
+                    # Field-level merge for forward-only completion.
+                    mem_t = mem_todos_by_id[tid]
+                    if td.get("done") and not mem_t.done:
+                        mem_t.done = True
+                    disk_report = td.get("report", "") or ""
+                    if disk_report and not (mem_t.report or ""):
+                        mem_t.report = disk_report
+                    continue
+                # Disk has a todo we don't. Pull in unless we explicitly
+                # forgot it (was known at load, then removed in memory).
+                if tid in self._known_todo_ids:
+                    continue
+                td.setdefault("origin", "manual")
+                try:
                     ws.todos.append(TodoItem(**td))
-                    self._known_todo_ids.add(tid)
-            # NOTE: session state dicts (archived_sessions, shelved_sessions,
-            # deleted_sessions) are intentionally NOT merged from disk here.
-            #
-            # Merging them caused two bugs:
-            # 1. Re-archiving after unarchive: unarchive removes sid from mem, but
-            #    the next save reads the old disk state and adds it back.
-            # 2. Stale-snapshot clobber: a background writer holding an old ws
-            #    snapshot (e.g. description_refresher) could call store.update() with
-            #    fewer archived sessions; the merge then "restored" them from disk but
-            #    was racy (disk read between main-thread writes).
-            #
-            # The external-writer scenario these were defending against (CLI adding
-            # sessions to archived_sessions) does not actually occur in the CLI today,
-            # so the safety net is unused.  If needed in future, use explicit merge
-            # with a "known removed" exclusion set rather than blind additive merge.
+                except (KeyError, TypeError):
+                    continue
+                self._known_todo_ids.add(tid)
 
     def backup(self) -> Path:
         """Create a timestamped backup of the data file."""
@@ -391,6 +475,7 @@ class Store:
 
     def remove(self, ws_id: str):
         self.backup()
+        self._removed_ws_ids.add(ws_id)
         self.workstreams = [w for w in self.workstreams if w.id != ws_id]
         self.save()
 

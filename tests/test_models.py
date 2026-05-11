@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from models import (
-    Category, Link, Store, Workstream,
+    Category, Link, Store, TodoItem, Workstream,
     _relative_time,
 )
 
@@ -246,6 +246,126 @@ class TestStoreArchival:
         ws = populated_store.active[0]
         populated_store.archive(ws.id)
         assert ws.id in [w.id for w in populated_store.archived]
+
+
+class TestStoreConcurrencyMerge:
+    """Two Store instances on the same file simulate two processes."""
+
+    def test_external_ws_addition_survives_stale_save(self, tmp_path):
+        """If process B adds a workstream while A holds stale state, A's
+        save must NOT clobber B's addition."""
+        path = tmp_path / "data.json"
+        a = Store(path=path)
+        a.add(Workstream(name="alpha"))
+
+        # B (fresh load) adds a new workstream
+        b = Store(path=path)
+        ws_b = Workstream(name="beta")
+        b.add(ws_b)
+
+        # A (stale: never reloaded after B's add) writes — should NOT clobber beta
+        a.workstreams[0].description = "updated"
+        a.save()
+
+        c = Store(path=path)
+        names = sorted(w.name for w in c.workstreams)
+        assert names == ["alpha", "beta"]
+        alpha = next(w for w in c.workstreams if w.name == "alpha")
+        assert alpha.description == "updated"
+
+    def test_explicit_remove_is_not_resurrected(self, tmp_path):
+        """A workstream explicitly removed via Store.remove must NOT be
+        pulled back from disk on a subsequent save."""
+        path = tmp_path / "data.json"
+        a = Store(path=path)
+        ws1 = Workstream(name="one")
+        ws2 = Workstream(name="two")
+        a.add(ws1)
+        a.add(ws2)
+
+        a.remove(ws1.id)
+
+        # Another save — ws1 must stay gone, not get pulled back from any merge.
+        a.workstreams[0].description = "still here"
+        a.save()
+
+        b = Store(path=path)
+        assert [w.name for w in b.workstreams] == ["two"]
+
+    def test_external_todo_addition_survives_stale_save(self, tmp_path):
+        """Process B crystallizes a todo while A holds stale state. A's
+        save must NOT clobber B's todo."""
+        path = tmp_path / "data.json"
+        a = Store(path=path)
+        ws = Workstream(name="ws")
+        a.add(ws)
+
+        b = Store(path=path)
+        b_ws = b.workstreams[0]
+        b_ws.todos.append(TodoItem(text="b-added", origin="crystallized"))
+        b.update(b_ws)
+
+        # A (stale) saves something else
+        a.workstreams[0].description = "a-touched"
+        a.save()
+
+        c = Store(path=path)
+        ws_c = c.workstreams[0]
+        assert ws_c.description == "a-touched"
+        assert [t.text for t in ws_c.todos] == ["b-added"]
+
+    def test_implementer_report_wins_over_stale_coordinator(self, tmp_path):
+        """Forward-only merge: if disk has done=True / non-empty report
+        and stale memory has done=False / empty report, disk wins."""
+        path = tmp_path / "data.json"
+        a = Store(path=path)
+        ws = Workstream(name="ws")
+        t = TodoItem(text="task", origin="crystallized")
+        ws.todos.append(t)
+        a.add(ws)
+
+        # B is the implementer: marks done with a report.
+        b = Store(path=path)
+        b_t = b.workstreams[0].todos[0]
+        b_t.done = True
+        b_t.report = "the implementer's work product"
+        b.update(b.workstreams[0])
+
+        # A (stale, still has done=False / report="") saves something else.
+        a.workstreams[0].description = "coordinator-touch"
+        a.save()
+
+        c = Store(path=path)
+        ct = c.workstreams[0].todos[0]
+        assert ct.done is True
+        assert ct.report == "the implementer's work product"
+        assert c.workstreams[0].description == "coordinator-touch"
+
+    def test_flock_serializes_concurrent_writes(self, tmp_path):
+        """Two processes hammering save concurrently must end in a
+        well-formed JSON with both their additions present — no torn
+        write, no lost write."""
+        import multiprocessing as mp
+
+        path = tmp_path / "data.json"
+        # Seed the file
+        Store(path=path)
+
+        def writer(label: str, count: int):
+            s = Store(path=path)
+            for i in range(count):
+                s.add(Workstream(name=f"{label}-{i}"))
+
+        p1 = mp.Process(target=writer, args=("p1", 10))
+        p2 = mp.Process(target=writer, args=("p2", 10))
+        p1.start(); p2.start()
+        p1.join(); p2.join()
+
+        final = Store(path=path)
+        names = sorted(w.name for w in final.workstreams)
+        # Each process added 10 with its prefix; flock guarantees both committed.
+        assert sum(1 for n in names if n.startswith("p1-")) == 10
+        assert sum(1 for n in names if n.startswith("p2-")) == 10
 
 
 class TestStoreBackup:
