@@ -82,7 +82,7 @@ class Workstream:
     updated_at: str = field(default_factory=lambda: datetime.now().isoformat())
     last_user_activity: str = ""  # timestamp of last user message (for stable sorting)
     auto_done_reason: str = ""  # set by `orch distill done` to signal auto-mode loop should exit
-    auto_next_todo_id: str = ""  # set by `orch distill next` to dispatch a pending todo without re-crystallizing
+    auto_next_todo_ids: list[str] = field(default_factory=list)  # set by `orch distill next` to dispatch one or more pending todos (concurrent batch when >1)
 
     def __post_init__(self):
         # Sanitize name: strip whitespace, fix "UB-XXXX: UB-XXXX" redundancy
@@ -184,7 +184,10 @@ class Workstream:
         d.setdefault("repo_path", "")
         d.setdefault("todos", [])
         d.setdefault("auto_done_reason", "")
-        d.setdefault("auto_next_todo_id", "")
+        # Migrate legacy scalar auto_next_todo_id (string) → auto_next_todo_ids (list).
+        legacy_next = d.pop("auto_next_todo_id", "")
+        if "auto_next_todo_ids" not in d:
+            d["auto_next_todo_ids"] = [legacy_next] if legacy_next else []
         todos = []
         for t in d["todos"]:
             if isinstance(t, dict):

@@ -292,7 +292,7 @@ class TestAutoModeLoop:
             # On kickoff, coordinator picks the pre-existing todo via `orch distill next`.
             if "[auto-mode started]" in text:
                 fresh = store.get(ws.id)
-                fresh.auto_next_todo_id = "todo1aaa"
+                fresh.auto_next_todo_ids = ["todo1aaa"]
                 store.update(fresh)
             # After the followup is sent, coordinator declares done.
             elif "Implementer for todo" in text:
@@ -314,7 +314,7 @@ class TestAutoModeLoop:
         assert "orch report --todo-id todo1aaa" in spawn_briefs[0]
         assert any("implementer report text" in t for t in injected)
         # Loop must have cleared the next-todo signal after consuming it.
-        assert store.get(ws.id).auto_next_todo_id == ""
+        assert store.get(ws.id).auto_next_todo_ids == []
 
     def test_cancel_during_wait_exits_cleanly(self, store):
         ws = _ws_with_todos(store, [])  # no todos → loop will kickoff and wait
@@ -412,19 +412,19 @@ class TestAutoModeLoop:
                 return
             # On kickoff: pick first.
             if "[auto-mode started]" in text:
-                fresh.auto_next_todo_id = "aaa11111"
+                fresh.auto_next_todo_ids = ["aaa11111"]
                 store.update(fresh)
                 return
             # On first followup: try to pick aaa11111 AGAIN — skip set
             # must drop this. Then pick bbb22222 on the same followup
             # so the loop has something to advance to.
             if "Implementer for todo 'will not report'" in text:
-                fresh.auto_next_todo_id = "aaa11111"
+                fresh.auto_next_todo_ids = ["aaa11111"]
                 store.update(fresh)
                 attempted_repeat.append(True)
                 # Then pick the second one.
                 fresh = store.get(ws.id)
-                fresh.auto_next_todo_id = "bbb22222"
+                fresh.auto_next_todo_ids = ["bbb22222"]
                 store.update(fresh)
                 return
             # On second followup: terminate.
@@ -481,7 +481,7 @@ class TestAutoModeLoop:
             injected.append(text)
             if "[auto-mode started]" in text:
                 fresh = store.get(ws.id)
-                fresh.auto_next_todo_id = "abc12345"
+                fresh.auto_next_todo_ids = ["abc12345"]
                 store.update(fresh)
             elif "Implementer for todo" in text:
                 fresh = store.get(ws.id)
@@ -542,7 +542,7 @@ class TestAutoModeLoop:
             injected.append(text)
             if "[auto-mode started]" in text:
                 fresh = store.get(ws.id)
-                fresh.auto_next_todo_id = "abc12345"
+                fresh.auto_next_todo_ids = ["abc12345"]
                 store.update(fresh)
             elif "Implementer for todo" in text:
                 fresh = store.get(ws.id)
@@ -601,9 +601,9 @@ class TestAutoModeLoop:
             # then terminate.
             n_spawns = len(spawned_briefs)
             if "[auto-mode started]" in text:
-                fresh.auto_next_todo_id = "man00001"
+                fresh.auto_next_todo_ids = ["man00001"]
             elif "Implementer for todo" in text and n_spawns == 1:
-                fresh.auto_next_todo_id = "cry00002"
+                fresh.auto_next_todo_ids = ["cry00002"]
             elif "Implementer for todo" in text and n_spawns == 2:
                 fresh.auto_done_reason = "stop"
             store.update(fresh)
@@ -695,7 +695,7 @@ class TestAutoModeLoop:
             if fresh.auto_done_reason:
                 return
             if "[auto-mode started]" in text:
-                fresh.auto_next_todo_id = "aaa00001"
+                fresh.auto_next_todo_ids = ["aaa00001"]
                 store.update(fresh)
             elif "Implementer for todo 'first'" in text:
                 # Coordinator decides not to run the second pre-existing one;
@@ -762,7 +762,7 @@ class TestAutoModeLoop:
         assert spawn_briefs == ["fre00001"]
 
     def test_invalid_auto_next_todo_id_is_dropped(self, store, monkeypatch):
-        """If the coordinator sets auto_next_todo_id to something that
+        """If the coordinator sets auto_next_todo_ids to something that
         doesn't match a pending todo (already done, archived, in skip
         set, or just bogus), the loop drops the signal and keeps
         waiting. This prevents a stale id from blocking the loop or
@@ -793,19 +793,19 @@ class TestAutoModeLoop:
                 return
             if "[auto-mode started]" in text:
                 # First, set a bogus id — should be dropped.
-                fresh.auto_next_todo_id = "nope9999"
+                fresh.auto_next_todo_ids = ["nope9999"]
                 store.update(fresh)
             elif "Still waiting" in text and not bad_pick_seen:
                 # After the bogus pick was dropped and we got nudged, try
                 # the already-done one — also should be dropped.
                 bad_pick_seen.append(True)
                 fresh = store.get(ws.id)
-                fresh.auto_next_todo_id = "don00001"
+                fresh.auto_next_todo_ids = ["don00001"]
                 store.update(fresh)
             elif "Still waiting" in text and bad_pick_seen:
                 # Now pick the legitimate one.
                 fresh = store.get(ws.id)
-                fresh.auto_next_todo_id = "leg00002"
+                fresh.auto_next_todo_ids = ["leg00002"]
                 store.update(fresh)
             elif "Implementer for todo 'legit'" in text:
                 fresh.auto_done_reason = "done"
@@ -821,7 +821,315 @@ class TestAutoModeLoop:
         assert spawn_calls == ["leg00002"], \
             f"bad picks should have been dropped; spawned={spawn_calls}"
         # Both bogus picks should have been cleared from the workstream.
-        assert store.get(ws.id).auto_next_todo_id == ""
+        assert store.get(ws.id).auto_next_todo_ids == []
+
+
+# ─── AutoMode: concurrent batch dispatch ────────────────────────────
+
+
+class TestAutoModeBatchedDispatch:
+    """When the coordinator runs `orch distill next --todo-id a --todo-id b`
+    (action=append → list), AutoMode dispatches the implementers
+    concurrently and waits for ALL of them before re-engaging the
+    coordinator with a combined followup."""
+
+    def test_batch_spawns_implementers_concurrently(self, store):
+        """Both spawn_implementer coroutines must be entered before either
+        finishes — proving the loop fans out via asyncio.gather rather than
+        awaiting them serially."""
+        ws = _ws_with_todos(store, [
+            TodoItem(text="research one", origin="crystallized", id="aaa11111"),
+            TodoItem(text="research two", origin="crystallized", id="bbb22222"),
+        ])
+
+        entered = asyncio.Event()
+        in_flight = 0
+        max_in_flight = 0
+        spawn_briefs = []
+
+        async def spawn(_todo, brief):
+            nonlocal in_flight, max_in_flight
+            spawn_briefs.append(brief)
+            in_flight += 1
+            max_in_flight = max(max_in_flight, in_flight)
+            # Block until BOTH spawns have started — proves concurrency.
+            if in_flight >= 2:
+                entered.set()
+            await entered.wait()
+            # Now write the report and finish.
+            fresh = store.get(ws.id)
+            for t in fresh.todos:
+                if t.id == _todo.id:
+                    t.report = f"report for {_todo.id}"
+                    t.done = True
+            store.update(fresh)
+            in_flight -= 1
+
+        injected = []
+
+        def inject(text):
+            injected.append(text)
+            fresh = store.get(ws.id)
+            if fresh.auto_done_reason:
+                return
+            if "[auto-mode started]" in text:
+                fresh.auto_next_todo_ids = ["aaa11111", "bbb22222"]
+                store.update(fresh)
+            elif "implementers (concurrent batch) have finished" in text:
+                fresh.auto_done_reason = "complete"
+                store.update(fresh)
+
+        mode = AutoMode(
+            store=store, ws_id=ws.id,
+            spawn_implementer=spawn, inject_coordinator=inject,
+            poll_interval=0.01,
+        )
+        result = asyncio.run(asyncio.wait_for(mode.run(), timeout=5))
+        assert result == "complete"
+        assert max_in_flight == 2, (
+            f"both implementers should be in-flight simultaneously; max_in_flight={max_in_flight}"
+        )
+        # Both reports should appear in the combined followup.
+        followup = next(
+            (t for t in injected if "implementers (concurrent batch) have finished" in t),
+            "",
+        )
+        assert "report for aaa11111" in followup
+        assert "report for bbb22222" in followup
+
+    def test_batched_todos_added_to_skip_set_before_await(self, store):
+        """Every dispatched todo must enter skip_todo_ids before
+        spawn_implementer is awaited, so a coordinator re-pick during the
+        batch can't queue a duplicate."""
+        ws = _ws_with_todos(store, [
+            TodoItem(text="alpha", origin="crystallized", id="aaa11111"),
+            TodoItem(text="beta", origin="crystallized", id="bbb22222"),
+        ])
+
+        captured_skip = []
+
+        async def spawn(_todo, _brief):
+            # Snapshot the skip set at this point — both IDs should already be in it.
+            captured_skip.append(set(mode.skip_todo_ids))
+            fresh = store.get(ws.id)
+            for t in fresh.todos:
+                if t.id == _todo.id:
+                    t.report = "done"
+                    t.done = True
+            store.update(fresh)
+
+        def inject(text):
+            fresh = store.get(ws.id)
+            if fresh.auto_done_reason:
+                return
+            if "[auto-mode started]" in text:
+                fresh.auto_next_todo_ids = ["aaa11111", "bbb22222"]
+                store.update(fresh)
+            elif "implementers (concurrent batch) have finished" in text:
+                fresh.auto_done_reason = "complete"
+                store.update(fresh)
+
+        mode = AutoMode(
+            store=store, ws_id=ws.id,
+            spawn_implementer=spawn, inject_coordinator=inject,
+            poll_interval=0.01,
+        )
+        asyncio.run(asyncio.wait_for(mode.run(), timeout=5))
+        assert captured_skip, "spawn was never called"
+        for snap in captured_skip:
+            assert "aaa11111" in snap and "bbb22222" in snap, (
+                f"both todo IDs should be in skip set before any await; got {snap}"
+            )
+
+    def test_batch_drops_invalid_picks_dispatches_valid_ones(self, store, monkeypatch):
+        """If one ID in auto_next_todo_ids is invalid (e.g. skip-set'd),
+        the loop drops just that one and proceeds with the valid IDs."""
+        monkeypatch.setattr("auto_mode.NUDGE_INTERVAL_S", 5.0)
+        ws = _ws_with_todos(store, [
+            TodoItem(text="alpha", origin="crystallized", id="aaa11111"),
+            TodoItem(text="beta", origin="crystallized", id="bbb22222"),
+        ])
+
+        spawn_calls = []
+
+        async def spawn(_todo, _brief):
+            spawn_calls.append(_todo.id)
+            fresh = store.get(ws.id)
+            for t in fresh.todos:
+                if t.id == _todo.id:
+                    t.report = "done"
+                    t.done = True
+            store.update(fresh)
+
+        def inject(text):
+            fresh = store.get(ws.id)
+            if fresh.auto_done_reason:
+                return
+            if "[auto-mode started]" in text:
+                # bogus id is dropped; aaa is dispatched
+                fresh.auto_next_todo_ids = ["aaa11111", "nope9999"]
+                store.update(fresh)
+            elif "Implementer for todo" in text or "implementers (concurrent batch)" in text:
+                fresh.auto_done_reason = "complete"
+                store.update(fresh)
+
+        mode = AutoMode(
+            store=store, ws_id=ws.id,
+            spawn_implementer=spawn, inject_coordinator=inject,
+            poll_interval=0.01,
+        )
+        result = asyncio.run(asyncio.wait_for(mode.run(), timeout=5))
+        assert result == "complete"
+        assert spawn_calls == ["aaa11111"]
+
+    def test_batch_all_invalid_drops_signal_and_keeps_waiting(self, store, monkeypatch):
+        """If every ID in the batch is invalid, the signal is cleared and
+        the loop keeps waiting for the coordinator to try again."""
+        monkeypatch.setattr("auto_mode.NUDGE_INTERVAL_S", 0.05)
+        ws = _ws_with_todos(store, [
+            TodoItem(text="legit", origin="crystallized", id="leg00001"),
+        ])
+
+        spawn_calls = []
+
+        async def spawn(_todo, _brief):
+            spawn_calls.append(_todo.id)
+            fresh = store.get(ws.id)
+            for t in fresh.todos:
+                if t.id == _todo.id:
+                    t.report = "done"
+                    t.done = True
+            store.update(fresh)
+
+        injected = []
+        bad_pick_done = []
+
+        def inject(text):
+            injected.append(text)
+            fresh = store.get(ws.id)
+            if fresh.auto_done_reason:
+                return
+            if "[auto-mode started]" in text:
+                # All bogus — should be dropped, nothing spawns.
+                fresh.auto_next_todo_ids = ["nope1", "nope2"]
+                store.update(fresh)
+            elif "Still waiting" in text and not bad_pick_done:
+                bad_pick_done.append(True)
+                # Now pick the legit one to let the test terminate.
+                fresh = store.get(ws.id)
+                fresh.auto_next_todo_ids = ["leg00001"]
+                store.update(fresh)
+            elif "Implementer for todo 'legit'" in text or "implementers (concurrent batch)" in text:
+                fresh.auto_done_reason = "complete"
+                store.update(fresh)
+
+        mode = AutoMode(
+            store=store, ws_id=ws.id,
+            spawn_implementer=spawn, inject_coordinator=inject,
+            poll_interval=0.01,
+        )
+        result = asyncio.run(asyncio.wait_for(mode.run(), timeout=5))
+        assert result == "complete"
+        # Bogus picks didn't spawn anything; only the legit one ran.
+        assert spawn_calls == ["leg00001"]
+        # Signal was cleared after the bogus batch.
+        assert store.get(ws.id).auto_next_todo_ids == []
+
+    def test_batch_followup_lists_all_reports_with_ids(self, store):
+        """The combined followup must surface every (todo, report) pair so
+        the coordinator can reason over all of them."""
+        ws = _ws_with_todos(store, [
+            TodoItem(text="alpha task", origin="crystallized", id="aaa11111"),
+            TodoItem(text="beta task", origin="crystallized", id="bbb22222"),
+            TodoItem(text="gamma task", origin="crystallized", id="ccc33333"),
+        ])
+
+        async def spawn(_todo, _brief):
+            fresh = store.get(ws.id)
+            for t in fresh.todos:
+                if t.id == _todo.id:
+                    t.report = f"report-for-{_todo.id}"
+                    t.done = True
+            store.update(fresh)
+
+        injected = []
+
+        def inject(text):
+            injected.append(text)
+            fresh = store.get(ws.id)
+            if fresh.auto_done_reason:
+                return
+            if "[auto-mode started]" in text:
+                fresh.auto_next_todo_ids = ["aaa11111", "bbb22222", "ccc33333"]
+                store.update(fresh)
+            elif "implementers (concurrent batch) have finished" in text:
+                fresh.auto_done_reason = "complete"
+                store.update(fresh)
+
+        mode = AutoMode(
+            store=store, ws_id=ws.id,
+            spawn_implementer=spawn, inject_coordinator=inject,
+            poll_interval=0.01,
+        )
+        result = asyncio.run(asyncio.wait_for(mode.run(), timeout=5))
+        assert result == "complete"
+        followup = next(
+            (t for t in injected if "implementers (concurrent batch) have finished" in t),
+            "",
+        )
+        # 3 reports, all ids and bodies visible
+        assert "3 implementers" in followup
+        for tid in ("aaa11111", "bbb22222", "ccc33333"):
+            assert tid in followup
+            assert f"report-for-{tid}" in followup
+        # And the per-todo names should be visible too.
+        assert "alpha task" in followup
+        assert "beta task" in followup
+        assert "gamma task" in followup
+
+
+class TestBuildCoordinatorFollowupMulti:
+    """Prompt-builder for the concurrent-batch followup."""
+
+    def test_size_one_falls_back_to_single_wording(self):
+        # When the batch is 1, the multi-builder should produce the same
+        # text as build_coordinator_followup so existing single-todo
+        # prompt expectations still apply.
+        from auto_mode import build_coordinator_followup_multi
+        t = TodoItem(text="solo", origin="crystallized", id="solo0001")
+        out = build_coordinator_followup_multi([(t, "ok")])
+        assert "Implementer for todo 'solo'" in out
+        assert "ok" in out
+
+    def test_multi_lists_each_report_with_index_id_and_text(self):
+        from auto_mode import build_coordinator_followup_multi
+        items = [
+            (TodoItem(text="alpha", origin="crystallized", id="aaa11111"), "report A"),
+            (TodoItem(text="beta", origin="crystallized", id="bbb22222"), "report B"),
+        ]
+        out = build_coordinator_followup_multi(items)
+        assert "2 implementers" in out
+        assert "alpha" in out
+        assert "beta" in out
+        assert "aaa11111" in out
+        assert "bbb22222" in out
+        assert "report A" in out
+        assert "report B" in out
+
+    def test_multi_with_pending_includes_next_command_and_batch_hint(self):
+        from auto_mode import build_coordinator_followup_multi
+        items = [
+            (TodoItem(text="a", origin="crystallized", id="aaa11111"), "ra"),
+            (TodoItem(text="b", origin="crystallized", id="bbb22222"), "rb"),
+        ]
+        pending = [
+            TodoItem(text="c", origin="crystallized", id="ccc33333"),
+            TodoItem(text="d", origin="crystallized", id="ddd44444"),
+        ]
+        out = build_coordinator_followup_multi(items, pending_todos=pending)
+        assert "distill next" in out
+        # With 2+ pending todos, the prompt should advertise batch dispatch.
+        assert "MULTIPLE times" in out or "CONCURRENT batch" in out
 
 
 # ─── CLI: orch report and orch distill done ─────────────────────────
@@ -1096,7 +1404,7 @@ class TestDistillNextCLI:
 
         cmd_distill(Args())
         s2 = Store(path=target)
-        assert s2.workstreams[0].auto_next_todo_id == "abc12345"
+        assert s2.workstreams[0].auto_next_todo_ids == ["abc12345"]
 
     def test_accepts_id_prefix(self, tmp_path, monkeypatch):
         target, ws = self._setup(tmp_path, monkeypatch, [
@@ -1116,7 +1424,7 @@ class TestDistillNextCLI:
 
         cmd_distill(Args())
         s2 = Store(path=target)
-        assert s2.workstreams[0].auto_next_todo_id == "abc12345"
+        assert s2.workstreams[0].auto_next_todo_ids == ["abc12345"]
 
     def test_rejects_missing_todo_id(self, tmp_path, monkeypatch):
         target, ws = self._setup(tmp_path, monkeypatch, [])
@@ -1155,7 +1463,7 @@ class TestDistillNextCLI:
             cmd_distill(Args())
         # Field must remain unset on rejection.
         s2 = Store(path=target)
-        assert s2.workstreams[0].auto_next_todo_id == ""
+        assert s2.workstreams[0].auto_next_todo_ids == []
 
     def test_rejects_done_todo(self, tmp_path, monkeypatch):
         target, ws = self._setup(tmp_path, monkeypatch, [
@@ -1176,4 +1484,76 @@ class TestDistillNextCLI:
         with pytest.raises(SystemExit):
             cmd_distill(Args())
         s2 = Store(path=target)
-        assert s2.workstreams[0].auto_next_todo_id == ""
+        assert s2.workstreams[0].auto_next_todo_ids == []
+
+    def test_accepts_multiple_todo_ids_for_batch(self, tmp_path, monkeypatch):
+        """`--todo-id a --todo-id b` (action=append) writes a list of IDs
+        for concurrent batch dispatch."""
+        target, ws = self._setup(tmp_path, monkeypatch, [
+            TodoItem(text="alpha", origin="crystallized", id="aaa11111"),
+            TodoItem(text="beta", origin="crystallized", id="bbb22222"),
+            TodoItem(text="gamma", origin="crystallized", id="ccc33333"),
+        ])
+
+        from cli import cmd_distill
+
+        class Args:
+            distill_mode = "next"
+            ws_id = None
+            text = None
+            context = None
+            summary = None
+            reason = None
+            # argparse with action="append" produces a list when the flag
+            # is repeated. Two of the three queued, in coordinator's order.
+            todo_id = ["aaa11111", "ccc33333"]
+
+        cmd_distill(Args())
+        s2 = Store(path=target)
+        assert s2.workstreams[0].auto_next_todo_ids == ["aaa11111", "ccc33333"]
+
+    def test_batch_rejects_whole_call_on_any_invalid_id(self, tmp_path, monkeypatch):
+        """If any --todo-id in the batch is unknown/done/archived, the
+        whole batch is rejected and nothing is written."""
+        target, ws = self._setup(tmp_path, monkeypatch, [
+            TodoItem(text="alpha", origin="crystallized", id="aaa11111"),
+        ])
+
+        from cli import cmd_distill
+
+        class Args:
+            distill_mode = "next"
+            ws_id = None
+            text = None
+            context = None
+            summary = None
+            reason = None
+            todo_id = ["aaa11111", "nope9999"]  # second is bogus
+
+        with pytest.raises(SystemExit):
+            cmd_distill(Args())
+        s2 = Store(path=target)
+        assert s2.workstreams[0].auto_next_todo_ids == []
+
+    def test_batch_dedupes_duplicate_ids(self, tmp_path, monkeypatch):
+        """Repeated identical --todo-id values collapse to one — and
+        prefix duplicates that resolve to the same todo collapse too."""
+        target, ws = self._setup(tmp_path, monkeypatch, [
+            TodoItem(text="alpha", origin="crystallized", id="aaa11111"),
+            TodoItem(text="beta", origin="crystallized", id="bbb22222"),
+        ])
+
+        from cli import cmd_distill
+
+        class Args:
+            distill_mode = "next"
+            ws_id = None
+            text = None
+            context = None
+            summary = None
+            reason = None
+            todo_id = ["aaa11111", "aaa1", "bbb22222"]  # first two resolve to same todo
+
+        cmd_distill(Args())
+        s2 = Store(path=target)
+        assert s2.workstreams[0].auto_next_todo_ids == ["aaa11111", "bbb22222"]

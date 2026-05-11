@@ -549,22 +549,45 @@ def cmd_distill(args):
             print(_c("yellow", f"    ⚠ Terminated with {len(pending)} pending todo(s) still queued (--force)."))
 
     elif mode == "next":
-        todo_id = (args.todo_id or "").strip()
-        if not todo_id:
-            print(_c("red", "  --todo-id is required for `orch distill next`."))
+        # --todo-id may be passed multiple times for concurrent batch
+        # dispatch (auto-mode spawns implementers in parallel when >1).
+        # Accept either a list (action="append") or a single string for
+        # backward compat with tests that pass `args.todo_id = "..."`.
+        raw = getattr(args, "todo_id", None) or []
+        if isinstance(raw, str):
+            raw = [raw]
+        requested = [r.strip() for r in raw if (r or "").strip()]
+        # Dedupe while preserving order
+        seen: set[str] = set()
+        requested = [r for r in requested if not (r in seen or seen.add(r))]
+        if not requested:
+            print(_c("red", "  --todo-id is required for `orch distill next` (repeat for batch)."))
             sys.exit(1)
-        match = next(
-            (t for t in ws.todos
-             if (t.id == todo_id or t.id.startswith(todo_id))
-             and not t.done and not t.archived),
-            None,
-        )
-        if match is None:
-            print(_c("red", f"  No pending todo with id {todo_id} on {ws.name}."))
-            sys.exit(1)
-        ws.auto_next_todo_id = match.id
+
+        resolved: list = []
+        for q in requested:
+            match = next(
+                (t for t in ws.todos
+                 if (t.id == q or t.id.startswith(q))
+                 and not t.done and not t.archived),
+                None,
+            )
+            if match is None:
+                print(_c("red", f"  No pending todo with id {q} on {ws.name}."))
+                sys.exit(1)
+            # Dedupe by resolved id (different prefixes could resolve to the same todo)
+            if not any(r.id == match.id for r in resolved):
+                resolved.append(match)
+
+        ws.auto_next_todo_ids = [r.id for r in resolved]
         store.update(ws)
-        print(f"  {_c('green', '✓')} Auto-mode will dispatch {_c('bold', match.id)} next on {_c('bold', ws.name)}: {match.text}")
+        if len(resolved) == 1:
+            r = resolved[0]
+            print(f"  {_c('green', '✓')} Auto-mode will dispatch {_c('bold', r.id)} next on {_c('bold', ws.name)}: {r.text}")
+        else:
+            print(f"  {_c('green', '✓')} Auto-mode will dispatch {_c('bold', str(len(resolved)))} todos concurrently on {_c('bold', ws.name)}:")
+            for r in resolved:
+                print(f"    - {_c('bold', r.id)}  {r.text}")
 
     else:
         print(_c("red", f"  Unknown distill mode: {mode}"))
@@ -1194,6 +1217,7 @@ examples:
   orch distill done --reason "all crystallized todos are complete"
   orch distill done --reason "abandoning workstream" --force   # rare: terminate even with pending todos
   orch distill next --todo-id abc12345
+  orch distill next --todo-id abc12345 --todo-id def67890   # concurrent batch
   echo "long context" | orch distill crystallize --text "task" --context -
 
 auto-detects workstream from ORCH_WS_ID env var (set by orch-claude),
@@ -1211,8 +1235,8 @@ or pass --ws-id explicitly.
                            help="Continuation summary (compact mode). Use '-' for stdin.")
     p_distill.add_argument("--reason", "-r",
                            help="Why the workstream is done (done mode, optional)")
-    p_distill.add_argument("--todo-id", dest="todo_id",
-                           help="Pending todo ID to dispatch (next mode)")
+    p_distill.add_argument("--todo-id", dest="todo_id", action="append",
+                           help="Pending todo ID to dispatch (next mode). Repeat the flag for concurrent batch dispatch (auto-mode spawns implementers in parallel).")
     p_distill.add_argument("--force", "-f", action="store_true",
                            help="(done mode) Terminate auto-mode even if pending todos remain. Rare — usually you want `distill next` instead.")
 
