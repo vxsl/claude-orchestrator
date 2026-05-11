@@ -367,6 +367,7 @@ class AutoMode:
             ws.auto_coord_sid = self.coord_sid
             ws.auto_impl_sids = []
             ws.auto_cancel_requested = False
+            ws.auto_dispatched_todo_ids = sorted(self.skip_todo_ids)
             self.store.update(ws)
         except Exception:
             pass  # Best-effort observability; never fail the loop on a store write.
@@ -383,6 +384,17 @@ class AutoMode:
         except Exception:
             pass
 
+    def _persist_dispatched_todo_ids(self) -> None:
+        try:
+            self.store.load(force=True)
+            ws = self.store.get(self.ws_id)
+            if ws is None:
+                return
+            ws.auto_dispatched_todo_ids = sorted(self.skip_todo_ids)
+            self.store.update(ws)
+        except Exception:
+            pass
+
     def _mark_stopped(self) -> None:
         """Clear runtime flags so other processes know the loop isn't
         running anymore. Iteration / coord_sid / impl_sids are left as
@@ -395,6 +407,7 @@ class AutoMode:
             ws.auto_running = False
             ws.auto_pid = 0
             ws.auto_cancel_requested = False
+            ws.auto_dispatched_todo_ids = []
             self.store.update(ws)
         except Exception:
             pass
@@ -568,6 +581,9 @@ class AutoMode:
         if ws.auto_next_todo_ids:
             ws.auto_next_todo_ids = []
             dirty = True
+        if ws.auto_dispatched_todo_ids:
+            ws.auto_dispatched_todo_ids = []
+            dirty = True
         if dirty:
             self.store.update(ws)
 
@@ -625,6 +641,12 @@ class AutoMode:
             # so a coordinator re-pick during the wait can't queue a duplicate.
             for t in batch:
                 self.skip_todo_ids.add(t.id)
+            # Persist the skip set so `orch distill next` (running in a
+            # separate process) can refuse re-dispatch requests instead of
+            # the loop silently filtering them — the silent path stranded
+            # the coordinator in a nudge loop with false "✓ dispatched"
+            # confirmations from the CLI.
+            self._persist_dispatched_todo_ids()
             await asyncio.gather(
                 *[self.spawn_implementer(t, brief) for t, brief in briefs]
             )

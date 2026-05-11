@@ -579,6 +579,25 @@ def cmd_distill(args):
             if not any(r.id == match.id for r in resolved):
                 resolved.append(match)
 
+        # Refuse re-dispatch of todos the active auto-mode loop has already
+        # tried. Without this, the loop silently filters them out via its
+        # in-memory skip set, and the CLI's "✓ Auto-mode will dispatch X"
+        # message becomes a lying confirmation that strands the coordinator.
+        already_dispatched = set(ws.auto_dispatched_todo_ids or [])
+        rejected = [r for r in resolved if r.id in already_dispatched]
+        if rejected:
+            print(_c("red", "  Refused — already dispatched in this auto-mode run:"))
+            for r in rejected:
+                preview = r.text.strip().replace("\n", " ")
+                if len(preview) > 80:
+                    preview = preview[:77] + "..."
+                print(f"    - {_c('bold', r.id)}  {preview}")
+            print(_c("dim",
+                "  These todos already had an implementer spawned. Crystallize a NEW "
+                "todo (with the brief actually in --text), pick a different pending one, "
+                "or `orch distill done --reason '...'` to terminate."))
+            sys.exit(1)
+
         ws.auto_next_todo_ids = [r.id for r in resolved]
         store.update(ws)
         if len(resolved) == 1:

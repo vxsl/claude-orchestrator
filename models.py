@@ -83,6 +83,7 @@ class Workstream:
     last_user_activity: str = ""  # timestamp of last user message (for stable sorting)
     auto_done_reason: str = ""  # set by `orch distill done` to signal auto-mode loop should exit
     auto_next_todo_ids: list[str] = field(default_factory=list)  # set by `orch distill next` to dispatch one or more pending todos (concurrent batch when >1)
+    auto_dispatched_todo_ids: list[str] = field(default_factory=list)  # todo IDs the active loop has already dispatched (in-memory skip set, persisted so CLI can refuse re-dispatch instead of silently dropping it)
     # ── Persisted auto-mode runtime state ────────────────────────────
     # These fields let a second orch instance (or the CLI over ssh) see
     # and control an active loop without sharing the owner's memory.
@@ -224,6 +225,7 @@ class Workstream:
         legacy_next = d.pop("auto_next_todo_id", "")
         if "auto_next_todo_ids" not in d:
             d["auto_next_todo_ids"] = [legacy_next] if legacy_next else []
+        d.setdefault("auto_dispatched_todo_ids", [])
         # New persisted runtime-state fields — default everything to inactive.
         d.setdefault("auto_running", False)
         d.setdefault("auto_pid", 0)

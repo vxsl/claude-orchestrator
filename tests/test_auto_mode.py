@@ -1668,6 +1668,70 @@ class TestDistillNextCLI:
         s2 = Store(path=target)
         assert s2.workstreams[0].auto_next_todo_ids == []
 
+    def test_refuses_already_dispatched_todo(self, tmp_path, monkeypatch, capsys):
+        """If the active loop already dispatched this todo (persisted in
+        auto_dispatched_todo_ids), CLI must refuse with a clear error
+        instead of silently writing the signal — which would land in the
+        loop's in-memory skip filter and get dropped without the coordinator
+        knowing."""
+        target, ws = self._setup(tmp_path, monkeypatch, [
+            TodoItem(text="task", origin="crystallized", id="abc12345"),
+        ])
+        # Simulate: the loop already dispatched this todo earlier in the run.
+        s = Store(path=target)
+        s.workstreams[0].auto_dispatched_todo_ids = ["abc12345"]
+        s.update(s.workstreams[0])
+
+        from cli import cmd_distill
+
+        class Args:
+            distill_mode = "next"
+            ws_id = None
+            text = None
+            context = None
+            summary = None
+            reason = None
+            todo_id = "abc12345"
+
+        with pytest.raises(SystemExit):
+            cmd_distill(Args())
+        out = capsys.readouterr().out
+        assert "already dispatched" in out.lower()
+        assert "abc12345" in out
+        # Field must remain unset on rejection — coordinator must NOT get
+        # a false confirmation that the dispatch was signaled.
+        s2 = Store(path=target)
+        assert s2.workstreams[0].auto_next_todo_ids == []
+
+    def test_refuses_batch_if_any_already_dispatched(self, tmp_path, monkeypatch, capsys):
+        """One dispatched id in a batch rejects the whole call — partial
+        dispatch would leave the coordinator unsure which of N actually ran."""
+        target, ws = self._setup(tmp_path, monkeypatch, [
+            TodoItem(text="alpha", origin="crystallized", id="aaa11111"),
+            TodoItem(text="beta", origin="crystallized", id="bbb22222"),
+        ])
+        s = Store(path=target)
+        s.workstreams[0].auto_dispatched_todo_ids = ["bbb22222"]
+        s.update(s.workstreams[0])
+
+        from cli import cmd_distill
+
+        class Args:
+            distill_mode = "next"
+            ws_id = None
+            text = None
+            context = None
+            summary = None
+            reason = None
+            todo_id = ["aaa11111", "bbb22222"]
+
+        with pytest.raises(SystemExit):
+            cmd_distill(Args())
+        out = capsys.readouterr().out
+        assert "bbb22222" in out
+        s2 = Store(path=target)
+        assert s2.workstreams[0].auto_next_todo_ids == []
+
     def test_batch_dedupes_duplicate_ids(self, tmp_path, monkeypatch):
         """Repeated identical --todo-id values collapse to one — and
         prefix duplicates that resolve to the same todo collapse too."""
