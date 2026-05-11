@@ -36,7 +36,7 @@ from terminal import TerminalWidget
 from thread_namer import get_session_title
 
 # Keys that pass through the TerminalWidget to the screen for panel navigation
-_PASSTHROUGH_KEYS = {"ctrl+j", "ctrl+k", "ctrl+e", "ctrl+h", "ctrl+z", "ctrl+backslash", "ctrl+b", "ctrl+x", "ctrl+@"}
+_PASSTHROUGH_KEYS = {"ctrl+j", "ctrl+k", "ctrl+e", "ctrl+h", "ctrl+z", "ctrl+backslash", "ctrl+b", "ctrl+x", "ctrl+@", "ctrl+y"}
 
 ORCH_DIR = str(Path(__file__).parent)
 
@@ -375,6 +375,7 @@ class ClaudeSessionScreen(Screen):
 
     BINDINGS = [
         Binding("ctrl+e", "extract_todo", "Extract todo", priority=True),
+        Binding("ctrl+y", "toggle_auto_mode", "Auto mode", priority=True),
         Binding("ctrl+backslash", "go_back", "C-\\ back", priority=True),
     ]
 
@@ -540,6 +541,13 @@ class ClaudeSessionScreen(Screen):
         args += ["--append-system-prompt-file", str(sys_path)]
 
         args += ["-n", f"orch:{self._ws.name}"]
+
+        try:
+            from trust import is_trusted
+            if is_trusted(self._cwd):
+                args.append("--dangerously-skip-permissions")
+        except Exception:
+            pass
 
         if self._prompt and len(self._prompt) > 4000:
             prompt_path = spawn_dir / f"{self._session_id}.prompt"
@@ -857,6 +865,14 @@ class ClaudeSessionScreen(Screen):
     def action_extract_todo(self) -> None:
         term = self.query_one("#cs-terminal", TerminalWidget)
         term._write_to_pty("/user:extract-orch-todo\r")
+
+    # ── C-y: auto mode (coordinator/implementer loop) ─────────────
+
+    def action_toggle_auto_mode(self) -> None:
+        # Delegate to the App so state is per-workstream, not per-screen.
+        # Pressing ctrl+y on an implementer screen cancels the running loop
+        # rather than starting a parallel one (which would spawn duplicates).
+        self.app.toggle_auto_mode(self._ws.id, self._session_id)
 
 
 # ── Helpers ───────────────────────────────────────────────────────────

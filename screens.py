@@ -1516,22 +1516,25 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
                     continue
                 cur_act = session_activity(s, last_seen)
                 seen = _is_session_seen(s, last_seen)
+                role = self.app.auto_role_for(self.ws.id, sid)
                 if sid in notif_map:
                     prompt = _render_notified_session_option(
                         s, cur_act, notif_map[sid], self._throbber_frame,
                         ws_repo_path=repo, seen=seen, line_width=lw,
+                        auto_role=role,
                     )
                 elif not seen and cur_act in elevated_acts:
                     prompt = _render_notified_session_option(
                         s, cur_act, None, self._throbber_frame,
                         ws_repo_path=repo, seen=seen, line_width=lw,
+                        auto_role=role,
                     )
                 else:
                     is_shelved = sid in shelved
                     prompt = _render_session_option(
                         s, cur_act, self._throbber_frame,
                         ws_repo_path=repo, seen=seen, line_width=lw,
-                        shelved=is_shelved,
+                        shelved=is_shelved, auto_role=role,
                     )
                 olist.replace_option_prompt_at_index(idx, prompt)
 
@@ -1553,10 +1556,11 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
                         continue
                     cur_act = session_activity(s, last_seen)
                     seen = _is_session_seen(s, last_seen)
+                    role = self.app.auto_role_for(self.ws.id, sid)
                     prompt = _render_session_option(
                         s, cur_act, self._throbber_frame,
                         ws_repo_path=repo, seen=seen, line_width=alw,
-                        archived=True,
+                        archived=True, auto_role=role,
                     )
                     arch_olist.replace_option_prompt_at_index(idx, prompt)
 
@@ -1701,10 +1705,11 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
                         act = session_activity(s, self._last_seen_cache)
                         seen = _is_session_seen(s, self._last_seen_cache)
                         notif = self._session_notifications[s.session_id]
+                        role = self.app.auto_role_for(self.ws.id, s.session_id)
                         prompt = _render_notified_session_option(
                             s, act, notif, self._throbber_frame,
                             ws_repo_path=self.ws.repo_path, seen=seen,
-                            line_width=lw,
+                            line_width=lw, auto_role=role,
                         )
                         olist.replace_option_prompt_at_index(idx, prompt)
                     idx += 1
@@ -1713,10 +1718,11 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
                     if idx < olist.option_count:
                         act = session_activity(s, self._last_seen_cache)
                         seen = _is_session_seen(s, self._last_seen_cache)
+                        role = self.app.auto_role_for(self.ws.id, s.session_id)
                         prompt = _render_notified_session_option(
                             s, act, None, self._throbber_frame,
                             ws_repo_path=self.ws.repo_path, seen=seen,
-                            line_width=lw,
+                            line_width=lw, auto_role=role,
                         )
                         olist.replace_option_prompt_at_index(idx, prompt)
                     idx += 1
@@ -1728,7 +1734,8 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
                     if idx < olist.option_count:
                         act = session_activity(s, self._last_seen_cache)
                         seen = _is_session_seen(s, self._last_seen_cache)
-                        prompt = _render_session_option(s, act, self._throbber_frame, ws_repo_path=self.ws.repo_path, seen=seen, line_width=lw)
+                        role = self.app.auto_role_for(self.ws.id, s.session_id)
+                        prompt = _render_session_option(s, act, self._throbber_frame, ws_repo_path=self.ws.repo_path, seen=seen, line_width=lw, auto_role=role)
                         olist.replace_option_prompt_at_index(idx, prompt)
                     idx += 1
 
@@ -1738,7 +1745,8 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
                         if idx < olist.option_count:
                             act = session_activity(s, self._last_seen_cache)
                             seen = _is_session_seen(s, self._last_seen_cache)
-                            prompt = _render_session_option(s, act, self._throbber_frame, ws_repo_path=self.ws.repo_path, seen=seen, line_width=lw)
+                            role = self.app.auto_role_for(self.ws.id, s.session_id)
+                            prompt = _render_session_option(s, act, self._throbber_frame, ws_repo_path=self.ws.repo_path, seen=seen, line_width=lw, auto_role=role)
                             olist.replace_option_prompt_at_index(idx, prompt)
                         idx += 1
 
@@ -1748,7 +1756,8 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
                         if idx < olist.option_count:
                             act = session_activity(s, self._last_seen_cache)
                             seen = _is_session_seen(s, self._last_seen_cache)
-                            prompt = _render_session_option(s, act, self._throbber_frame, ws_repo_path=self.ws.repo_path, seen=seen, line_width=lw)
+                            role = self.app.auto_role_for(self.ws.id, s.session_id)
+                            prompt = _render_session_option(s, act, self._throbber_frame, ws_repo_path=self.ws.repo_path, seen=seen, line_width=lw, auto_role=role)
                             olist.replace_option_prompt_at_index(idx, prompt)
                         idx += 1
 
@@ -1758,7 +1767,8 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
                         if idx < olist.option_count:
                             act = session_activity(s, self._last_seen_cache)
                             seen = _is_session_seen(s, self._last_seen_cache)
-                            prompt = _render_session_option(s, act, self._throbber_frame, ws_repo_path=self.ws.repo_path, seen=seen, line_width=lw, shelved=True)
+                            role = self.app.auto_role_for(self.ws.id, s.session_id)
+                            prompt = _render_session_option(s, act, self._throbber_frame, ws_repo_path=self.ws.repo_path, seen=seen, line_width=lw, shelved=True, auto_role=role)
                             olist.replace_option_prompt_at_index(idx, prompt)
                         idx += 1
 
@@ -1769,7 +1779,8 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
                     if i < arch_olist.option_count:
                         act = session_activity(s, self._last_seen_cache)
                         seen = _is_session_seen(s, self._last_seen_cache)
-                        prompt = _render_session_option(s, act, self._throbber_frame, ws_repo_path=self.ws.repo_path, seen=seen, line_width=alw, archived=True)
+                        role = self.app.auto_role_for(self.ws.id, s.session_id)
+                        prompt = _render_session_option(s, act, self._throbber_frame, ws_repo_path=self.ws.repo_path, seen=seen, line_width=alw, archived=True, auto_role=role)
                         arch_olist.replace_option_prompt_at_index(i, prompt)
             # In-place rebuild leaves the OptionList in sync with current state,
             # so update the fingerprint to let _load_detail_sessions short-circuit.
@@ -2013,10 +2024,11 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
                 animating.append((idx, act))
             seen = _is_session_seen(s, self._last_seen_cache)
             notif = self._session_notifications[s.session_id]
+            role = self.app.auto_role_for(self.ws.id, s.session_id)
             prompt = _render_notified_session_option(
                 s, act, notif, self._throbber_frame,
                 ws_repo_path=self.ws.repo_path, seen=seen,
-                line_width=lw,
+                line_width=lw, auto_role=role,
             )
             options.append(Option(prompt, id=s.session_id))
             idx += 1
@@ -2026,10 +2038,11 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
             if act in (ThreadActivity.THINKING, ThreadActivity.AWAITING_INPUT):
                 animating.append((idx, act))
             seen = _is_session_seen(s, self._last_seen_cache)
+            role = self.app.auto_role_for(self.ws.id, s.session_id)
             prompt = _render_notified_session_option(
                 s, act, None, self._throbber_frame,
                 ws_repo_path=self.ws.repo_path, seen=seen,
-                line_width=lw,
+                line_width=lw, auto_role=role,
             )
             options.append(Option(prompt, id=s.session_id))
             idx += 1
@@ -2047,7 +2060,8 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
             if act == ThreadActivity.AWAITING_INPUT:
                 animating.append((idx, act))
             seen = _is_session_seen(s, self._last_seen_cache)
-            prompt = _render_session_option(s, act, self._throbber_frame, ws_repo_path=self.ws.repo_path, seen=seen, line_width=lw)
+            role = self.app.auto_role_for(self.ws.id, s.session_id)
+            prompt = _render_session_option(s, act, self._throbber_frame, ws_repo_path=self.ws.repo_path, seen=seen, line_width=lw, auto_role=role)
             options.append(Option(prompt, id=s.session_id))
             idx += 1
 
@@ -2058,7 +2072,8 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
                 act = session_activity(s, self._last_seen_cache)
                 animating.append((idx, act))
                 seen = _is_session_seen(s, self._last_seen_cache)
-                prompt = _render_session_option(s, act, self._throbber_frame, ws_repo_path=self.ws.repo_path, seen=seen, line_width=lw)
+                role = self.app.auto_role_for(self.ws.id, s.session_id)
+                prompt = _render_session_option(s, act, self._throbber_frame, ws_repo_path=self.ws.repo_path, seen=seen, line_width=lw, auto_role=role)
                 options.append(Option(prompt, id=s.session_id))
                 idx += 1
 
@@ -2072,7 +2087,8 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
                 if act == ThreadActivity.AWAITING_INPUT:
                     animating.append((idx, act))
                 seen = _is_session_seen(s, self._last_seen_cache)
-                prompt = _render_session_option(s, act, self._throbber_frame, ws_repo_path=self.ws.repo_path, seen=seen, line_width=lw)
+                role = self.app.auto_role_for(self.ws.id, s.session_id)
+                prompt = _render_session_option(s, act, self._throbber_frame, ws_repo_path=self.ws.repo_path, seen=seen, line_width=lw, auto_role=role)
                 options.append(Option(prompt, id=s.session_id))
                 idx += 1
 
@@ -2082,7 +2098,8 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
             for s in quiet_shelved:
                 act = session_activity(s, self._last_seen_cache)
                 seen = _is_session_seen(s, self._last_seen_cache)
-                prompt = _render_session_option(s, act, self._throbber_frame, ws_repo_path=self.ws.repo_path, seen=seen, line_width=lw, shelved=True)
+                role = self.app.auto_role_for(self.ws.id, s.session_id)
+                prompt = _render_session_option(s, act, self._throbber_frame, ws_repo_path=self.ws.repo_path, seen=seen, line_width=lw, shelved=True, auto_role=role)
                 options.append(Option(prompt, id=s.session_id))
                 idx += 1
 
@@ -2110,7 +2127,8 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
             if act in (ThreadActivity.THINKING, ThreadActivity.AWAITING_INPUT):
                 animating.append((i, act))
             seen = _is_session_seen(s, self._last_seen_cache)
-            prompt = _render_session_option(s, act, self._throbber_frame, ws_repo_path=self.ws.repo_path, seen=seen, line_width=alw, archived=True)
+            role = self.app.auto_role_for(self.ws.id, s.session_id)
+            prompt = _render_session_option(s, act, self._throbber_frame, ws_repo_path=self.ws.repo_path, seen=seen, line_width=alw, archived=True, auto_role=role)
             options.append(Option(prompt, id=f"a:{s.session_id}"))
         remaining = len(self._archived_sessions) - limit
         if remaining > 0:
@@ -3457,6 +3475,165 @@ class ConfirmScreen(ModalScreen[bool]):
 
     def action_deny(self):
         self.dismiss(False)
+
+
+# ─── Auto-mode start: per-todo picker ────────────────────────────────
+
+class AutoModeStartScreen(_VimOptionListMixin, ModalScreen[set]):
+    """When auto-mode starts on a workstream with a non-empty backlog,
+    let the user pick which todos this run should consume. Default:
+    none checked (opt-in). Returns: set of todo IDs to RUN (or None on
+    cancel). The caller computes skip_ids = all_backlog_ids - returned_set.
+    """
+
+    _option_list_id = "auto-start-list"
+
+    BINDINGS = [
+        Binding("space", "toggle_current", "Toggle", priority=True),
+        Binding("a", "select_all", "All"),
+        Binding("n", "select_none", "None"),
+        Binding("enter", "confirm", "Run selected", priority=True),
+        Binding("escape,backspace,ctrl+h", "cancel", "Cancel"),
+    ] + _VimOptionListMixin.VIM_BINDINGS
+
+    DEFAULT_CSS = f"""
+    AutoModeStartScreen {{ align: center middle; }}
+    #auto-start-container {{
+        width: 80%; height: 80%; min-height: 16;
+        padding: 0; background: {BG_BASE}; border: round {C_BLUE} 50%;
+    }}
+    #auto-start-title {{
+        height: 2; padding: 0 2; background: {BG_RAISED};
+        text-style: bold; color: {C_BLUE};
+    }}
+    #auto-start-list {{
+        height: 1fr;
+        margin: 0 1; padding: 0; border: none;
+        background: {BG_BASE};
+    }}
+    #auto-start-list > .option-list--option-highlighted {{
+        background: {BG_SURFACE};
+    }}
+    #auto-start-help {{
+        height: 1; padding: 0 2;
+        background: {BG_CHROME}; color: {C_DIM};
+        dock: bottom;
+    }}
+    """
+
+    def __init__(self, ws_name: str, todos: list[TodoItem]):
+        super().__init__()
+        self.ws_name = ws_name
+        # Snapshot at construction; safe across rebuilds.
+        self._todos: list[TodoItem] = list(todos)
+        self._selected: set[str] = set()  # default: none — opt-in
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="auto-start-container"):
+            yield Static(self._title_text(), id="auto-start-title")
+            yield OptionList(id="auto-start-list")
+            yield Static(self._help_text(), id="auto-start-help")
+
+    def on_mount(self) -> None:
+        self._rebuild()
+        olist = self.query_one("#auto-start-list", OptionList)
+        olist.focus()
+
+    def _title_text(self) -> str:
+        n_sel = len(self._selected)
+        n_total = len(self._todos)
+        return (
+            f"Auto mode: {_rich_escape(self.ws_name)}    "
+            f"[{C_DIM}]{n_sel}/{n_total} selected — Space toggle, "
+            f"a all, n none, Enter run, Esc cancel[/{C_DIM}]"
+        )
+
+    def _help_text(self) -> str:
+        pairs = [
+            ("Space", "toggle"), ("a", "all"), ("n", "none"),
+            ("Enter", "run"), ("Esc", "cancel"),
+        ]
+        return "  ".join(f"[{C_YELLOW}]{k}[/{C_YELLOW}] {v}" for k, v in pairs)
+
+    def _row(self, t: TodoItem) -> str:
+        check = f"[{C_GREEN}]◉[/{C_GREEN}]" if t.id in self._selected else f"[{C_DIM}]○[/{C_DIM}]"
+        age = _relative_time_short(t.created_at)
+        text = _rich_escape(t.text[:80])
+        text_color = C_LIGHT if t.id in self._selected else C_DIM
+        # Origin tag — visible at a glance; crystallized vs manual.
+        is_crystal = getattr(t, "origin", "manual") == "crystallized"
+        tag_color = C_GOLD if is_crystal else C_BLUE
+        tag = "c" if is_crystal else "m"
+        tag_str = f"[{tag_color}]{tag}[/{tag_color}]"
+        return f"{check} {tag_str}  [{text_color}]{text}[/{text_color}]    [{C_FAINT}]{age}[/{C_FAINT}]"
+
+    def _rebuild(self) -> None:
+        olist = self.query_one("#auto-start-list", OptionList)
+        old_idx = olist.highlighted
+        olist.clear_options()
+        olist.add_options([Option(self._row(t), id=t.id) for t in self._todos])
+        if old_idx is not None and olist.option_count > 0:
+            olist.highlighted = min(old_idx, olist.option_count - 1)
+        elif olist.option_count > 0:
+            olist.highlighted = 0
+        self.query_one("#auto-start-title", Static).update(self._title_text())
+
+    def _highlighted_id(self) -> str | None:
+        olist = self.query_one("#auto-start-list", OptionList)
+        if olist.highlighted is None or olist.option_count == 0:
+            return None
+        try:
+            return olist.get_option_at_index(olist.highlighted).id
+        except Exception:
+            return None
+
+    def action_toggle_current(self) -> None:
+        tid = self._highlighted_id()
+        if tid is None:
+            return
+        if tid in self._selected:
+            self._selected.discard(tid)
+        else:
+            self._selected.add(tid)
+        self._rebuild()
+
+    def action_select_all(self) -> None:
+        self._selected = {t.id for t in self._todos}
+        self._rebuild()
+
+    def action_select_none(self) -> None:
+        self._selected = set()
+        self._rebuild()
+
+    def action_confirm(self) -> None:
+        self.dismiss(set(self._selected))
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+
+def _relative_time_short(iso_str: str) -> str:
+    """Compact age string (e.g. '2h', '3d') for the auto-mode picker."""
+    try:
+        dt = datetime.fromisoformat(iso_str)
+        if dt.tzinfo is None:
+            dt = dt.astimezone()
+        delta = datetime.now().astimezone() - dt
+        s = int(delta.total_seconds())
+        if s < 60:
+            return f"{s}s"
+        m = s // 60
+        if m < 60:
+            return f"{m}m"
+        h = m // 60
+        if h < 24:
+            return f"{h}h"
+        d = h // 24
+        if d < 30:
+            return f"{d}d"
+        return dt.strftime("%Y-%m-%d")
+    except (ValueError, TypeError):
+        return "?"
 
 
 # ─── Current Sessions Screen ─────────────────────────────────────────

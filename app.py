@@ -254,6 +254,9 @@ class OrchestratorApp(App):
         # usually for one ws — the remaining ~70 ws have unchanged
         # activity and shouldn't re-walk their sessions.
         self._ws_activity_cache: dict[str, tuple[int, "ThreadActivity", bool]] = {}
+        self._auto_modes: dict = {}  # ws_id → auto_mode.AutoMode (running loops)
+        self._auto_coord_sid: dict[str, str] = {}  # ws_id → coordinator session id
+        self._auto_impl_sids: dict[str, set[str]] = {}  # ws_id → implementer session ids
 
     def on_key(self, event) -> None:
         # Swallow tab / shift+tab so they don't cycle focus among widgets
@@ -2085,6 +2088,21 @@ class OrchestratorApp(App):
 
     # ── Spawn & resume ──
 
+    def auto_role_for(self, ws_id: str, sid: str) -> str | None:
+        """Return 'coordinator', 'implementer', or None for a session.
+
+        Used by the workstream detail view to badge sessions that were
+        spawned as part of an auto-mode loop. Tracking is in-memory for
+        the orch process lifetime — lost on restart, by design.
+        """
+        if not ws_id or not sid:
+            return None
+        if self._auto_coord_sid.get(ws_id) == sid:
+            return "coordinator"
+        if sid in self._auto_impl_sids.get(ws_id, ()):
+            return "implementer"
+        return None
+
     @work(thread=False)
     async def launch_claude_session(
         self,
@@ -2094,6 +2112,7 @@ class OrchestratorApp(App):
         cwd: str | None = None,
         callback=None,
         reuse_pending: bool = True,
+        auto_role: str | None = None,
     ) -> None:
         """Push a ClaudeSessionScreen for the given workstream.
 
@@ -2103,6 +2122,10 @@ class OrchestratorApp(App):
         callers (e.g. spawning a crystallized todo) set this False — a
         todo is a new task, never a continuation of whatever fresh session
         happens to be cached.
+
+        auto_role: when set ("coordinator" or "implementer"), tag the
+        resulting session id under that role for this workstream so the
+        detail view can style it.
         """
         from claude_session_screen import ClaudeSessionScreen
         from terminal import TerminalWidget
@@ -2169,6 +2192,13 @@ class OrchestratorApp(App):
         if reuse_pending and session_id is None and ws.id:
             self._ws_pending_session[ws.id] = screen._session_id
 
+        if auto_role and ws.id:
+            sid = screen._session_id
+            if auto_role == "coordinator":
+                self._auto_coord_sid[ws.id] = sid
+            elif auto_role == "implementer":
+                self._auto_impl_sids.setdefault(ws.id, set()).add(sid)
+
         def _on_dismiss(result):
             if isinstance(result, dict) and result.get("detached"):
                 self._detached_sessions[result["session_id"]] = {
@@ -2214,7 +2244,291 @@ class OrchestratorApp(App):
         self.push_screen(screen, callback=_on_dismiss)
         self._sync_tab_bar()
 
+    # ── Auto mode (coordinator/implementer loop) ──
 
+    def toggle_auto_mode(self, ws_id: str, screen_session_id: str) -> None:
+        """Cancel an existing auto-mode loop for this ws, or start a new one.
+
+        On start: if the workstream has a non-empty crystallized-undone
+        backlog, prompts the user to use it or skip it ("start fresh").
+        With no backlog, starts immediately.
+
+        ws_id is the workstream. screen_session_id is the session the user
+        pressed ctrl+y on (used as coordinator only on first start). On
+        re-toggle from an implementer screen, the original coordinator
+        session is reused if it's still alive in tmux — that prevents an
+        implementer from accidentally promoting itself when the user
+        re-presses ctrl+y.
+        """
+        if not ws_id:
+            self.notify("[auto] workstream has no id", timeout=3)
+            return
+
+        running = self._auto_modes.get(ws_id)
+        if running is not None:
+            running.cancel()
+            self.notify("[auto] cancellation requested — will exit on next poll", timeout=3)
+            return
+
+        ws = self.state.store.get(ws_id)
+        if ws is None:
+            self.notify("[auto] workstream not found", timeout=3)
+            return
+        backlog = [
+            t for t in ws.todos
+            if not t.done and not t.archived
+        ]
+        backlog_ids = {t.id for t in backlog}
+
+        if not backlog_ids:
+            self._start_auto_mode(ws_id, screen_session_id, skip_ids=set())
+            return
+
+        # Non-empty backlog — let the user pick which todos to include
+        from screens import AutoModeStartScreen
+
+        def on_choice(selected) -> None:
+            # selected: set[str] of todo IDs the user wants to RUN, or None on cancel
+            if selected is None:
+                return
+            skip_ids = backlog_ids - selected
+            self._start_auto_mode(ws_id, screen_session_id, skip_ids=skip_ids)
+
+        self.push_screen(
+            AutoModeStartScreen(ws.name, backlog),
+            callback=on_choice,
+        )
+
+    def _start_auto_mode(self, ws_id: str, screen_session_id: str, skip_ids: set) -> None:
+        from terminal import TerminalWidget
+        coord_sid = screen_session_id
+        prior = self._auto_coord_sid.get(ws_id)
+        if prior and prior != screen_session_id:
+            try:
+                if TerminalWidget.tmux_session_alive(prior):
+                    coord_sid = prior
+            except Exception:
+                pass
+        self._auto_coord_sid[ws_id] = coord_sid
+        self._run_auto_mode(ws_id, coord_sid, skip_ids)
+
+    @work(thread=False, exclusive=True, group="auto_mode")
+    async def _run_auto_mode(self, ws_id: str, coord_sid: str, skip_ids: set | None = None) -> None:
+        import asyncio as _asyncio
+        import subprocess as _subprocess
+        from auto_mode import AutoMode
+        from terminal import TerminalWidget
+
+        def inject(text: str) -> None:
+            # Write to coordinator's tmux session directly so we don't
+            # depend on its TerminalWidget still being mounted. Wrap in
+            # bracketed-paste markers so claude's TUI treats embedded
+            # newlines as paste content, not Enter; then send Enter
+            # separately to submit.
+            paste = f"\x1b[200~{text}\x1b[201~"
+            try:
+                _subprocess.run(
+                    ["tmux", "-L", TerminalWidget.TMUX_SOCKET,
+                     "send-keys", "-t", coord_sid, "-l", paste],
+                    timeout=5, capture_output=True, check=True,
+                )
+                _subprocess.run(
+                    ["tmux", "-L", TerminalWidget.TMUX_SOCKET,
+                     "send-keys", "-t", coord_sid, "Enter"],
+                    timeout=5, capture_output=True, check=True,
+                )
+            except Exception as e:
+                self.notify(f"[auto] inject failed: {e}", timeout=4)
+
+        async def spawn_implementer(todo, brief: str) -> None:
+            """Spawn implementer; resolve when its report is written OR
+            the implementer's claude process produces a fully-parsed
+            ClaudeSession on natural exit. Anything else (detach, parse
+            failure → None result, exception) is NOT a resolution
+            signal — leaves the loop waiting for the report so transient
+            issues don't spuriously advance the loop."""
+            from sessions import ClaudeSession
+            exited = _asyncio.Event()
+            loop = _asyncio.get_running_loop()
+
+            def cb(result):
+                # Only a confirmed ClaudeSession (claude process exited
+                # cleanly and the JSONL parsed) counts as 'done'. Detach
+                # ({"detached": True}) and unexpected None/dict results
+                # leave the loop awaiting the report.
+                if not isinstance(result, ClaudeSession):
+                    return
+                loop.call_soon_threadsafe(exited.set)
+
+            ws = self.state.store.get(ws_id)
+            if ws is None:
+                return
+            self.launch_claude_session(
+                ws, prompt=brief, reuse_pending=False, callback=cb,
+                auto_role="implementer",
+            )
+
+            async def wait_for_report():
+                # Concurrent writers (coordinator's crystallize, other
+                # impls' reports) can produce a transient state where
+                # store.load reads partial JSON or returns no
+                # workstreams. We retry quietly rather than treat that
+                # as 'todo gone' — the alternative is a false advance,
+                # which spawns the next implementer prematurely.
+                while True:
+                    try:
+                        self.state.store.load(force=True)
+                    except Exception:
+                        await _asyncio.sleep(2)
+                        continue
+                    cur_ws = self.state.store.get(ws_id)
+                    if cur_ws is None:
+                        # Likely transient (concurrent writer). Keep waiting.
+                        await _asyncio.sleep(2)
+                        continue
+                    cur = next((t for t in cur_ws.todos if t.id == todo.id), None)
+                    if cur is None:
+                        # Same — could be transient. Don't advance.
+                        await _asyncio.sleep(2)
+                        continue
+                    if cur.report:
+                        return
+                    await _asyncio.sleep(2)
+
+            report_task = _asyncio.create_task(wait_for_report())
+            exit_task = _asyncio.create_task(exited.wait())
+            try:
+                await _asyncio.wait(
+                    [report_task, exit_task],
+                    return_when=_asyncio.FIRST_COMPLETED,
+                )
+                if report_task.done() and not exit_task.done():
+                    self.notify(
+                        "[auto] report received — advancing while implementer wraps up",
+                        timeout=4,
+                    )
+            finally:
+                report_task.cancel()
+                # Don't cancel exit_task — natural exit will set it harmlessly.
+
+        def notify(msg: str) -> None:
+            self.notify(f"[auto] {msg}", timeout=4)
+
+        mode = AutoMode(
+            store=self.state.store,
+            ws_id=ws_id,
+            spawn_implementer=spawn_implementer,
+            inject_coordinator=inject,
+            notify=notify,
+            skip_todo_ids=skip_ids or set(),
+        )
+        self._auto_modes[ws_id] = mode
+        if skip_ids:
+            self.notify(
+                f"[auto] auto mode started (skipping {len(skip_ids)} backlog todos)",
+                timeout=4,
+            )
+        else:
+            self.notify("[auto] auto mode started", timeout=3)
+
+        # Watchdog: detect & auto-respond to claude usage-quota prompts.
+        watchdog_cancel = _asyncio.Event()
+        watchdog_task = _asyncio.create_task(
+            self._watch_quota_stalls(ws_id, watchdog_cancel),
+        )
+
+        try:
+            result = await mode.run()
+            self.notify(f"[auto] loop ended: {result}", timeout=6)
+        except Exception as e:
+            self.notify(f"[auto] loop error: {e}", timeout=6)
+        finally:
+            watchdog_cancel.set()
+            try:
+                await _asyncio.wait_for(watchdog_task, timeout=2)
+            except (_asyncio.TimeoutError, _asyncio.CancelledError):
+                watchdog_task.cancel()
+            self._auto_modes.pop(ws_id, None)
+
+    async def _watch_quota_stalls(self, ws_id: str, cancel) -> None:
+        """Detect & auto-respond to quota stalls in any live session for
+        this workstream while auto-mode is running.
+
+        Polls every 15s. Requires two consecutive observations before
+        injecting Enter (so a transient mention of 'limit' doesn't
+        trigger and the user gets ~30s to intervene manually). Once
+        injected, won't re-fire on the same session until the stall
+        clears.
+        """
+        import asyncio as _asyncio
+        import subprocess as _subprocess
+        from auto_mode import detect_quota_stall
+        from terminal import TerminalWidget
+
+        INTERVAL = 15.0
+        OBSERVATIONS_BEFORE_RESPOND = 2
+
+        observed: dict[str, int] = {}      # session_id → consecutive stall observations
+        responded: set[str] = set()        # session_ids we've already injected for
+
+        while not cancel.is_set():
+            try:
+                await _asyncio.wait_for(cancel.wait(), timeout=INTERVAL)
+                return  # canceled
+            except _asyncio.TimeoutError:
+                pass  # interval elapsed; do a poll
+
+            try:
+                ws = self.state.store.get(ws_id)
+                if ws is None:
+                    continue
+                sessions = self.state.sessions_for_ws(ws)
+                live_sids = {s.session_id for s in sessions if s.is_live}
+
+                # Drop bookkeeping for sessions that are no longer live
+                for sid in list(observed):
+                    if sid not in live_sids:
+                        observed.pop(sid, None)
+                        responded.discard(sid)
+
+                for s in sessions:
+                    if not s.is_live:
+                        continue
+                    sid = s.session_id
+                    r = _subprocess.run(
+                        ["tmux", "-L", TerminalWidget.TMUX_SOCKET,
+                         "capture-pane", "-t", sid, "-p", "-S", "-100"],
+                        timeout=3, capture_output=True, text=True,
+                    )
+                    if r.returncode != 0:
+                        continue
+                    if detect_quota_stall(r.stdout):
+                        observed[sid] = observed.get(sid, 0) + 1
+                        if (observed[sid] >= OBSERVATIONS_BEFORE_RESPOND
+                                and sid not in responded):
+                            self.notify(
+                                f"[auto] quota stall in {sid[:8]} — sending Enter to wait",
+                                timeout=8,
+                            )
+                            try:
+                                _subprocess.run(
+                                    ["tmux", "-L", TerminalWidget.TMUX_SOCKET,
+                                     "send-keys", "-t", sid, "Enter"],
+                                    timeout=5, capture_output=True, check=True,
+                                )
+                                responded.add(sid)
+                            except Exception as e:
+                                self.notify(f"[auto] watchdog inject failed: {e}", timeout=4)
+                    else:
+                        if sid in responded:
+                            self.notify(f"[auto] {sid[:8]} resumed", timeout=4)
+                        observed.pop(sid, None)
+                        responded.discard(sid)
+            except _asyncio.CancelledError:
+                return
+            except Exception:
+                # Don't let watchdog crashes nuke the loop. Best-effort detection.
+                pass
 
     def action_spawn(self):
         ws = self._selected_ws()
