@@ -2414,6 +2414,21 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
             else:
                 parts.append(f"[{C_DIM}]solve:{_rich_escape(solve_status)}[/{C_DIM}]")
 
+        # Auto-mode status: shows iteration + current todo so a second orch
+        # over ssh (which doesn't own the loop) gets the same at-a-glance
+        # visibility the owning instance has via its in-memory state.
+        if self.ws.auto_running:
+            if self.ws.auto_pid_alive:
+                bits = [f"auto iter {self.ws.auto_iteration}"]
+                if self.ws.auto_current_todo_id:
+                    bits.append(f"todo {self.ws.auto_current_todo_id[:8]}")
+                pid = self.ws.auto_pid
+                if pid != os.getpid():
+                    bits.append(f"pid {pid}")
+                parts.append(f"[{C_BLUE}]" + " · ".join(bits) + f"[/{C_BLUE}]")
+            else:
+                parts.append(f"[{C_RED}]auto:stale (dead pid {self.ws.auto_pid})[/{C_RED}]")
+
         if self._detail_sessions:
             n = len(self._detail_sessions)
             total_tok = sum(s.total_input_tokens + s.total_output_tokens for s in self._detail_sessions)

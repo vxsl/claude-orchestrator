@@ -143,6 +143,28 @@ class Workstream:
     def is_active(self) -> bool:
         return not self.archived
 
+    @property
+    def auto_pid_alive(self) -> bool:
+        """True if `auto_pid` belongs to a running process on this host.
+
+        Used by the UI to distinguish "loop is running" from "loop's owner
+        crashed and left auto_running=True stuck on." Cheap — a single
+        signal-0 syscall. Cross-host: meaningless if auto_pid was set on
+        a different host, but that case isn't supported yet anyway.
+        """
+        import os as _os
+        if not self.auto_running or self.auto_pid <= 0:
+            return False
+        try:
+            _os.kill(self.auto_pid, 0)
+            return True
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            return True
+        except OSError:
+            return False
+
     def add_link(self, kind: str, value: str, label: str = "") -> Link:
         if not label:
             label = kind

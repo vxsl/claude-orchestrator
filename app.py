@@ -103,27 +103,6 @@ def _divider_option(width: int = 40) -> Option:
     return Option(line, id="__sep__", disabled=True)
 
 
-def _pid_alive(pid: int) -> bool:
-    """Return True if `pid` is a running process on this host.
-
-    Used to detect stale auto-mode owner state — if the orch process that
-    owned a loop crashed without clearing `auto_running`, the flag stays
-    True forever. A liveness check lets a fresh start clear it.
-
-    PermissionError means the pid exists but is owned by another user —
-    still alive for our purposes.
-    """
-    if pid <= 0:
-        return False
-    try:
-        os.kill(pid, 0)
-        return True
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    except OSError:
-        return False
 
 
 # ─── Inline Inputs ──────────────────────────────────────────────────
@@ -2314,7 +2293,7 @@ class OrchestratorApp(App):
         # cancel flag instead of trying to start a duplicate. If the owning
         # PID is dead (orch crashed), clear the stale state and proceed.
         if ws.auto_running and ws.auto_pid:
-            if _pid_alive(ws.auto_pid):
+            if ws.auto_pid_alive:
                 ws.auto_cancel_requested = True
                 self.state.store.update(ws)
                 self.notify(
@@ -2324,12 +2303,13 @@ class OrchestratorApp(App):
                 return
             else:
                 # Stale; clear and continue with a fresh start.
+                dead_pid = ws.auto_pid
                 ws.auto_running = False
                 ws.auto_pid = 0
                 ws.auto_cancel_requested = False
                 self.state.store.update(ws)
                 self.notify(
-                    f"[auto] cleared stale state from pid {ws.auto_pid} (process dead)",
+                    f"[auto] cleared stale state from pid {dead_pid} (process dead)",
                     timeout=3,
                 )
         backlog = [

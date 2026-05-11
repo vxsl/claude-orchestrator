@@ -637,14 +637,7 @@ def cmd_auto(args):
     def _ws_status_line(ws: Workstream) -> str:
         if not ws.auto_running:
             return f"  {_c('dim', '○')} {ws.id[:8]}  {ws.name}  {_c('dim', '(idle)')}"
-        # Liveness check — flag if owner pid is dead but flag stuck on.
-        pid_state = ""
-        try:
-            os.kill(ws.auto_pid, 0)
-        except ProcessLookupError:
-            pid_state = _c("red", "  [stale pid: process dead]")
-        except (PermissionError, OSError):
-            pass
+        pid_state = "" if ws.auto_pid_alive else _c("red", "  [stale pid: process dead]")
         cur = ws.auto_current_todo_id[:8] if ws.auto_current_todo_id else "—"
         return (
             f"  {_c('green', '●')} {ws.id[:8]}  {ws.name}\n"

@@ -527,6 +527,17 @@ def _render_ws_option(
         else:
             parts.append(f"[{C_DIM}]solve:{_rich_escape(solve_status)}[/{C_DIM}]")
 
+    # Auto-mode badge — visible from any orch instance, not just the owner.
+    # "auto iter N" while running; "auto stale" if the owner pid is dead
+    # (orch crashed without clearing auto_running) so the user can clear
+    # it by pressing ctrl+y to start a fresh loop.
+    if ws.auto_running:
+        if ws.auto_pid_alive:
+            iter_part = f" iter {ws.auto_iteration}" if ws.auto_iteration else ""
+            parts.append(f"[{C_BLUE}]auto{iter_part}[/{C_BLUE}]")
+        else:
+            parts.append(f"[{C_RED}]auto:stale[/{C_RED}]")
+
     wt_text, wt_color = _worktree_styled(ws)
     if wt_text:
         parts.append(f"[{wt_color}]{_rich_escape(wt_text)}[/{wt_color}]")
