@@ -163,7 +163,10 @@ def build_coordinator_followup(
         "Report:",
         report,
         "",
-        "⚠ AUTO-MODE PROTOCOL — read the report above, then take exactly ONE action:",
+        "First, briefly state your read on the report and what you think "
+        "should happen next — keep it proportional to what the report "
+        "warrants (a sentence for routine completions, a short paragraph "
+        "if there's something to untangle). Then take exactly ONE action:",
     ]
     if pending:
         plural = "todo" if len(pending) == 1 else "todos"
@@ -181,10 +184,11 @@ def build_coordinator_followup(
         ]
     parts += [
         "",
-        "Do NOT respond conversationally, recap, or 'stand by' — the loop is "
-        "blocked until you take one of those actions. Decide based on the "
-        "report above whether to continue with an existing item, crystallize "
-        "a new step, or terminate.",
+        "Brief reasoning is welcome; do not stand by waiting for further "
+        "input or write extended recaps. The loop is blocked until you take "
+        "one of those actions, and the report above should drive the choice "
+        "— continue with an existing item, crystallize a new step, or "
+        "terminate.",
         "",
         "REMINDER: `distill done` is NOT an end-of-iteration marker. It exits "
         "the auto-mode runner entirely — there is no \"next loop\" that re-fires. "
@@ -196,7 +200,10 @@ def build_coordinator_followup(
 
 def build_coordinator_nudge(pending_todos: Optional[list] = None) -> str:
     pending = pending_todos or []
-    lines = ["[auto-mode] Still waiting. Take ONE action now:"]
+    lines = [
+        "[auto-mode] Still waiting on you. If you're mid-thought, take your "
+        "time — this is just a reminder of your options:"
+    ]
     if pending:
         lines.append("  (a) `orch distill next --todo-id <id>` to dispatch a pending todo, OR")
         lines.append("  (b) /user:extract-orch-todo to queue a new task, OR")
@@ -204,7 +211,6 @@ def build_coordinator_nudge(pending_todos: Optional[list] = None) -> str:
     else:
         lines.append("  (a) /user:extract-orch-todo to queue next, OR")
         lines.append("  (b) `orch distill done --reason '...'` to HARD-KILL auto-mode (only if workstream is complete).")
-    lines.append("No conversational reply — pick one and run it.")
     lines.append("`distill done` exits the auto-mode runner — there is no \"next loop.\"")
     return "\n".join(lines)
 
