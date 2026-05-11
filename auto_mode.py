@@ -32,9 +32,13 @@ Pure logic — no Textual imports. The TUI wires three callables:
 from __future__ import annotations
 
 import asyncio
+import os
+from datetime import datetime
 from typing import Awaitable, Callable, Optional
 
 from models import Store, TodoItem, Workstream
+
+CANCEL_POLL_INTERVAL_S = 3.0  # how often to poll auto_cancel_requested
 
 NUDGE_INTERVAL_S = 180.0  # 3 minutes of coordinator silence → re-prompt
 
@@ -316,6 +320,7 @@ class AutoMode:
         notify: Optional[Callable[[str], None]] = None,
         poll_interval: float = 2.0,
         skip_todo_ids: Optional[set] = None,
+        coord_sid: str = "",
     ):
         self.store = store
         self.ws_id = ws_id
@@ -324,6 +329,7 @@ class AutoMode:
         self.notify = notify or (lambda _: None)
         self.poll_interval = poll_interval
         self.skip_todo_ids: set = set(skip_todo_ids) if skip_todo_ids else set()
+        self.coord_sid = coord_sid
 
         self.canceled = False
         self.iteration = 0
@@ -338,6 +344,83 @@ class AutoMode:
     def cancel(self) -> None:
         self.canceled = True
         self.cancel_event.set()
+
+    # ── Persisted-state writes ────────────────────────────────────
+    # The owning orch process is the only writer for everything except
+    # auto_cancel_requested; other processes set THAT, and the loop's
+    # watchdog picks it up.
+
+    def _mark_running(self) -> None:
+        """Write the loop's start state to data.json so other processes
+        can observe and signal it (cancel, status). Clears stale flags
+        from a previous run."""
+        try:
+            self.store.load(force=True)
+            ws = self.store.get(self.ws_id)
+            if ws is None:
+                return
+            ws.auto_running = True
+            ws.auto_pid = os.getpid()
+            ws.auto_started_at = datetime.now().isoformat()
+            ws.auto_iteration = 0
+            ws.auto_current_todo_id = ""
+            ws.auto_coord_sid = self.coord_sid
+            ws.auto_impl_sids = []
+            ws.auto_cancel_requested = False
+            self.store.update(ws)
+        except Exception:
+            pass  # Best-effort observability; never fail the loop on a store write.
+
+    def _persist_iteration(self) -> None:
+        try:
+            self.store.load(force=True)
+            ws = self.store.get(self.ws_id)
+            if ws is None:
+                return
+            ws.auto_iteration = self.iteration
+            ws.auto_current_todo_id = self.current_todo_id or ""
+            self.store.update(ws)
+        except Exception:
+            pass
+
+    def _mark_stopped(self) -> None:
+        """Clear runtime flags so other processes know the loop isn't
+        running anymore. Iteration / coord_sid / impl_sids are left as
+        post-mortem data until the next start clears them."""
+        try:
+            self.store.load(force=True)
+            ws = self.store.get(self.ws_id)
+            if ws is None:
+                return
+            ws.auto_running = False
+            ws.auto_pid = 0
+            ws.auto_cancel_requested = False
+            self.store.update(ws)
+        except Exception:
+            pass
+
+    async def _watch_cancel_requested(self) -> None:
+        """Poll the persisted auto_cancel_requested flag. If another
+        process sets it, trigger self.cancel() — which sets cancel_event
+        and unblocks every existing race in the loop. Exits cleanly when
+        cancel_event is already set (loop wrapping up)."""
+        while not self.canceled:
+            try:
+                await asyncio.wait_for(
+                    self.cancel_event.wait(), timeout=CANCEL_POLL_INTERVAL_S,
+                )
+                return  # cancel happened locally; nothing more to do
+            except asyncio.TimeoutError:
+                pass
+            try:
+                self.store.load(force=True)
+                ws = self.store.get(self.ws_id)
+                if ws is not None and ws.auto_cancel_requested:
+                    self.notify("cancel requested via persisted flag — exiting")
+                    self.cancel()
+                    return
+            except Exception:
+                pass
 
     async def _read_report(self, todo_id: str) -> str:
         """Read the implementer's writeback for `todo_id`, retrying briefly
@@ -488,6 +571,28 @@ class AutoMode:
         if dirty:
             self.store.update(ws)
 
+        # Mark this loop as the active owner BEFORE spawning the watchdog —
+        # the watchdog polls auto_cancel_requested and would mis-fire on
+        # leftover True from a previous run. _mark_running clears it.
+        self._mark_running()
+        cancel_watcher = asyncio.create_task(self._watch_cancel_requested())
+
+        try:
+            return await self._run_inner()
+        finally:
+            cancel_watcher.cancel()
+            try:
+                await cancel_watcher
+            except (asyncio.CancelledError, Exception):
+                pass
+            self._mark_stopped()
+
+    async def _run_inner(self) -> str:
+        ws = self.store.get(self.ws_id)
+        if not ws:
+            self.final_status = "workstream not found"
+            return self.final_status
+
         pending = self._pending_todos(ws)
         existing_ids = {t.id for t in pending}
         self.inject_coordinator(build_coordinator_kickoff(ws, pending_todos=pending))
@@ -501,6 +606,7 @@ class AutoMode:
         while not self.canceled:
             self.iteration += 1
             self.current_todo_id = batch[0].id  # informational; first of batch
+            self._persist_iteration()
             if len(batch) == 1:
                 t = batch[0]
                 self.notify(f"iter {self.iteration}: spawning implementer for '{t.text[:60]}'")

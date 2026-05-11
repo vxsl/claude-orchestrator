@@ -103,6 +103,29 @@ def _divider_option(width: int = 40) -> Option:
     return Option(line, id="__sep__", disabled=True)
 
 
+def _pid_alive(pid: int) -> bool:
+    """Return True if `pid` is a running process on this host.
+
+    Used to detect stale auto-mode owner state — if the orch process that
+    owned a loop crashed without clearing `auto_running`, the flag stays
+    True forever. A liveness check lets a fresh start clear it.
+
+    PermissionError means the pid exists but is owned by another user —
+    still alive for our purposes.
+    """
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        return False
+
+
 # ─── Inline Inputs ──────────────────────────────────────────────────
 
 class SearchInput(Input):
@@ -2091,15 +2114,27 @@ class OrchestratorApp(App):
     def auto_role_for(self, ws_id: str, sid: str) -> str | None:
         """Return 'coordinator', 'implementer', or None for a session.
 
-        Used by the workstream detail view to badge sessions that were
-        spawned as part of an auto-mode loop. Tracking is in-memory for
-        the orch process lifetime — lost on restart, by design.
+        Used by the workstream detail view to badge sessions spawned as
+        part of an auto-mode loop. Checks the in-memory dicts first
+        (fast, authoritative for this process), then falls back to the
+        persisted state on the workstream so sessions spawned by another
+        orch instance / a previous orch run are still badged.
         """
         if not ws_id or not sid:
             return None
         if self._auto_coord_sid.get(ws_id) == sid:
             return "coordinator"
         if sid in self._auto_impl_sids.get(ws_id, ()):
+            return "implementer"
+        # Persisted fallback — read the workstream directly without
+        # forcing a store reload (rendering is hot; the badge isn't
+        # safety-critical and gets refreshed on the next data refresh).
+        ws = self.state.store.get(ws_id)
+        if ws is None:
+            return None
+        if ws.auto_coord_sid == sid:
+            return "coordinator"
+        if sid in ws.auto_impl_sids:
             return "implementer"
         return None
 
@@ -2274,6 +2309,29 @@ class OrchestratorApp(App):
         if ws is None:
             self.notify("[auto] workstream not found", timeout=3)
             return
+
+        # A loop owned by a DIFFERENT orch process? Set the cross-process
+        # cancel flag instead of trying to start a duplicate. If the owning
+        # PID is dead (orch crashed), clear the stale state and proceed.
+        if ws.auto_running and ws.auto_pid:
+            if _pid_alive(ws.auto_pid):
+                ws.auto_cancel_requested = True
+                self.state.store.update(ws)
+                self.notify(
+                    f"[auto] cancel signal sent to pid {ws.auto_pid} (another orch owns this loop)",
+                    timeout=4,
+                )
+                return
+            else:
+                # Stale; clear and continue with a fresh start.
+                ws.auto_running = False
+                ws.auto_pid = 0
+                ws.auto_cancel_requested = False
+                self.state.store.update(ws)
+                self.notify(
+                    f"[auto] cleared stale state from pid {ws.auto_pid} (process dead)",
+                    timeout=3,
+                )
         backlog = [
             t for t in ws.todos
             if not t.done and not t.archived
@@ -2374,9 +2432,19 @@ class OrchestratorApp(App):
                 self.notify(f"[auto] implementer spawn failed: {e}", timeout=6)
                 return
 
-            # Tag for badging in the detail view (in-memory; lost on restart, by design).
+            # Tag for badging in the detail view: in-memory (fast read for UI)
+            # and persisted (so other orch instances / CLI can see who's running
+            # what). Persist best-effort — never fail the spawn on a store hiccup.
             if ws_id:
                 self._auto_impl_sids.setdefault(ws_id, set()).add(sid)
+                try:
+                    self.state.store.load(force=True)
+                    cur_ws = self.state.store.get(ws_id)
+                    if cur_ws is not None and sid not in cur_ws.auto_impl_sids:
+                        cur_ws.auto_impl_sids.append(sid)
+                        self.state.store.update(cur_ws)
+                except Exception:
+                    pass
 
             async def wait_for_report():
                 while True:
@@ -2445,6 +2513,7 @@ class OrchestratorApp(App):
             inject_coordinator=inject,
             notify=notify,
             skip_todo_ids=skip_ids or set(),
+            coord_sid=coord_sid,
         )
         self._auto_modes[ws_id] = mode
         if skip_ids:

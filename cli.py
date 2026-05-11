@@ -629,6 +629,64 @@ def cmd_report(args):
     sys.exit(1)
 
 
+def cmd_auto(args):
+    """Inspect/control auto-mode loops via the persisted runtime state."""
+    store = Store()
+    mode = getattr(args, "auto_mode", None)
+
+    def _ws_status_line(ws: Workstream) -> str:
+        if not ws.auto_running:
+            return f"  {_c('dim', '○')} {ws.id[:8]}  {ws.name}  {_c('dim', '(idle)')}"
+        # Liveness check — flag if owner pid is dead but flag stuck on.
+        pid_state = ""
+        try:
+            os.kill(ws.auto_pid, 0)
+        except ProcessLookupError:
+            pid_state = _c("red", "  [stale pid: process dead]")
+        except (PermissionError, OSError):
+            pass
+        cur = ws.auto_current_todo_id[:8] if ws.auto_current_todo_id else "—"
+        return (
+            f"  {_c('green', '●')} {ws.id[:8]}  {ws.name}\n"
+            f"      pid={ws.auto_pid}  started={ws.auto_started_at}\n"
+            f"      iter={ws.auto_iteration}  current_todo={cur}  "
+            f"coord={ws.auto_coord_sid[:8] or '—'}  "
+            f"impls={len(ws.auto_impl_sids)}{pid_state}"
+        )
+
+    if mode == "status":
+        ws_id = getattr(args, "ws_id", None) or os.environ.get("ORCH_WS_ID")
+        if ws_id:
+            ws = _resolve_ws(store, ws_id)
+            print(_ws_status_line(ws))
+            return
+        # No filter — list all that are running, plus a count of idle.
+        active = [w for w in store.workstreams if w.auto_running]
+        if not active:
+            print(_c("dim", "  No auto-mode loops are running."))
+            return
+        for ws in active:
+            print(_ws_status_line(ws))
+
+    elif mode == "cancel":
+        ws_id = getattr(args, "ws_id", None) or os.environ.get("ORCH_WS_ID")
+        if not ws_id:
+            print(_c("red", "  --ws-id is required for `orch auto cancel`."))
+            sys.exit(1)
+        ws = _resolve_ws(store, ws_id)
+        if not ws.auto_running:
+            print(_c("dim", f"  Loop is not running on {ws.name}; nothing to cancel."))
+            return
+        ws.auto_cancel_requested = True
+        store.update(ws)
+        print(f"  {_c('green', '✓')} Cancel requested for {_c('bold', ws.name)} (pid {ws.auto_pid}).")
+        print(_c("dim", "    The owning orch process will exit on its next poll (~3s)."))
+
+    else:
+        print(_c("red", f"  Unknown auto subcommand: {mode}"))
+        sys.exit(1)
+
+
 def cmd_export(args):
     """Export active workstreams as markdown for Obsidian."""
     store = Store()
@@ -1240,6 +1298,24 @@ or pass --ws-id explicitly.
     p_distill.add_argument("--force", "-f", action="store_true",
                            help="(done mode) Terminate auto-mode even if pending todos remain. Rare — usually you want `distill next` instead.")
 
+    # auto (observe/control auto-mode loops cross-process)
+    p_auto = sub.add_parser("auto", help="Inspect or control auto-mode loops",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""\
+examples:
+  orch auto status                        List all running auto-mode loops
+  orch auto status --ws-id abc12345       Status for one workstream
+  orch auto cancel --ws-id abc12345       Signal the owning orch to exit
+
+`auto cancel` writes a flag to data.json; the owning orch process polls
+it every ~3s and self-cancels. The implementer claude processes keep
+running (they're attached to the orch tmux server, not the loop).
+""")
+    p_auto.add_argument("auto_mode", choices=["status", "cancel"],
+                        help="status: print loop state; cancel: request the running loop exit")
+    p_auto.add_argument("--ws-id", dest="ws_id",
+                        help="Workstream ID (8-char UUID prefix). Defaults to $ORCH_WS_ID.")
+
     # report (auto-mode implementer writeback)
     p_report = sub.add_parser("report", help="Implementer writeback to a crystallized todo (auto-mode)",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -1365,6 +1441,7 @@ examples:
         "watch": cmd_watch,
         "spawn": cmd_spawn,
         "distill": cmd_distill,
+        "auto": cmd_auto,
         "report": cmd_report,
         "export": cmd_export,
         "import": cmd_import,

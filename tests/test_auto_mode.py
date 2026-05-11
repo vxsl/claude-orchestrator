@@ -824,6 +824,139 @@ class TestAutoModeLoop:
         assert store.get(ws.id).auto_next_todo_ids == []
 
 
+# ─── AutoMode: persisted runtime state ───────────────────────────────
+
+
+class TestAutoModePersistedState:
+    """The loop writes its lifecycle state to data.json so other orch
+    instances / the CLI can observe and signal an active loop."""
+
+    def test_marks_running_then_stopped(self, store):
+        ws = _ws_with_todos(store, [])  # no todos; loop will kickoff and wait
+
+        observed: dict = {}
+
+        async def spawn(_t, _b):
+            raise AssertionError("should not spawn")
+
+        def inject(_text):
+            # Capture state while the loop is running, then cancel.
+            fresh = store.get(ws.id)
+            observed["running_during"] = fresh.auto_running
+            observed["pid_during"] = fresh.auto_pid
+            observed["started_during"] = fresh.auto_started_at
+            fresh.auto_done_reason = "captured"
+            store.update(fresh)
+
+        mode = AutoMode(
+            store=store, ws_id=ws.id,
+            spawn_implementer=spawn,
+            inject_coordinator=inject,
+            poll_interval=0.01,
+            coord_sid="coord-sid-xyz",
+        )
+        result = asyncio.run(mode.run())
+
+        assert result == "captured"
+        assert observed["running_during"] is True
+        assert observed["pid_during"] == os.getpid()
+        assert observed["started_during"]  # non-empty ISO timestamp
+        # After exit, running flags are cleared.
+        final = store.get(ws.id)
+        assert final.auto_running is False
+        assert final.auto_pid == 0
+        # coord_sid is persisted at start and left as forensics after.
+        assert final.auto_coord_sid == "coord-sid-xyz"
+
+    def test_external_cancel_flag_exits_loop(self, store):
+        """A second orch process / the CLI can set auto_cancel_requested
+        on the workstream; the running loop's watchdog polls it and
+        triggers self.cancel(). Verifies the cross-process control plane
+        works end-to-end on a single AutoMode instance."""
+        ws = _ws_with_todos(store, [])  # idle; loop sits in kickoff wait
+
+        async def spawn(_t, _b):
+            raise AssertionError("should not spawn")
+
+        def inject(_text):
+            pass
+
+        mode = AutoMode(
+            store=store, ws_id=ws.id,
+            spawn_implementer=spawn,
+            inject_coordinator=inject,
+            poll_interval=0.01,
+        )
+
+        async def request_cancel_externally():
+            # Give the loop a moment to mark itself running and start the
+            # cancel watchdog. The watchdog polls every CANCEL_POLL_INTERVAL_S
+            # (3s) — patch it down for the test or it'd dominate runtime.
+            import auto_mode as _am
+            _am.CANCEL_POLL_INTERVAL_S = 0.02
+            await asyncio.sleep(0.05)
+            fresh = store.get(ws.id)
+            fresh.auto_cancel_requested = True
+            store.update(fresh)
+
+        async def runner():
+            return await asyncio.gather(mode.run(), request_cancel_externally())
+
+        results = asyncio.run(runner())
+        assert results[0] == "canceled"
+        # Watchdog must have CLEARED the flag on exit so it doesn't
+        # immediately re-trigger on the next run.
+        final = store.get(ws.id)
+        assert final.auto_cancel_requested is False
+        assert final.auto_running is False
+
+    def test_iteration_count_persists_per_iter(self, store):
+        ws = _ws_with_todos(store, [
+            TodoItem(text="t1", origin="crystallized", id="t1aaaaaa"),
+            TodoItem(text="t2", origin="crystallized", id="t2bbbbbb"),
+        ])
+        seen_iters: list[int] = []
+
+        async def spawn(todo, _brief):
+            # Snapshot the persisted iteration count while the implementer "runs".
+            fresh = store.get(ws.id)
+            seen_iters.append(fresh.auto_iteration)
+            # Implementer writes its report.
+            fresh.todos = [
+                TodoItem(**{**t.__dict__, "report": "ok", "done": True}) if t.id == todo.id else t
+                for t in fresh.todos
+            ]
+            store.update(fresh)
+
+        injected: list[str] = []
+
+        def inject(text):
+            injected.append(text)
+            if "[auto-mode started]" in text:
+                fresh = store.get(ws.id)
+                fresh.auto_next_todo_ids = ["t1aaaaaa"]
+                store.update(fresh)
+            elif "Implementer for todo 't1'" in text:
+                fresh = store.get(ws.id)
+                fresh.auto_next_todo_ids = ["t2bbbbbb"]
+                store.update(fresh)
+            elif "Implementer for todo 't2'" in text:
+                fresh = store.get(ws.id)
+                fresh.auto_done_reason = "done"
+                store.update(fresh)
+
+        mode = AutoMode(
+            store=store, ws_id=ws.id,
+            spawn_implementer=spawn,
+            inject_coordinator=inject,
+            poll_interval=0.01,
+        )
+        result = asyncio.run(mode.run())
+        assert result == "done"
+        # Iteration must have incremented between spawns.
+        assert seen_iters == [1, 2]
+
+
 # ─── AutoMode: concurrent batch dispatch ────────────────────────────
 
 

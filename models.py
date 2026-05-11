@@ -83,6 +83,20 @@ class Workstream:
     last_user_activity: str = ""  # timestamp of last user message (for stable sorting)
     auto_done_reason: str = ""  # set by `orch distill done` to signal auto-mode loop should exit
     auto_next_todo_ids: list[str] = field(default_factory=list)  # set by `orch distill next` to dispatch one or more pending todos (concurrent batch when >1)
+    # ── Persisted auto-mode runtime state ────────────────────────────
+    # These fields let a second orch instance (or the CLI over ssh) see
+    # and control an active loop without sharing the owner's memory.
+    # The owning orch process is the only writer for everything EXCEPT
+    # auto_cancel_requested, which any process can set; the owner polls
+    # it and self-cancels.
+    auto_running: bool = False             # true while a loop is active in some process
+    auto_pid: int = 0                      # PID of the owning orch process (for stale-state detection)
+    auto_started_at: str = ""              # ISO timestamp of the active loop's start
+    auto_iteration: int = 0                # last-completed iteration count
+    auto_current_todo_id: str = ""         # first todo of the current batch (informational)
+    auto_coord_sid: str = ""               # coordinator's tmux session id
+    auto_impl_sids: list[str] = field(default_factory=list)  # implementer tmux session ids spawned this run
+    auto_cancel_requested: bool = False    # set by any process; owner polls and exits
 
     def __post_init__(self):
         # Sanitize name: strip whitespace, fix "UB-XXXX: UB-XXXX" redundancy
@@ -188,6 +202,15 @@ class Workstream:
         legacy_next = d.pop("auto_next_todo_id", "")
         if "auto_next_todo_ids" not in d:
             d["auto_next_todo_ids"] = [legacy_next] if legacy_next else []
+        # New persisted runtime-state fields — default everything to inactive.
+        d.setdefault("auto_running", False)
+        d.setdefault("auto_pid", 0)
+        d.setdefault("auto_started_at", "")
+        d.setdefault("auto_iteration", 0)
+        d.setdefault("auto_current_todo_id", "")
+        d.setdefault("auto_coord_sid", "")
+        d.setdefault("auto_impl_sids", [])
+        d.setdefault("auto_cancel_requested", False)
         todos = []
         for t in d["todos"]:
             if isinstance(t, dict):
