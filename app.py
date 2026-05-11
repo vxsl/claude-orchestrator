@@ -2267,7 +2267,7 @@ class OrchestratorApp(App):
         running = self._auto_modes.get(ws_id)
         if running is not None:
             running.cancel()
-            self.notify("[auto] cancellation requested — will exit on next poll", timeout=3)
+            self.notify("[auto] canceling — exiting now (in-flight implementers keep running)", timeout=3)
             return
 
         ws = self.state.store.get(ws_id)
@@ -2397,11 +2397,21 @@ class OrchestratorApp(App):
 
             report_task = _asyncio.create_task(wait_for_report())
             exit_task = _asyncio.create_task(exited.wait())
+            # Race against the AutoMode cancel event too — without this,
+            # pressing ctrl+y to cancel only takes effect after the
+            # implementer naturally finishes (writes its report or exits
+            # claude cleanly), which can be many minutes. `mode` is bound
+            # in the enclosing scope after spawn_implementer is defined;
+            # Python resolves the name at call time so the forward ref is fine.
+            cancel_task = _asyncio.create_task(mode.cancel_event.wait())
             try:
                 await _asyncio.wait(
-                    [report_task, exit_task],
+                    [report_task, exit_task, cancel_task],
                     return_when=_asyncio.FIRST_COMPLETED,
                 )
+                if cancel_task.done():
+                    # Don't notify "report received" — we're bailing.
+                    return
                 if report_task.done() and not exit_task.done():
                     self.notify(
                         "[auto] report received — advancing while implementer wraps up",
@@ -2409,6 +2419,7 @@ class OrchestratorApp(App):
                     )
             finally:
                 report_task.cancel()
+                cancel_task.cancel()
                 # Don't cancel exit_task — natural exit will set it harmlessly.
 
         def notify(msg: str) -> None:

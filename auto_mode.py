@@ -330,9 +330,14 @@ class AutoMode:
         self.current_todo_id: Optional[str] = None
         self.last_report: str = ""
         self.final_status: str = ""
+        # Set by cancel(); awaitable so callers blocked on long polls (e.g.
+        # waiting for an implementer's report) can race against it and exit
+        # immediately instead of waiting for the next checkpoint.
+        self.cancel_event = asyncio.Event()
 
     def cancel(self) -> None:
         self.canceled = True
+        self.cancel_event.set()
 
     async def _read_report(self, todo_id: str) -> str:
         """Read the implementer's writeback for `todo_id`, retrying briefly
@@ -447,7 +452,12 @@ class AutoMode:
                 pending = [t for t in self._pending_todos(ws) if t.id in existing_ids]
                 self.inject_coordinator(build_coordinator_nudge(pending))
                 last_nudge_at = _time.time()
-            await asyncio.sleep(self.poll_interval)
+            try:
+                await asyncio.wait_for(
+                    self.cancel_event.wait(), timeout=self.poll_interval,
+                )
+            except asyncio.TimeoutError:
+                pass
         return [], "canceled"
 
     async def run(self) -> str:
