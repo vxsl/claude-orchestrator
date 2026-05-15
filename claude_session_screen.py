@@ -20,20 +20,22 @@ from textual import events, work
 from textual.binding import Binding
 from textual.app import ComposeResult
 from textual.containers import Horizontal, Vertical
+from textual.message import Message
 from textual.screen import Screen
 from textual.widgets import Static
 
 from models import Link, Store, Workstream
 from rendering import (
     BG_RAISED, BG_BASE, BG_CHROME, BG_SURFACE,
-    C_BLUE, C_CYAN, C_DIM, C_FAINT, C_MID, C_ORANGE,
+    C_BLUE, C_CYAN, C_DIM, C_FAINT, C_GREEN, C_MID, C_ORANGE,
     C_PURPLE, C_YELLOW,
-    CATEGORY_THEME,
-    _context_bar_compact,
+    CATEGORY_THEME, THROBBER_FRAMES,
+    _activity_icon, _context_bar_compact, _session_title,
 )
 from sessions import ClaudeSession, parse_session
 from terminal import TerminalWidget
 from thread_namer import get_session_title
+from threads import ThreadActivity, session_activity
 
 # Keys that pass through the TerminalWidget to the screen for panel navigation
 _PASSTHROUGH_KEYS = {"ctrl+j", "ctrl+k", "ctrl+e", "ctrl+h", "ctrl+z", "ctrl+backslash", "ctrl+b", "ctrl+x", "ctrl+@", "ctrl+y"}
@@ -548,6 +550,199 @@ class SessionFooterWidget(Static):
         self.update(f"{left}{' ' * gap}{right}")
 
 
+# ── Workstream Sessions Sidebar Widget ───────────────────────────────
+
+class WsSessionListWidget(Static):
+    """Sidebar list of non-idle sessions in the workstream (excluding the
+    one currently being viewed). Focusable; j/k to move, Enter to switch."""
+
+    class SessionSelected(Message):
+        def __init__(self, session_id: str) -> None:
+            super().__init__()
+            self.session_id = session_id
+
+    class ItemsChanged(Message):
+        def __init__(self, has_items: bool) -> None:
+            super().__init__()
+            self.has_items = has_items
+
+    DEFAULT_CSS = f"""
+    WsSessionListWidget {{
+        height: 1fr;
+        padding: 0 1;
+        background: {BG_RAISED};
+    }}
+    """
+
+    can_focus = True
+
+    def __init__(self, ws_id: str, current_session_id: str, **kwargs) -> None:
+        super().__init__("", **kwargs)
+        self._ws_id = ws_id
+        self._current_session_id = current_session_id
+        # rows: list of (session_id, title, activity, age, seen)
+        self._rows: list[tuple[str, str, ThreadActivity, str, bool]] = []
+        self._selected_sid: str | None = None
+        self._throbber_frame = 0
+        self._last_had_items = False
+
+    def on_mount(self) -> None:
+        self._refresh()
+        self.set_interval(2.0, self._refresh)
+        self.set_interval(0.1, self._tick_throbber)
+
+    def on_focus(self) -> None:
+        self._render()
+
+    def on_blur(self) -> None:
+        self._render()
+
+    def on_resize(self, event) -> None:
+        self._render()
+
+    def _tick_throbber(self) -> None:
+        if any(r[2] == ThreadActivity.THINKING for r in self._rows):
+            self._throbber_frame = (self._throbber_frame + 1) % len(THROBBER_FRAMES)
+            self._render()
+
+    def _refresh(self) -> None:
+        try:
+            state = self.app.state  # type: ignore[attr-defined]
+            ws = state.store.get(self._ws_id) if self._ws_id else None
+            sessions = state.sessions_for_ws(ws) if ws else []
+        except Exception:
+            sessions = []
+
+        try:
+            from threads import load_last_seen
+            last_seen = load_last_seen()
+        except Exception:
+            last_seen = {}
+
+        # Order: THINKING > AWAITING_INPUT > RESPONSE_READY, then by recency
+        order = {
+            ThreadActivity.THINKING: 0,
+            ThreadActivity.AWAITING_INPUT: 1,
+            ThreadActivity.RESPONSE_READY: 2,
+        }
+        candidates = []
+        for s in sessions:
+            if s.session_id == self._current_session_id:
+                continue
+            act = session_activity(s, last_seen)
+            if act not in order:
+                continue
+            seen_ts = last_seen.get(s.session_id, "")
+            anchor = s.last_activity or s.started_at or ""
+            seen = bool(seen_ts and anchor and seen_ts >= anchor)
+            candidates.append((order[act], -_iso_ts(s.last_activity or s.started_at), s, act, seen))
+        candidates.sort(key=lambda x: (x[0], x[1]))
+
+        new_rows: list[tuple[str, str, ThreadActivity, str, bool]] = []
+        for _, _, s, act, seen in candidates:
+            title = _session_title(s)
+            new_rows.append((s.session_id, title, act, s.age, seen))
+
+        self._rows = new_rows
+
+        # Maintain selection across refreshes
+        sids = [r[0] for r in self._rows]
+        if self._selected_sid not in sids:
+            self._selected_sid = sids[0] if sids else None
+
+        has_items = bool(self._rows)
+        if has_items != self._last_had_items:
+            self._last_had_items = has_items
+            self.post_message(self.ItemsChanged(has_items))
+
+        self._render()
+
+    def _render(self) -> None:
+        if not self._rows:
+            self.update(f"[{C_FAINT}]no other active sessions[/{C_FAINT}]")
+            return
+
+        # Sidebar 36 - border 2 - padding 2 = 32, but read real content width
+        # so any resize works correctly.
+        WIDTH = max(20, self.content_size.width or 32)
+        focused = self.has_focus
+        lines = []
+        for sid, title, act, age, seen in self._rows:
+            icon = _activity_icon(act, self._throbber_frame, seen=seen)
+            age_str = age.replace(" ago", "")
+            # layout: "I tt … age" where icon=1, gap=1, age right-aligned
+            avail = max(4, WIDTH - 2 - len(age_str) - 1)
+            t = title.replace("\n", " ").strip()
+            if len(t) > avail:
+                t = t[: max(1, avail - 1)] + "…"
+            pad = " " * max(1, avail - len(t) + 1)
+            title_esc = _esc(t)
+            is_sel = sid == self._selected_sid
+            if is_sel and focused:
+                body = f"{icon} [bold]{title_esc}[/bold]{pad}[{C_DIM}]{age_str}[/{C_DIM}]"
+                lines.append(f"[on {BG_SURFACE}]{body}[/on {BG_SURFACE}]")
+            elif is_sel:
+                lines.append(
+                    f"{icon} [bold]{title_esc}[/bold]{pad}[{C_DIM}]{age_str}[/{C_DIM}]"
+                )
+            else:
+                lines.append(
+                    f"{icon} {title_esc}{pad}[{C_DIM}]{age_str}[/{C_DIM}]"
+                )
+        self.update("\n".join(lines))
+
+    def _move(self, delta: int) -> None:
+        if not self._rows:
+            return
+        sids = [r[0] for r in self._rows]
+        try:
+            idx = sids.index(self._selected_sid) if self._selected_sid else 0
+        except ValueError:
+            idx = 0
+        idx = max(0, min(len(sids) - 1, idx + delta))
+        self._selected_sid = sids[idx]
+        self._render()
+
+    def on_key(self, event: events.Key) -> None:
+        if event.key in ("j", "down"):
+            event.stop()
+            event.prevent_default()
+            self._move(1)
+        elif event.key in ("k", "up"):
+            event.stop()
+            event.prevent_default()
+            self._move(-1)
+        elif event.key == "g":
+            event.stop()
+            event.prevent_default()
+            if self._rows:
+                self._selected_sid = self._rows[0][0]
+                self._render()
+        elif event.key == "G":
+            event.stop()
+            event.prevent_default()
+            if self._rows:
+                self._selected_sid = self._rows[-1][0]
+                self._render()
+        elif event.key == "enter":
+            event.stop()
+            event.prevent_default()
+            if self._selected_sid:
+                self.post_message(self.SessionSelected(self._selected_sid))
+
+
+def _iso_ts(s: str) -> float:
+    """Parse ISO timestamp to a unix-ts float, or 0 on failure (for sort keys)."""
+    if not s:
+        return 0.0
+    try:
+        from datetime import datetime
+        dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
+        return dt.timestamp()
+    except (ValueError, TypeError):
+        return 0.0
+
+
 # ── Claude Session Screen ────────────────────────────────────────────
 
 class ClaudeSessionScreen(Screen):
@@ -602,7 +797,17 @@ class ClaudeSessionScreen(Screen):
     #cs-tig-status, #cs-tig-log {{
         height: 1fr;
     }}
+    #cs-other-sessions-wrap {{
+        height: auto;
+        max-height: 12;
+    }}
+    #cs-other-sessions {{
+        height: auto;
+    }}
     .panel-hidden {{
+        display: none;
+    }}
+    .panel-zoom-hidden {{
         display: none;
     }}
     """
@@ -639,6 +844,7 @@ class ClaudeSessionScreen(Screen):
         self._git_branch = self._detect_git_branch()
         self._jsonl = self._jsonl_path()
         self._sidebar_enabled = not os.environ.get("ORCH_NO_SIDEBAR")
+        self._has_other_sessions = False
 
 
     def _resolve_cwd(self) -> str:
@@ -756,6 +962,15 @@ class ClaudeSessionScreen(Screen):
                             cwd=self._cwd,
                             passthrough_keys=_PASSTHROUGH_KEYS,
                             id="cs-tig-log",
+                        )
+                    with Vertical(
+                        id="cs-other-sessions-wrap",
+                        classes="cs-tig-wrap panel-hidden",
+                    ):
+                        yield WsSessionListWidget(
+                            ws_id=self._ws.id or "",
+                            current_session_id=self._session_id,
+                            id="cs-other-sessions",
                         )
         yield SessionFooterWidget(
             session_id=self._session_id,
@@ -883,13 +1098,17 @@ class ClaudeSessionScreen(Screen):
 
     @property
     def _panel_ids(self) -> list[str]:
-        if self._sidebar_enabled:
-            return ["cs-terminal", "cs-tig-status", "cs-tig-log"]
-        return ["cs-terminal"]
+        if not self._sidebar_enabled:
+            return ["cs-terminal"]
+        ids = ["cs-terminal", "cs-tig-status", "cs-tig-log"]
+        if self._has_other_sessions:
+            ids.append("cs-other-sessions")
+        return ids
 
     _TIG_WRAP_IDS = {
         "cs-tig-status": "cs-tig-status-wrap",
         "cs-tig-log": "cs-tig-log-wrap",
+        "cs-other-sessions": "cs-other-sessions-wrap",
     }
 
     def _update_pane_focus(self) -> None:
@@ -934,26 +1153,37 @@ class ClaudeSessionScreen(Screen):
     # ── C-z: zoom panel ──────────────────────────────────────────
 
     def action_zoom_panel(self) -> None:
-        """Toggle zoom on the active panel — hide everything else."""
+        """Toggle zoom on the active panel — hide everything else.
+
+        Uses `panel-zoom-hidden` so empty-state hides (panel-hidden) are
+        preserved when we unzoom.
+        """
+        sidebar_panels = {
+            "cs-tig-status": "cs-tig-status-wrap",
+            "cs-tig-log": "cs-tig-log-wrap",
+            "cs-other-sessions": "cs-other-sessions-wrap",
+        }
         if self._zoomed_panel:
-            # Unzoom: show everything
+            # Unzoom: clear zoom-hides, leaving any empty-state hides in place
             self._zoomed_panel = None
-            for w in self.query(".panel-hidden"):
-                w.remove_class("panel-hidden")
+            for w in self.query(".panel-zoom-hidden"):
+                w.remove_class("panel-zoom-hidden")
         else:
-            # Zoom the active panel
             self._zoomed_panel = self._active_panel
             if self._active_panel == "cs-terminal":
-                # Hide sidebar, keep header/footer
                 try:
-                    self.query_one("#cs-sidebar").add_class("panel-hidden")
+                    self.query_one("#cs-sidebar").add_class("panel-zoom-hidden")
                 except Exception:
                     pass
-            elif self._active_panel in ("cs-tig-status", "cs-tig-log"):
-                # Hide main column, hide the other sidebar panel
-                self.query_one("#cs-main-col").add_class("panel-hidden")
-                other = "cs-tig-log-wrap" if self._active_panel == "cs-tig-status" else "cs-tig-status-wrap"
-                self.query_one(f"#{other}").add_class("panel-hidden")
+            elif self._active_panel in sidebar_panels:
+                self.query_one("#cs-main-col").add_class("panel-zoom-hidden")
+                this_wrap = sidebar_panels[self._active_panel]
+                for pid, wrap in sidebar_panels.items():
+                    if wrap != this_wrap:
+                        try:
+                            self.query_one(f"#{wrap}").add_class("panel-zoom-hidden")
+                        except Exception:
+                            pass
 
     # ── C-e: extract todo ─────────────────────────────────────────
 
@@ -968,6 +1198,50 @@ class ClaudeSessionScreen(Screen):
         # Pressing ctrl+y on an implementer screen cancels the running loop
         # rather than starting a parallel one (which would spawn duplicates).
         self.app.toggle_auto_mode(self._ws.id, self._session_id)
+
+    # ── Other-sessions sidebar widget integration ─────────────────
+
+    def on_ws_session_list_widget_items_changed(
+        self, event: "WsSessionListWidget.ItemsChanged"
+    ) -> None:
+        """Show/hide the other-sessions wrap based on whether the widget has rows."""
+        self._has_other_sessions = event.has_items
+        try:
+            wrap = self.query_one("#cs-other-sessions-wrap")
+        except Exception:
+            return
+        if event.has_items:
+            wrap.remove_class("panel-hidden")
+        else:
+            wrap.add_class("panel-hidden")
+            # Don't leave focus stranded on the now-hidden panel
+            if self._active_panel == "cs-other-sessions":
+                self._active_panel = "cs-terminal"
+                self._update_pane_focus()
+                try:
+                    self.query_one("#cs-terminal").focus()
+                except Exception:
+                    pass
+
+    def on_ws_session_list_widget_session_selected(
+        self, event: "WsSessionListWidget.SessionSelected"
+    ) -> None:
+        """Switch the screen to the selected session — detach current, push new."""
+        target_sid = event.session_id
+        sessions = self.app.state.sessions_for_ws(self._ws)
+        target = next((s for s in sessions if s.session_id == target_sid), None)
+        if not target:
+            return
+        claude_tw = self.query_one("#cs-terminal", TerminalWidget)
+        claude_tw.detach_persistent()
+        self.dismiss({
+            "detached": True,
+            "session_id": self._session_id,
+            "ws": self._ws,
+            "start_time": self._start_time,
+            "jsonl": self._jsonl,
+        })
+        self.app.launch_claude_session(self._ws, session_id=target_sid)
 
 
 # ── Helpers ───────────────────────────────────────────────────────────
