@@ -622,30 +622,43 @@ class WsSessionListWidget(Static):
         except Exception:
             last_seen = {}
 
-        # Match the session-list's "bright icon" rule: a row is interesting
-        # if it would render with a colored (non-dim) icon there. That's
-        # THINKING always (blue throbber) plus unseen AWAITING_INPUT or
-        # RESPONSE_READY (bright green). Dim-icon rows (seen "your turn"
-        # sessions) are inactive and omitted.
+        # Three inclusion paths, in priority order:
+        #   1. "Bright icon" rows from the session list — THINKING always, plus
+        #      unseen AWAITING_INPUT/RESPONSE_READY.
+        #   2. The current session (so the user can see where they are).
+        #   3. Recently viewed non-archived sessions, even if seen — useful
+        #      to jump back to something you were just in.
         order = {
             ThreadActivity.THINKING: 0,
             ThreadActivity.AWAITING_INPUT: 1,
             ThreadActivity.RESPONSE_READY: 2,
         }
+        view_cutoff = _recent_cutoff(hours=2)
         candidates = []
         for s in sessions:
             is_current = s.session_id == self._current_session_id
             act = session_activity(s, last_seen)
-            if act not in order:
-                # Current session might be IDLE (no messages yet); include anyway
-                if not is_current:
-                    continue
-                act = ThreadActivity.AWAITING_INPUT  # placeholder for sort
             seen = _is_session_seen(s, last_seen)
-            if not is_current and act != ThreadActivity.THINKING and seen:
+            seen_ts = last_seen.get(s.session_id, "")
+            recently_viewed = bool(seen_ts) and _iso_ts(seen_ts) >= view_cutoff
+
+            bucket: int | None = None
+            if is_current:
+                if act not in order:
+                    act = ThreadActivity.AWAITING_INPUT  # placeholder
+                bucket = order.get(act, 1)
+            elif act == ThreadActivity.THINKING:
+                bucket = 0
+            elif act in (ThreadActivity.AWAITING_INPUT, ThreadActivity.RESPONSE_READY) and not seen:
+                bucket = order[act]
+            elif recently_viewed and act != ThreadActivity.IDLE:
+                bucket = 9  # below all active rows
+            else:
                 continue
-            candidates.append((order.get(act, 99), -_iso_ts(s.last_activity or s.started_at), s, act, seen))
+
+            candidates.append((bucket, -_iso_ts(s.last_activity or s.started_at), s, act, seen))
         candidates.sort(key=lambda x: (x[0], x[1]))
+        candidates = candidates[:8]
 
         new_rows: list[tuple[str, str, ThreadActivity, str, bool, str, bool]] = []
         for _, _, s, act, seen in candidates:
