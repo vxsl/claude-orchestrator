@@ -30,7 +30,7 @@ from rendering import (
     C_BLUE, C_CYAN, C_DIM, C_FAINT, C_GREEN, C_MID, C_ORANGE,
     C_PURPLE, C_YELLOW,
     CATEGORY_THEME, THROBBER_FRAMES,
-    _activity_icon, _context_bar_compact, _session_title,
+    _activity_icon, _context_bar_compact, _is_session_seen, _session_title,
 )
 from sessions import ClaudeSession, parse_session
 from terminal import TerminalWidget
@@ -635,9 +635,7 @@ class WsSessionListWidget(Static):
             act = session_activity(s, last_seen)
             if act not in order:
                 continue
-            seen_ts = last_seen.get(s.session_id, "")
-            anchor = s.last_activity or s.started_at or ""
-            seen = bool(seen_ts and anchor and seen_ts >= anchor)
+            seen = _is_session_seen(s, last_seen)
             if act == ThreadActivity.AWAITING_INPUT and seen:
                 continue
             candidates.append((order[act], -_iso_ts(s.last_activity or s.started_at), s, act, seen))
