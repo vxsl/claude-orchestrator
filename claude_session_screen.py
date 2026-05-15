@@ -619,10 +619,11 @@ class WsSessionListWidget(Static):
         except Exception:
             last_seen = {}
 
-        # Mirror the session-list classification: include every non-IDLE
-        # session, sort by activity priority (thinking → awaiting → ready),
-        # and let the icon (bright vs dim) reflect seen-state exactly as it
-        # does in the session list.
+        # Match the session-list's "bright icon" rule: a row is interesting
+        # if it would render with a colored (non-dim) icon there. That's
+        # THINKING always (blue throbber) plus unseen AWAITING_INPUT or
+        # RESPONSE_READY (bright green). Dim-icon rows (seen "your turn"
+        # sessions) are inactive and omitted.
         order = {
             ThreadActivity.THINKING: 0,
             ThreadActivity.AWAITING_INPUT: 1,
@@ -636,10 +637,10 @@ class WsSessionListWidget(Static):
             if act not in order:
                 continue
             seen = _is_session_seen(s, last_seen)
+            if act != ThreadActivity.THINKING and seen:
+                continue
             candidates.append((order[act], -_iso_ts(s.last_activity or s.started_at), s, act, seen))
         candidates.sort(key=lambda x: (x[0], x[1]))
-        # Cap to a reasonable number so the sidebar doesn't grow without bound.
-        candidates = candidates[:8]
 
         new_rows: list[tuple[str, str, ThreadActivity, str, bool, str]] = []
         for _, _, s, act, seen in candidates:
