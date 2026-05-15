@@ -884,11 +884,7 @@ class OrchestratorApp(App):
             if has_session:
                 sep = f"[{C_FAINT}] \u203a [/{C_FAINT}]"
                 if is_active:
-                    content = (
-                        f"[on {BG_BASE}] {act_prefix}[/on {BG_BASE}]"
-                        f"[bold {C_BLUE} on {BG_BASE}]{prefix}{_rich_escape(ws_label)}[/bold {C_BLUE} on {BG_BASE}]"
-                        f"[on {BG_BASE}]{sep}[{C_MID}]{_rich_escape(css_sess_label)}[/{C_MID}] [/on {BG_BASE}]"
-                    )
+                    content = f"[on {BG_BASE}] {act_prefix}[/on {BG_BASE}][bold {C_BLUE} on {BG_BASE}]{prefix}{_rich_escape(ws_label)} [/]"
                 else:
                     content = (
                         f"[on {BG_RAISED}] {act_prefix}[/on {BG_RAISED}]"
