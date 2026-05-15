@@ -695,11 +695,42 @@ def _file_touchpoints(files: list[str]) -> str:
     return f"[{C_DIM}]{shown} +{extra}[/{C_DIM}]"
 
 
+def _apply_title_highlights(raw: str, positions: list[int]) -> str:
+    """Escape *raw* and wrap matched positions in bold-yellow markup.
+
+    Consecutive positions are grouped into a single markup run to keep the
+    output compact. Positions outside the string are ignored.
+    """
+    if not positions:
+        return _rich_escape(raw)
+    pos_set = {p for p in positions if 0 <= p < len(raw)}
+    if not pos_set:
+        return _rich_escape(raw)
+    out: list[str] = []
+    i = 0
+    n = len(raw)
+    while i < n:
+        if i in pos_set:
+            j = i + 1
+            while j < n and j in pos_set:
+                j += 1
+            out.append(f"[bold {C_YELLOW}]{_rich_escape(raw[i:j])}[/bold {C_YELLOW}]")
+            i = j
+        else:
+            j = i + 1
+            while j < n and j not in pos_set:
+                j += 1
+            out.append(_rich_escape(raw[i:j]))
+            i = j
+    return "".join(out)
+
+
 def _render_session_option(
     s: ClaudeSession, act: ThreadActivity, throbber_frame: int = 0,
     title_width: int = 48, ws_repo_path: str = "", seen: bool = False,
     line_width: int = 0, shelved: bool = False, archived: bool = False,
     auto_role: str | None = None,
+    title_highlights: list[int] | None = None,
 ) -> str:
     """Render a session as a formatted multi-line OptionList entry.
 
@@ -725,7 +756,7 @@ def _render_session_option(
         chip, chip_w = _auto_role_chip(auto_role, faint=True)
         title_raw = _session_title(s)[:title_width - chip_w]
         title_pad = " " * (title_width - chip_w - len(title_raw))
-        title_esc = _rich_escape(title_raw)
+        title_esc = _apply_title_highlights(title_raw, title_highlights or [])
         sid = s.session_id[:8]
         tokens_plain = s.tokens_display
         msgs_str = f"{s.message_count}↑{s.assistant_message_count}↓"
@@ -800,7 +831,7 @@ def _render_session_option(
     chip, chip_w = _auto_role_chip(auto_role, faint=archived)
     title_raw = _session_title(s)[:title_width - chip_w]
     title_pad = " " * (title_width - chip_w - len(title_raw))  # pad to fixed column
-    title_esc = _rich_escape(title_raw)
+    title_esc = _apply_title_highlights(title_raw, title_highlights or [])
     sid = s.session_id[:8]
     tokens_plain = s.tokens_display
     msgs_str = f"{s.message_count}↑{s.assistant_message_count}↓"
@@ -1082,6 +1113,7 @@ def _render_notified_session_option(
     throbber_frame: int = 0, title_width: int = 48,
     ws_repo_path: str = "", seen: bool = False,
     line_width: int = 0, auto_role: str | None = None,
+    title_highlights: list[int] | None = None,
 ) -> str:
     """Render a session in elevated/notified style.
 
@@ -1108,7 +1140,7 @@ def _render_notified_session_option(
     model = _short_model(s.model)
     chip, chip_w = _auto_role_chip(auto_role)
     title_raw = _session_title(s)[:title_width - chip_w]
-    title_esc = _rich_escape(title_raw)
+    title_esc = _apply_title_highlights(title_raw, title_highlights or [])
     sid = s.session_id[:8]
     tokens_plain = s.tokens_display
     msgs_str = f"{s.message_count}↑{s.assistant_message_count}↓"

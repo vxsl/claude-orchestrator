@@ -138,6 +138,50 @@ def fuzzy_match(query: str, text: str) -> int | None:
     return score
 
 
+def fuzzy_match_positions(query: str, text: str) -> tuple[int, list[int]] | None:
+    """Like fuzzy_match, but also returns the positions of matched chars.
+
+    Returns (score, [positions]) or None when query is not a subsequence.
+    Positions are indices into *text* where each query char matched.
+    """
+    if not query:
+        return 0, []
+    if not text:
+        return None
+
+    q = query.lower()
+    t = text.lower()
+    qi = 0
+    score = 0
+    streak = 0
+    prev_match_idx = -2
+    positions: list[int] = []
+
+    for ti, ch in enumerate(t):
+        if qi < len(q) and ch == q[qi]:
+            positions.append(ti)
+            score += 1
+            if ti == prev_match_idx + 1:
+                streak += 1
+                score += streak * 2
+            else:
+                streak = 0
+            if ti == 0:
+                score += 5
+            elif t[ti - 1] in " -_./\\":
+                score += 4
+            elif t[ti - 1].islower() and ch != t[ti]:
+                score += 3
+            if text[ti] == query[qi]:
+                score += 1
+            prev_match_idx = ti
+            qi += 1
+
+    if qi < len(q):
+        return None
+    return score, positions
+
+
 def fuzzy_filter(query: str, items: Sequence[str]) -> list[tuple[int, int]]:
     """Return ``(index, score)`` pairs for items matching *query*, best first."""
     results = []

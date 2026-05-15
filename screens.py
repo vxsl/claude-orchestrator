@@ -67,7 +67,7 @@ from actions import (
 )
 from terminal import TerminalWidget
 from notifications import Notification, dismiss_notification, dismiss_all_for_dirs
-from state import fuzzy_match, content_search, SessionSearchResult
+from state import fuzzy_match, fuzzy_match_positions, content_search, SessionSearchResult
 from widgets import FuzzyPicker, FuzzyPickerScreen
 from profile_app import perf_trace
 
@@ -1129,6 +1129,7 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         self._content_results: list[SessionSearchResult] = []
         self._content_search_active: bool = False
         self._title_only_search: bool = False  # true when '\' opened search (titles-only mode)
+        self._title_highlights: dict[str, list[int]] = {}  # session_id -> matched char positions
         # Full unfiltered lists (set once sessions are loaded)
         self._all_sessions: list[ClaudeSession] = []
         self._all_archived: list[ClaudeSession] = []
@@ -1524,12 +1525,14 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
                         s, cur_act, notif_map[sid], self._throbber_frame,
                         ws_repo_path=repo, seen=seen, line_width=lw,
                         auto_role=role,
+                        title_highlights=self._title_highlights.get(s.session_id),
                     )
                 elif not seen and cur_act in elevated_acts:
                     prompt = _render_notified_session_option(
                         s, cur_act, None, self._throbber_frame,
                         ws_repo_path=repo, seen=seen, line_width=lw,
                         auto_role=role,
+                        title_highlights=self._title_highlights.get(s.session_id),
                     )
                 else:
                     is_shelved = sid in shelved
@@ -1537,6 +1540,7 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
                         s, cur_act, self._throbber_frame,
                         ws_repo_path=repo, seen=seen, line_width=lw,
                         shelved=is_shelved, auto_role=role,
+                        title_highlights=self._title_highlights.get(s.session_id),
                     )
                 olist.replace_option_prompt_at_index(idx, prompt)
 
@@ -1563,6 +1567,7 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
                         s, cur_act, self._throbber_frame,
                         ws_repo_path=repo, seen=seen, line_width=alw,
                         archived=True, auto_role=role,
+                        title_highlights=self._title_highlights.get(s.session_id),
                     )
                     arch_olist.replace_option_prompt_at_index(idx, prompt)
 
@@ -1712,6 +1717,7 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
                             s, act, notif, self._throbber_frame,
                             ws_repo_path=self.ws.repo_path, seen=seen,
                             line_width=lw, auto_role=role,
+                            title_highlights=self._title_highlights.get(s.session_id),
                         )
                         olist.replace_option_prompt_at_index(idx, prompt)
                     idx += 1
@@ -1725,6 +1731,7 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
                             s, act, None, self._throbber_frame,
                             ws_repo_path=self.ws.repo_path, seen=seen,
                             line_width=lw, auto_role=role,
+                            title_highlights=self._title_highlights.get(s.session_id),
                         )
                         olist.replace_option_prompt_at_index(idx, prompt)
                     idx += 1
@@ -1737,7 +1744,7 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
                         act = session_activity(s, self._last_seen_cache)
                         seen = _is_session_seen(s, self._last_seen_cache)
                         role = self.app.auto_role_for(self.ws.id, s.session_id)
-                        prompt = _render_session_option(s, act, self._throbber_frame, ws_repo_path=self.ws.repo_path, seen=seen, line_width=lw, auto_role=role)
+                        prompt = _render_session_option(s, act, self._throbber_frame, ws_repo_path=self.ws.repo_path, seen=seen, line_width=lw, auto_role=role, title_highlights=self._title_highlights.get(s.session_id))
                         olist.replace_option_prompt_at_index(idx, prompt)
                     idx += 1
 
@@ -1748,7 +1755,7 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
                             act = session_activity(s, self._last_seen_cache)
                             seen = _is_session_seen(s, self._last_seen_cache)
                             role = self.app.auto_role_for(self.ws.id, s.session_id)
-                            prompt = _render_session_option(s, act, self._throbber_frame, ws_repo_path=self.ws.repo_path, seen=seen, line_width=lw, auto_role=role)
+                            prompt = _render_session_option(s, act, self._throbber_frame, ws_repo_path=self.ws.repo_path, seen=seen, line_width=lw, auto_role=role, title_highlights=self._title_highlights.get(s.session_id))
                             olist.replace_option_prompt_at_index(idx, prompt)
                         idx += 1
 
@@ -1759,7 +1766,7 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
                             act = session_activity(s, self._last_seen_cache)
                             seen = _is_session_seen(s, self._last_seen_cache)
                             role = self.app.auto_role_for(self.ws.id, s.session_id)
-                            prompt = _render_session_option(s, act, self._throbber_frame, ws_repo_path=self.ws.repo_path, seen=seen, line_width=lw, auto_role=role)
+                            prompt = _render_session_option(s, act, self._throbber_frame, ws_repo_path=self.ws.repo_path, seen=seen, line_width=lw, auto_role=role, title_highlights=self._title_highlights.get(s.session_id))
                             olist.replace_option_prompt_at_index(idx, prompt)
                         idx += 1
 
@@ -1770,7 +1777,7 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
                             act = session_activity(s, self._last_seen_cache)
                             seen = _is_session_seen(s, self._last_seen_cache)
                             role = self.app.auto_role_for(self.ws.id, s.session_id)
-                            prompt = _render_session_option(s, act, self._throbber_frame, ws_repo_path=self.ws.repo_path, seen=seen, line_width=lw, shelved=True, auto_role=role)
+                            prompt = _render_session_option(s, act, self._throbber_frame, ws_repo_path=self.ws.repo_path, seen=seen, line_width=lw, shelved=True, auto_role=role, title_highlights=self._title_highlights.get(s.session_id))
                             olist.replace_option_prompt_at_index(idx, prompt)
                         idx += 1
 
@@ -1782,7 +1789,7 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
                         act = session_activity(s, self._last_seen_cache)
                         seen = _is_session_seen(s, self._last_seen_cache)
                         role = self.app.auto_role_for(self.ws.id, s.session_id)
-                        prompt = _render_session_option(s, act, self._throbber_frame, ws_repo_path=self.ws.repo_path, seen=seen, line_width=alw, archived=True, auto_role=role)
+                        prompt = _render_session_option(s, act, self._throbber_frame, ws_repo_path=self.ws.repo_path, seen=seen, line_width=alw, archived=True, auto_role=role, title_highlights=self._title_highlights.get(s.session_id))
                         arch_olist.replace_option_prompt_at_index(i, prompt)
             # In-place rebuild leaves the OptionList in sync with current state,
             # so update the fingerprint to let _load_detail_sessions short-circuit.
@@ -2031,6 +2038,7 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
                 s, act, notif, self._throbber_frame,
                 ws_repo_path=self.ws.repo_path, seen=seen,
                 line_width=lw, auto_role=role,
+                title_highlights=self._title_highlights.get(s.session_id),
             )
             options.append(Option(prompt, id=s.session_id))
             idx += 1
@@ -2045,6 +2053,7 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
                 s, act, None, self._throbber_frame,
                 ws_repo_path=self.ws.repo_path, seen=seen,
                 line_width=lw, auto_role=role,
+                title_highlights=self._title_highlights.get(s.session_id),
             )
             options.append(Option(prompt, id=s.session_id))
             idx += 1
@@ -2063,7 +2072,7 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
                 animating.append((idx, act))
             seen = _is_session_seen(s, self._last_seen_cache)
             role = self.app.auto_role_for(self.ws.id, s.session_id)
-            prompt = _render_session_option(s, act, self._throbber_frame, ws_repo_path=self.ws.repo_path, seen=seen, line_width=lw, auto_role=role)
+            prompt = _render_session_option(s, act, self._throbber_frame, ws_repo_path=self.ws.repo_path, seen=seen, line_width=lw, auto_role=role, title_highlights=self._title_highlights.get(s.session_id))
             options.append(Option(prompt, id=s.session_id))
             idx += 1
 
@@ -2075,7 +2084,7 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
                 animating.append((idx, act))
                 seen = _is_session_seen(s, self._last_seen_cache)
                 role = self.app.auto_role_for(self.ws.id, s.session_id)
-                prompt = _render_session_option(s, act, self._throbber_frame, ws_repo_path=self.ws.repo_path, seen=seen, line_width=lw, auto_role=role)
+                prompt = _render_session_option(s, act, self._throbber_frame, ws_repo_path=self.ws.repo_path, seen=seen, line_width=lw, auto_role=role, title_highlights=self._title_highlights.get(s.session_id))
                 options.append(Option(prompt, id=s.session_id))
                 idx += 1
 
@@ -2090,7 +2099,7 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
                     animating.append((idx, act))
                 seen = _is_session_seen(s, self._last_seen_cache)
                 role = self.app.auto_role_for(self.ws.id, s.session_id)
-                prompt = _render_session_option(s, act, self._throbber_frame, ws_repo_path=self.ws.repo_path, seen=seen, line_width=lw, auto_role=role)
+                prompt = _render_session_option(s, act, self._throbber_frame, ws_repo_path=self.ws.repo_path, seen=seen, line_width=lw, auto_role=role, title_highlights=self._title_highlights.get(s.session_id))
                 options.append(Option(prompt, id=s.session_id))
                 idx += 1
 
@@ -2101,7 +2110,7 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
                 act = session_activity(s, self._last_seen_cache)
                 seen = _is_session_seen(s, self._last_seen_cache)
                 role = self.app.auto_role_for(self.ws.id, s.session_id)
-                prompt = _render_session_option(s, act, self._throbber_frame, ws_repo_path=self.ws.repo_path, seen=seen, line_width=lw, shelved=True, auto_role=role)
+                prompt = _render_session_option(s, act, self._throbber_frame, ws_repo_path=self.ws.repo_path, seen=seen, line_width=lw, shelved=True, auto_role=role, title_highlights=self._title_highlights.get(s.session_id))
                 options.append(Option(prompt, id=s.session_id))
                 idx += 1
 
@@ -2130,7 +2139,7 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
                 animating.append((i, act))
             seen = _is_session_seen(s, self._last_seen_cache)
             role = self.app.auto_role_for(self.ws.id, s.session_id)
-            prompt = _render_session_option(s, act, self._throbber_frame, ws_repo_path=self.ws.repo_path, seen=seen, line_width=alw, archived=True, auto_role=role)
+            prompt = _render_session_option(s, act, self._throbber_frame, ws_repo_path=self.ws.repo_path, seen=seen, line_width=alw, archived=True, auto_role=role, title_highlights=self._title_highlights.get(s.session_id))
             options.append(Option(prompt, id=f"a:{s.session_id}"))
         remaining = len(self._archived_sessions) - limit
         if remaining > 0:
@@ -2571,6 +2580,7 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         self._content_search_active = False
         self._content_results = []
         self._title_only_search = False
+        self._title_highlights = {}
         # Restore normal session lists and archived pane
         self._detail_sessions = list(self._all_sessions)
         self._archived_sessions = list(self._all_archived)
@@ -2820,12 +2830,16 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
 
         Uses _session_title so the query matches the AI-generated title actually
         shown in the list, not the raw ClaudeSession.display_name fallback.
+        Also records matched character positions for highlight rendering.
         """
         scored = []
+        self._title_highlights = {}
         for s in self._all_sessions + self._all_archived:
-            sc = fuzzy_match(self._search_text, _session_title(s) or "")
-            if sc is not None:
-                scored.append((s, sc))
+            res = fuzzy_match_positions(self._search_text, _session_title(s) or "")
+            if res is not None:
+                score, positions = res
+                scored.append((s, score))
+                self._title_highlights[s.session_id] = positions
         scored.sort(key=lambda t: t[1], reverse=True)
         self._detail_sessions = [s for s, _ in scored]
         self._archived_sessions = []
