@@ -1341,14 +1341,20 @@ class AppState:
         old_live = {s.session_id for s in self.sessions if s.is_live}
         live_ids = get_live_session_ids()
 
-        # Fast-path: update is_live flags on all sessions
+        # Fast-path: update is_live flags on all sessions.
+        # Match against all_session_ids — resumed sessions' primary session_id
+        # may not be in live_ids; only the current process's alias is. Without
+        # this overlay, every periodic liveness refresh would flicker is_live
+        # to False for resumed sessions, dropping THINKING → IDLE briefly.
         new_live: set[str] = set()
         for s in self.sessions:
-            s.is_live = s.session_id in live_ids
+            s.is_live = (s.session_id in live_ids
+                         or any(sid in live_ids for sid in s.all_session_ids))
             if s.is_live:
                 new_live.add(s.session_id)
         for s in self.preview_sessions:
-            s.is_live = s.session_id in live_ids
+            s.is_live = (s.session_id in live_ids
+                         or any(sid in live_ids for sid in s.all_session_ids))
 
         changed = old_live != new_live
 

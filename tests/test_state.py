@@ -524,6 +524,23 @@ class TestSessionManagement:
         session = _make_session(project_path="/some/other/path")
         assert state.find_ws_for_session(session) is None
 
+    def test_refresh_liveness_matches_resumed_session_alias(self, state, monkeypatch):
+        """Resumed sessions stay is_live when only their alias ID is in live_ids.
+
+        The on-disk session-tracking file records the *current* process's session
+        ID, which for a resumed session is an alias — not the primary session_id.
+        refresh_liveness must check all_session_ids, otherwise every 30s tick
+        flips is_live False and the session flickers THINKING→IDLE in the UI.
+        """
+        resumed_alias = "resumed-alias-xyz"
+        s = _make_session("primary-id", project_path="/p", is_live=True)
+        s.all_session_ids = ["primary-id", resumed_alias]
+        state.sessions = [s]
+
+        monkeypatch.setattr("state.get_live_session_ids", lambda: {resumed_alias})
+        state.refresh_liveness()
+        assert s.is_live, "session with live alias must remain live after refresh"
+
 
 # ─── sessions_for_ws filtering ───────────────────────────────────────
 

@@ -477,10 +477,15 @@ def open_file_picker(cwd: str) -> None:
 # ─── Liveness Refresh ────────────────────────────────────────────────
 
 def refresh_liveness(sessions: list[ClaudeSession]) -> None:
-    """Update is_live flags on cached sessions from current process state."""
+    """Update is_live flags on cached sessions from current process state.
+
+    Match against all_session_ids — a resumed session's primary session_id
+    may not appear in live_ids; only its alias (the current process's ID) will.
+    """
     live_ids = get_live_session_ids()
     for s in sessions:
-        s.is_live = s.session_id in live_ids
+        s.is_live = (s.session_id in live_ids
+                     or any(sid in live_ids for sid in s.all_session_ids))
 
 
 # ─── Git Status ─────────────────────────────────────────────────────
