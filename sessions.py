@@ -274,6 +274,46 @@ def ensure_rust_engine_running() -> bool:
         return False
 
 
+def require_rust_engine_or_exit() -> None:
+    """Refuse to start if orch-session-engine isn't installed.
+
+    The Python discovery fallback is ~400x slower (1200ms cold vs 3ms warm)
+    and not suitable for the TUI. Users who genuinely don't want to install
+    Rust can set ORCH_ALLOW_PYTHON_FALLBACK=1 to bypass this check.
+    """
+    if os.environ.get("ORCH_ALLOW_PYTHON_FALLBACK"):
+        return
+    if shutil.which("orch-session-engine") is not None:
+        return
+
+    import sys
+    repo_dir = Path(__file__).resolve().parent
+    rust_dir = repo_dir / "rust" / "orch-session-engine"
+    has_cargo = shutil.which("cargo") is not None
+
+    msg = [
+        "",
+        "  orch requires the Rust session engine (orch-session-engine).",
+        "  The Python fallback is ~400x slower and unsuitable for the TUI.",
+        "",
+        "  Install:",
+    ]
+    if has_cargo:
+        msg.append(f"    cargo install --path {rust_dir}")
+    else:
+        msg += [
+            "    1. Install Rust:  https://rustup.rs",
+           f"    2. cargo install --path {rust_dir}",
+        ]
+    msg += [
+        "",
+        "  To bypass (slow, not recommended):  ORCH_ALLOW_PYTHON_FALLBACK=1 orch …",
+        "",
+    ]
+    sys.stderr.write("\n".join(msg))
+    sys.exit(2)
+
+
 # ─── Tool category mapping ────────────────────────────────────────
 _TOOL_CATEGORIES: dict[str, str] = {
     "Edit": "mutate",

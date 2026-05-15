@@ -211,7 +211,13 @@ app.py                    — Textual shell: tabs, compose, event routing
 
 ### Rust Session Engine
 
-A Rust binary (`rust/orch-session-engine/`) provides fast JSONL parsing and SQLite caching for session data. Gives ~19x warm speedup over pure Python parsing. Falls back to Python if not built.
+A Rust binary (`rust/orch-session-engine/`) provides fast JSONL parsing and SQLite caching for session data. Required; the TUI is unusable on the Python fallback. Install once with:
+
+```
+cargo install --path rust/orch-session-engine
+```
+
+`orch` refuses to start if `orch-session-engine` isn't on `$PATH`. To bypass for one-off non-TUI use, set `ORCH_ALLOW_PYTHON_FALLBACK=1` (slow — Python parsing is ~400x slower than the engine).
 
 ### Design Principles
 
@@ -225,7 +231,7 @@ A Rust binary (`rust/orch-session-engine/`) provides fast JSONL parsing and SQLi
 - **Python 3.12+**
 - **Textual** — TUI framework
 - **libvterm** (optional) — system library for terminal emulation. Falls back to pyte.
-- **Rust** (optional) — for the session engine. Falls back to Python.
+- **Rust** — for the session engine. Install via https://rustup.rs, then `cargo install --path rust/orch-session-engine`.
 - **[dev-workflow-tools](https://github.com/vxsl/dev-workflow-tools)** (optional) — install at `~/bin/dev-workflow-tools` for Jira/GitLab integration
 
 ## Data

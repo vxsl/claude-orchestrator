@@ -1435,6 +1435,13 @@ examples:
 
     args = parser.parse_args()
 
+    # Gate on the Rust engine before any subcommand runs. `completions`
+    # is excluded because it's pure stdout (no session discovery) and is
+    # invoked from shell-init paths that mustn't fail.
+    if args.command != "completions":
+        from sessions import require_rust_engine_or_exit
+        require_rust_engine_or_exit()
+
     commands = {
         "tui": cmd_tui,
         "dash": cmd_tui,
