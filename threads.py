@@ -88,6 +88,20 @@ def mark_thread_seen(thread_id: str) -> None:
     save_last_seen(data)
 
 
+_QUIET_TOOL_RESULT_S = 60.0  # JSONL-quiet window for the AskUserQuestion-pending heuristic
+
+
+def _seconds_since(ts: str) -> float:
+    """Seconds since the ISO-8601 timestamp, or +inf if unparseable."""
+    if not ts:
+        return float("inf")
+    try:
+        dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+        return (datetime.now().astimezone() - dt).total_seconds()
+    except (ValueError, TypeError):
+        return float("inf")
+
+
 def session_activity(session: ClaudeSession, last_seen: dict[str, str] | None = None) -> ThreadActivity:
     """Compute activity state for a single session.
 
@@ -108,6 +122,20 @@ def session_activity(session: ClaudeSession, last_seen: dict[str, str] | None = 
                 and session.last_tool_name in _INTERACTIVE_TOOLS)
         )
         if not turn_done:
+            # AskUserQuestion / ExitPlanMode pending: Claude renders the widget
+            # but doesn't flush the assistant tool_use entry until the user
+            # answers, so JSONL sits with the last entry as a user tool_result.
+            # Distinguish that from a long-running Bash (which leaves last_role
+            # as assistant) and from quick between-tool reasoning (which clears
+            # within seconds): if the last user message was a tool_result (not
+            # a real human turn) AND JSONL has been quiet long enough that
+            # reasoning would normally have produced the next tool call by now,
+            # treat it as awaiting input.
+            if (session.last_message_role == "user"
+                    and session.last_user_message_at
+                    and session.last_user_message_at > session.last_human_turn_at
+                    and _seconds_since(session.last_activity) > _QUIET_TOOL_RESULT_S):
+                return ThreadActivity.AWAITING_INPUT
             return ThreadActivity.THINKING
         return ThreadActivity.AWAITING_INPUT
 

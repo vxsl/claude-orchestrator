@@ -384,6 +384,74 @@ class TestSessionActivity:
                                last_tool_name="Bash")
         assert session_activity(s) == ThreadActivity.THINKING
 
+    def test_quiet_tool_result_flips_to_awaiting_after_threshold(self):
+        """AskUserQuestion-pending: live + last is tool_result + JSONL quiet 60s+ → green.
+
+        Claude renders the widget but defers writing the assistant tool_use
+        entry until the user answers. The signal we can use: last_role is
+        'user' (a tool_result, not a real human turn) and JSONL has been
+        silent for longer than the between-tool-call reasoning window.
+        """
+        from datetime import datetime, timezone, timedelta
+        old = (datetime.now(timezone.utc) - timedelta(seconds=120)).isoformat()
+        s = self._make_session(
+            is_live=True,
+            last_message_role="user",
+            last_user_message_at=old,       # last user msg was a tool_result
+            last_human_turn_at="2026-03-20T10:00:00Z",  # earlier — real human turn was long ago
+            last_activity=old,
+        )
+        assert session_activity(s) == ThreadActivity.AWAITING_INPUT
+
+    def test_quiet_tool_result_stays_thinking_below_threshold(self):
+        """Brief silence after a tool_result is normal between-tool reasoning."""
+        from datetime import datetime, timezone, timedelta
+        recent = (datetime.now(timezone.utc) - timedelta(seconds=5)).isoformat()
+        s = self._make_session(
+            is_live=True,
+            last_message_role="user",
+            last_user_message_at=recent,
+            last_human_turn_at="2026-03-20T10:00:00Z",
+            last_activity=recent,
+        )
+        assert session_activity(s) == ThreadActivity.THINKING
+
+    def test_quiet_tool_result_with_buried_human_turn(self):
+        """Rust daemon doesn't populate last_human_turn_at (it's "" for many sessions).
+
+        String comparison "T > ''" is True for any non-empty timestamp, so the
+        heuristic correctly triggers in the production code path where the
+        human turn is out of the 8KB tail window or never seen at all.
+        """
+        from datetime import datetime, timezone, timedelta
+        old = (datetime.now(timezone.utc) - timedelta(seconds=120)).isoformat()
+        s = self._make_session(
+            is_live=True,
+            last_message_role="user",
+            last_user_message_at=old,
+            last_human_turn_at="",  # buried/unknown — production-realistic
+            last_activity=old,
+        )
+        assert session_activity(s) == ThreadActivity.AWAITING_INPUT
+
+    def test_quiet_human_turn_stays_thinking(self):
+        """Live + last_role=user but it's a real human turn (no Claude response yet) → THINKING.
+
+        Distinguishing tool_result from human-turn uses last_user_message_at >
+        last_human_turn_at. When they're equal (or human is not earlier), the
+        last user message was a real prompt — Claude just hasn't responded yet.
+        """
+        from datetime import datetime, timezone, timedelta
+        old = (datetime.now(timezone.utc) - timedelta(seconds=300)).isoformat()
+        s = self._make_session(
+            is_live=True,
+            last_message_role="user",
+            last_user_message_at=old,
+            last_human_turn_at=old,  # equal → real human turn
+            last_activity=old,
+        )
+        assert session_activity(s) == ThreadActivity.THINKING
+
     def test_idle_when_not_live_and_last_is_user(self):
         """Not live + last message from user → Claude stopped, not 'your turn'."""
         s = self._make_session(is_live=False, last_message_role="user")
