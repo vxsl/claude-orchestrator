@@ -2816,10 +2816,14 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         self._rebuild_session_lists()
 
     def _apply_title_only_filter(self):
-        """Filter strictly on session display_name (triggered by '\\' search)."""
+        """Filter strictly on the rendered session title (triggered by '\\' search).
+
+        Uses _session_title so the query matches the AI-generated title actually
+        shown in the list, not the raw ClaudeSession.display_name fallback.
+        """
         scored = []
         for s in self._all_sessions + self._all_archived:
-            sc = fuzzy_match(self._search_text, s.display_name or "")
+            sc = fuzzy_match(self._search_text, _session_title(s) or "")
             if sc is not None:
                 scored.append((s, sc))
         scored.sort(key=lambda t: t[1], reverse=True)
