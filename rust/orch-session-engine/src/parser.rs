@@ -479,15 +479,16 @@ pub fn parse_session(jsonl_path: &Path) -> Result<Session> {
             }
         }
 
-        // Turn completion signals
+        // Turn completion signals: turn_duration is primary; stop_hook_summary
+        // and file-history-snapshot only fire at turn-end. last-prompt and
+        // custom-title are written *mid-turn* by recent Claude versions
+        // (between tool calls), so treating them as turn-end signals causes
+        // THINKING→AWAITING_INPUT flicker.
         if msg_type == "system" && data["subtype"].as_str() == Some("turn_duration") {
             session.turn_complete = true;
             session.total_work_ms += data["durationMs"].as_i64().unwrap_or(0);
         } else if (msg_type == "system" && data["subtype"].as_str() == Some("stop_hook_summary"))
-            || matches!(
-                msg_type,
-                "last-prompt" | "custom-title" | "file-history-snapshot"
-            )
+            || msg_type == "file-history-snapshot"
         {
             session.turn_complete = true;
         }
@@ -685,14 +686,13 @@ pub fn refresh_session_tail(session: &mut Session, tail_bytes: u64) -> Result<bo
             }
         }
 
+        // See parse_session_full for why last-prompt/custom-title are excluded:
+        // they're written mid-turn by recent Claude versions.
         if msg_type == "system" && data["subtype"].as_str() == Some("turn_duration") {
             session.turn_complete = true;
             session.total_work_ms += data["durationMs"].as_i64().unwrap_or(0);
         } else if (msg_type == "system" && data["subtype"].as_str() == Some("stop_hook_summary"))
-            || matches!(
-                msg_type,
-                "last-prompt" | "custom-title" | "file-history-snapshot"
-            )
+            || msg_type == "file-history-snapshot"
         {
             session.turn_complete = true;
         }

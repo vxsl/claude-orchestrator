@@ -839,16 +839,17 @@ def parse_session(jsonl_path: Path) -> Optional[ClaudeSession]:
                     if msg_type == "user" and _is_interrupt_marker(data):
                         session.turn_complete = True
 
-                # Turn completion: turn_duration is the primary signal,
-                # but idle-only entries (last-prompt, custom-title,
-                # file-history-snapshot) also prove the turn ended —
-                # covers interrupted turns where turn_duration is never written.
+                # Turn completion: turn_duration is the primary signal;
+                # stop_hook_summary and file-history-snapshot only fire at
+                # turn-end. last-prompt/custom-title/agent-name/permission-mode
+                # are written *mid-turn* by recent Claude versions (between
+                # tool calls), so treating them as turn-end signals causes
+                # THINKING→AWAITING_INPUT flicker.
                 if msg_type == "system" and data.get("subtype") == "turn_duration":
                     session.turn_complete = True
                     session.total_work_ms += data.get("durationMs", 0)
                 elif (msg_type == "system" and data.get("subtype") == "stop_hook_summary"
-                        or msg_type in ("last-prompt", "custom-title",
-                                        "file-history-snapshot")):
+                        or msg_type == "file-history-snapshot"):
                     session.turn_complete = True
 
                 # Count user-sent messages
@@ -990,10 +991,11 @@ def refresh_session_tail(session: ClaudeSession, tail_bytes: int = 8192) -> bool
                            + usage.get("cache_read_input_tokens", 0))
                     if ctx > 0:
                         session.context_tokens = ctx
+            # See parse_session for why last-prompt/custom-title are excluded:
+            # they're written mid-turn by recent Claude versions.
             if (msg_type == "system" and data.get("subtype") in (
                     "turn_duration", "stop_hook_summary")
-                    or msg_type in ("last-prompt", "custom-title",
-                                    "file-history-snapshot")):
+                    or msg_type == "file-history-snapshot"):
                 session.turn_complete = True
 
             # Track new session IDs from resumed sessions

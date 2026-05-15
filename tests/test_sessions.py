@@ -197,6 +197,35 @@ class TestParseSession:
         assert session.last_stop_reason == ""
         assert session.last_tool_name == ""
 
+    def test_mid_turn_last_prompt_does_not_complete_turn(self, tmp_path):
+        """Modern Claude writes last-prompt/custom-title between tool calls.
+
+        Treating them as turn-end signals would flip turn_complete=True
+        mid-turn, causing THINKING→AWAITING_INPUT flicker in the UI.
+        """
+        f = tmp_path / "projects" / "test" / "session.jsonl"
+        f.parent.mkdir(parents=True)
+        lines = [
+            json.dumps({"type": "user", "message": {"content": "go"},
+                        "timestamp": "2026-03-20T10:00:00Z"}),
+            json.dumps({"type": "assistant", "message": {"model": "claude-opus-4-6",
+                        "content": [{"type": "tool_use", "name": "Bash"}],
+                        "usage": {"input_tokens": 100, "output_tokens": 50},
+                        "stop_reason": "tool_use"},
+                        "timestamp": "2026-03-20T10:00:01Z"}),
+            json.dumps({"type": "user", "message": {"content": [
+                {"type": "tool_result", "content": "ok"}
+            ]}, "timestamp": "2026-03-20T10:00:02Z"}),
+            # Mid-turn metadata — must NOT trip turn_complete
+            json.dumps({"type": "last-prompt", "lastPrompt": "..."}),
+            json.dumps({"type": "custom-title", "customTitle": "x"}),
+        ]
+        f.write_text("\n".join(lines) + "\n")
+        session = parse_session(f)
+        assert session.turn_complete is False, (
+            "last-prompt/custom-title appear mid-turn and must not signal turn end"
+        )
+
     def test_parse_malformed_json(self, tmp_path):
         bad = tmp_path / "projects" / "test" / "bad.jsonl"
         bad.parent.mkdir(parents=True)
