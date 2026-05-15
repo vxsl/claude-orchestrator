@@ -619,25 +619,32 @@ class WsSessionListWidget(Static):
         except Exception:
             last_seen = {}
 
-        # "Blue or green": THINKING is always interesting (blue throbber);
-        # AWAITING_INPUT only counts if unseen (bright green dot, not the
-        # dim-green already-acknowledged variant).
+        # Match the workstream-list rule for the green/blue title badge:
+        #   THINKING (always) OR (AWAITING_INPUT|RESPONSE_READY + unseen + recent).
+        # Recent = activity within the last 2 hours; this drops stale unseen
+        # sessions from days ago without requiring is_live (a session whose
+        # tmux just exited but Claude spoke last is still actionable).
         order = {
             ThreadActivity.THINKING: 0,
             ThreadActivity.AWAITING_INPUT: 1,
+            ThreadActivity.RESPONSE_READY: 2,
         }
+        recent_cutoff = _recent_cutoff(hours=2)
         candidates = []
         for s in sessions:
             if s.session_id == self._current_session_id:
-                continue
-            if not s.is_live:
                 continue
             act = session_activity(s, last_seen)
             if act not in order:
                 continue
             seen = _is_session_seen(s, last_seen)
-            if act == ThreadActivity.AWAITING_INPUT and seen:
-                continue
+            if act == ThreadActivity.THINKING:
+                pass  # always include
+            else:
+                if seen:
+                    continue
+                if not _is_recent(s.last_activity or s.started_at, recent_cutoff):
+                    continue
             candidates.append((order[act], -_iso_ts(s.last_activity or s.started_at), s, act, seen))
         candidates.sort(key=lambda x: (x[0], x[1]))
 
@@ -768,6 +775,15 @@ def _iso_ts(s: str) -> float:
         return dt.timestamp()
     except (ValueError, TypeError):
         return 0.0
+
+
+def _recent_cutoff(hours: float = 2) -> float:
+    from datetime import datetime, timedelta
+    return (datetime.now().astimezone() - timedelta(hours=hours)).timestamp()
+
+
+def _is_recent(ts: str, cutoff_ts: float) -> bool:
+    return _iso_ts(ts) >= cutoff_ts
 
 
 # ── Claude Session Screen ────────────────────────────────────────────
