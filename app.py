@@ -871,6 +871,8 @@ class OrchestratorApp(App):
             has_session = (not is_permanent) and (tab.ws_id == css_ws_id) and css_sess_label
 
             ws_label = tab.label
+            if not is_permanent and len(ws_label) > 20:
+                ws_label = ws_label[:20] + "…"
 
             # Activity indicator for non-permanent tabs (thinking spinner / attention dot).
             act_prefix = ""
