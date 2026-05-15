@@ -16,7 +16,7 @@ import time
 import uuid
 from pathlib import Path
 
-from textual import events, on, work
+from textual import events, work
 from textual.binding import Binding
 from textual.app import ComposeResult
 from textual.containers import Horizontal, Vertical
@@ -33,11 +33,12 @@ from rendering import (
     _activity_icon, _context_bar_compact, _is_session_seen, _rich_escape,
     _session_title,
 )
+from models import _relative_time
 from sessions import ClaudeSession, extract_user_prompts, parse_session
 from terminal import TerminalWidget
 from thread_namer import get_session_title
 from threads import ThreadActivity, session_activity
-from widgets import FuzzyPickerScreen
+from widgets import FuzzyPicker
 
 # Keys that pass through the TerminalWidget to the screen for panel navigation
 _PASSTHROUGH_KEYS = {"ctrl+j", "ctrl+k", "ctrl+e", "ctrl+h", "ctrl+z", "ctrl+backslash", "ctrl+b", "ctrl+x", "ctrl+@", "ctrl+y", "ctrl+r"}
@@ -806,10 +807,10 @@ def _is_recent(ts: str, cutoff_ts: float) -> bool:
     return _iso_ts(ts) >= cutoff_ts
 
 
-# ── User-message picker ──────────────────────────────────────────────
+# ── User-message picker (inline overlay) ─────────────────────────────
 
 
-def _picker_label(text: str, max_w: int = 76) -> str:
+def _picker_label(text: str, max_w: int = 60) -> str:
     """Render a user-message preview for the picker option list."""
     line = text.strip().splitlines()[0] if text.strip() else ""
     if len(line) > max_w:
@@ -830,67 +831,24 @@ def _search_snippet(text: str, max_len: int = 30) -> str:
     return text.strip()[:max_len]
 
 
-class _UserMessagePickerScreen(FuzzyPickerScreen):
-    """Bottom-docked compact fuzzy picker over a session's user messages.
+def _build_picker_items(jsonl_path: str) -> tuple[list[tuple[str, str]], dict[str, str]]:
+    """Return (option_items, id→snippet) for the message picker.
 
-    Items are chronological (oldest at top, newest at bottom — closest to
-    the input). Default highlight is the newest message; ↑ steps to older
-    ones, mirroring Claude Code's history feel.
+    Items are chronological (oldest first, newest last — so newest sits
+    nearest the bottom-docked input).
     """
-
-    DEFAULT_CSS = f"""
-    _UserMessagePickerScreen {{
-        align: center bottom;
-        background: transparent;
-    }}
-    _UserMessagePickerScreen .fpscreen-container {{
-        width: 80;
-        height: auto;
-        max-height: 16;
-        padding: 0 1;
-        margin-bottom: 1;
-        background: {BG_RAISED};
-        border: round $primary 30%;
-    }}
-    _UserMessagePickerScreen .fpscreen-title {{ display: none; }}
-    _UserMessagePickerScreen .fpscreen-hint {{ display: none; }}
-    _UserMessagePickerScreen FuzzyPicker > #fp-input {{ dock: bottom; }}
-    _UserMessagePickerScreen FuzzyPicker > #fp-status {{ display: none; }}
-    _UserMessagePickerScreen FuzzyPicker > #fp-list {{ max-height: 12; }}
-    """
-
-    def __init__(self, jsonl_path: str) -> None:
-        self._jsonl_path = jsonl_path
-        self._snippets: dict[str, str] = {}
-        super().__init__(title="", hint="")
-
-    def _get_items(self) -> list[tuple[str, str]]:
-        prompts = extract_user_prompts(self._jsonl_path)
-        items: list[tuple[str, str]] = []
-        for idx, msg in enumerate(prompts):
-            item_id = f"msg-{idx}"
-            self._snippets[item_id] = _search_snippet(msg.text)
-            items.append((item_id, _picker_label(msg.text)))
-        return items
-
-    def _on_selected(self, item_id: str) -> None:
-        self.dismiss(self._snippets.get(item_id))
-
-    def on_mount(self) -> None:
-        self.call_after_refresh(self._highlight_last)
-
-    def _highlight_last(self) -> None:
-        try:
-            ol = self.query_one("#fp-list", OptionList)
-            if ol.option_count > 0:
-                ol.highlighted = ol.option_count - 1
-        except Exception:
-            pass
-
-    @on(Input.Changed, "#fp-input")
-    def _maybe_rehighlight(self, event: Input.Changed) -> None:
-        if not event.value:
-            self.call_after_refresh(self._highlight_last)
+    prompts = extract_user_prompts(jsonl_path)
+    items: list[tuple[str, str]] = []
+    snippets: dict[str, str] = {}
+    for idx, msg in enumerate(prompts):
+        item_id = f"msg-{idx}"
+        snippets[item_id] = _search_snippet(msg.text)
+        label = _picker_label(msg.text)
+        age = _relative_time(msg.timestamp) if msg.timestamp else ""
+        if age and age != "unknown":
+            label = f"{label}  [{C_DIM}]{age}[/{C_DIM}]"
+        items.append((item_id, label))
+    return items, snippets
 
 
 # ── Claude Session Screen ────────────────────────────────────────────
@@ -903,13 +861,35 @@ class ClaudeSessionScreen(Screen):
         Binding("ctrl+y", "toggle_auto_mode", "Auto mode", priority=True),
         Binding("ctrl+backslash", "go_back", "C-\\ back", priority=True),
         Binding("ctrl+r", "jump_to_message", "Jump to msg", priority=True),
+        Binding("escape", "close_picker", show=False),
     ]
 
     DEFAULT_CSS = f"""
     ClaudeSessionScreen {{
         align: center middle;
         background: {BG_BASE};
+        layers: base overlay;
     }}
+    #cs-picker-overlay {{
+        layer: overlay;
+        width: 100%;
+        height: 100%;
+        align: center bottom;
+        background: transparent;
+    }}
+    #cs-picker-overlay.hidden {{ display: none; }}
+    #cs-picker-box {{
+        width: 80;
+        height: auto;
+        max-height: 16;
+        margin: 0 0 1 0;
+        padding: 0 1;
+        background: {BG_RAISED};
+        border: round $primary 30%;
+    }}
+    #cs-msg-picker > #fp-input {{ dock: bottom; background: {BG_RAISED}; }}
+    #cs-msg-picker > #fp-status {{ display: none; }}
+    #cs-msg-picker > #fp-list {{ max-height: 12; }}
     #detail-tab-bar {{
         height: 1;
         padding: 0 1;
@@ -1130,6 +1110,14 @@ class ClaudeSessionScreen(Screen):
             git_branch=self._git_branch,
             is_new=self._is_new,
         )
+        # Inline overlay picker (hidden by default; revealed on C-r).
+        with Vertical(id="cs-picker-overlay", classes="hidden"):
+            with Vertical(id="cs-picker-box"):
+                yield FuzzyPicker(
+                    items=[],
+                    placeholder="Jump to user message…",
+                    id="cs-msg-picker",
+                )
 
     def on_mount(self) -> None:
         # Defer until after the first layout pass so TerminalWidget.on_resize has fired
@@ -1345,16 +1333,79 @@ class ClaudeSessionScreen(Screen):
     # ── C-r: jump to a previous user message ──────────────────────
 
     def action_jump_to_message(self) -> None:
-        def _handle(snippet: str | None) -> None:
-            if not snippet:
-                return
-            try:
-                term = self.query_one("#cs-terminal", TerminalWidget)
-            except Exception:
-                return
-            term.search_backward(snippet)
+        try:
+            picker = self.query_one("#cs-msg-picker", FuzzyPicker)
+            overlay = self.query_one("#cs-picker-overlay")
+        except Exception:
+            return
+        items, snippets = _build_picker_items(self._jsonl)
+        self._msg_snippets = snippets
+        picker.set_items(items)
+        overlay.remove_class("hidden")
+        self.call_after_refresh(self._focus_picker)
 
-        self.app.push_screen(_UserMessagePickerScreen(self._jsonl), _handle)
+    def _focus_picker(self) -> None:
+        try:
+            picker = self.query_one("#cs-msg-picker", FuzzyPicker)
+            inp = picker.query_one("#fp-input", Input)
+            inp.value = ""
+            inp.focus()
+            ol = picker.query_one("#fp-list", OptionList)
+            if ol.option_count > 0:
+                ol.highlighted = ol.option_count - 1
+        except Exception:
+            pass
+
+    def _hide_picker(self) -> None:
+        try:
+            overlay = self.query_one("#cs-picker-overlay")
+            overlay.add_class("hidden")
+        except Exception:
+            return
+        try:
+            self.query_one("#cs-terminal").focus()
+        except Exception:
+            pass
+
+    def action_close_picker(self) -> None:
+        try:
+            overlay = self.query_one("#cs-picker-overlay")
+        except Exception:
+            return
+        if not overlay.has_class("hidden"):
+            self._hide_picker()
+
+    def on_fuzzy_picker_item_selected(self, event: FuzzyPicker.ItemSelected) -> None:
+        snippet = getattr(self, "_msg_snippets", {}).get(event.item_id)
+        self._hide_picker()
+        if not snippet:
+            return
+        try:
+            term = self.query_one("#cs-terminal", TerminalWidget)
+        except Exception:
+            return
+        term.search_backward(snippet)
+
+    def on_input_changed(self, event: Input.Changed) -> None:
+        # Re-highlight the newest message when the picker's filter clears.
+        if event.input.id != "fp-input":
+            return
+        try:
+            overlay = self.query_one("#cs-picker-overlay")
+        except Exception:
+            return
+        if overlay.has_class("hidden"):
+            return
+        if not event.value:
+            self.call_after_refresh(self._highlight_picker_last)
+
+    def _highlight_picker_last(self) -> None:
+        try:
+            ol = self.query_one("#cs-msg-picker #fp-list", OptionList)
+            if ol.option_count > 0:
+                ol.highlighted = ol.option_count - 1
+        except Exception:
+            pass
 
     # ── C-y: auto mode (coordinator/implementer loop) ─────────────
 
