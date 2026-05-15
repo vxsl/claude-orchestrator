@@ -580,8 +580,8 @@ class WsSessionListWidget(Static):
         super().__init__("", **kwargs)
         self._ws_id = ws_id
         self._current_session_id = current_session_id
-        # rows: list of (session_id, title, activity, age, seen)
-        self._rows: list[tuple[str, str, ThreadActivity, str, bool]] = []
+        # rows: (session_id, title, activity, age, seen, last_assistant_text)
+        self._rows: list[tuple[str, str, ThreadActivity, str, bool, str]] = []
         self._selected_sid: str | None = None
         self._throbber_frame = 0
         self._last_had_items = False
@@ -643,10 +643,11 @@ class WsSessionListWidget(Static):
             candidates.append((order[act], -_iso_ts(s.last_activity or s.started_at), s, act, seen))
         candidates.sort(key=lambda x: (x[0], x[1]))
 
-        new_rows: list[tuple[str, str, ThreadActivity, str, bool]] = []
+        new_rows: list[tuple[str, str, ThreadActivity, str, bool, str]] = []
         for _, _, s, act, seen in candidates:
             title = _session_title(s)
-            new_rows.append((s.session_id, title, act, s.age, seen))
+            last_asst = s.last_assistant_message_text or ""
+            new_rows.append((s.session_id, title, act, s.age, seen, last_asst))
 
         self._rows = new_rows
 
@@ -667,33 +668,56 @@ class WsSessionListWidget(Static):
             self.update(f"[{C_FAINT}]no other active sessions[/{C_FAINT}]")
             return
 
-        # Sidebar 36 - border 2 - padding 2 = 32, but read real content width
-        # so any resize works correctly.
         WIDTH = max(20, self.content_size.width or 32)
         focused = self.has_focus
         lines = []
-        for sid, title, act, age, seen in self._rows:
+        for sid, title, act, age, seen, last_asst in self._rows:
             icon = _activity_icon(act, self._throbber_frame, seen=seen)
             age_str = age.replace(" ago", "")
-            # layout: "I tt … age" where icon=1, gap=1, age right-aligned
-            avail = max(4, WIDTH - 2 - len(age_str) - 1)
+
+            # Title color mirrors the icon: blue for THINKING, green for
+            # unseen AWAITING_INPUT, default otherwise.
+            if act == ThreadActivity.THINKING:
+                title_color = C_BLUE
+            elif act == ThreadActivity.AWAITING_INPUT and not seen:
+                title_color = C_GREEN
+            else:
+                title_color = ""
+
+            is_sel = sid == self._selected_sid
+            sel_bar = "▍" if is_sel else " "
+
+            # Line 1: ▍|space + icon + title + right-aligned age
+            avail = max(4, WIDTH - 3 - len(age_str) - 1)  # bar + icon + space + age
             t = title.replace("\n", " ").strip()
             if len(t) > avail:
                 t = t[: max(1, avail - 1)] + "…"
             pad = " " * max(1, avail - len(t) + 1)
             title_esc = _esc(t)
-            is_sel = sid == self._selected_sid
-            if is_sel and focused:
-                body = f"{icon} [bold]{title_esc}[/bold]{pad}[{C_DIM}]{age_str}[/{C_DIM}]"
-                lines.append(f"[on {BG_SURFACE}]{body}[/on {BG_SURFACE}]")
-            elif is_sel:
-                lines.append(
-                    f"{icon} [bold]{title_esc}[/bold]{pad}[{C_DIM}]{age_str}[/{C_DIM}]"
-                )
+            bold = is_sel
+            if title_color:
+                inner = f"[bold]{title_esc}[/bold]" if bold else title_esc
+                title_fmt = f"[{title_color}]{inner}[/{title_color}]"
             else:
-                lines.append(
-                    f"{icon} {title_esc}{pad}[{C_DIM}]{age_str}[/{C_DIM}]"
-                )
+                title_fmt = f"[bold]{title_esc}[/bold]" if bold else title_esc
+            line1 = f"{sel_bar}{icon} {title_fmt}{pad}[{C_DIM}]{age_str}[/{C_DIM}]"
+
+            # Line 2: indented snippet of last assistant message
+            snippet_avail = max(4, WIDTH - 4)
+            if last_asst:
+                snippet = last_asst.replace("\n", " ").strip()
+                if len(snippet) > snippet_avail:
+                    snippet = snippet[: max(1, snippet_avail - 1)] + "…"
+                line2 = f"{sel_bar}  [{C_FAINT}]{_esc(snippet)}[/{C_FAINT}]"
+            else:
+                line2 = f"{sel_bar}  [{C_FAINT}]—[/{C_FAINT}]"
+
+            if is_sel and focused:
+                line1 = f"[on {BG_SURFACE}]{line1}[/on {BG_SURFACE}]"
+                line2 = f"[on {BG_SURFACE}]{line2}[/on {BG_SURFACE}]"
+
+            lines.append(line1)
+            lines.append(line2)
         self.update("\n".join(lines))
 
     def _move(self, delta: int) -> None:
