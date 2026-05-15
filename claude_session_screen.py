@@ -16,13 +16,13 @@ import time
 import uuid
 from pathlib import Path
 
-from textual import events, work
+from textual import events, on, work
 from textual.binding import Binding
 from textual.app import ComposeResult
 from textual.containers import Horizontal, Vertical
 from textual.message import Message
 from textual.screen import Screen
-from textual.widgets import Static
+from textual.widgets import Input, OptionList, Static
 
 from models import Link, Store, Workstream
 from rendering import (
@@ -30,15 +30,17 @@ from rendering import (
     C_BLUE, C_CYAN, C_DIM, C_FAINT, C_GREEN, C_MID, C_ORANGE,
     C_PURPLE, C_YELLOW,
     CATEGORY_THEME, THROBBER_FRAMES,
-    _activity_icon, _context_bar_compact, _is_session_seen, _session_title,
+    _activity_icon, _context_bar_compact, _is_session_seen, _rich_escape,
+    _session_title,
 )
-from sessions import ClaudeSession, parse_session
+from sessions import ClaudeSession, extract_user_prompts, parse_session
 from terminal import TerminalWidget
 from thread_namer import get_session_title
 from threads import ThreadActivity, session_activity
+from widgets import FuzzyPickerScreen
 
 # Keys that pass through the TerminalWidget to the screen for panel navigation
-_PASSTHROUGH_KEYS = {"ctrl+j", "ctrl+k", "ctrl+e", "ctrl+h", "ctrl+z", "ctrl+backslash", "ctrl+b", "ctrl+x", "ctrl+@", "ctrl+y"}
+_PASSTHROUGH_KEYS = {"ctrl+j", "ctrl+k", "ctrl+e", "ctrl+h", "ctrl+z", "ctrl+backslash", "ctrl+b", "ctrl+x", "ctrl+@", "ctrl+y", "ctrl+r"}
 
 ORCH_DIR = str(Path(__file__).parent)
 
@@ -804,6 +806,93 @@ def _is_recent(ts: str, cutoff_ts: float) -> bool:
     return _iso_ts(ts) >= cutoff_ts
 
 
+# ── User-message picker ──────────────────────────────────────────────
+
+
+def _picker_label(text: str, max_w: int = 76) -> str:
+    """Render a user-message preview for the picker option list."""
+    line = text.strip().splitlines()[0] if text.strip() else ""
+    if len(line) > max_w:
+        line = line[: max_w - 1] + "…"
+    return _rich_escape(line) or f"[{C_DIM}](empty)[/{C_DIM}]"
+
+
+def _search_snippet(text: str, max_len: int = 30) -> str:
+    """Pick a short, distinctive substring from a user message for tmux search.
+
+    Returns the first non-empty line trimmed to ``max_len`` chars. Long
+    snippets may not match because Claude's TUI wraps text at the pane width.
+    """
+    for line in text.splitlines():
+        s = line.strip()
+        if s:
+            return s[:max_len]
+    return text.strip()[:max_len]
+
+
+class _UserMessagePickerScreen(FuzzyPickerScreen):
+    """Bottom-docked compact fuzzy picker over a session's user messages.
+
+    Items are chronological (oldest at top, newest at bottom — closest to
+    the input). Default highlight is the newest message; ↑ steps to older
+    ones, mirroring Claude Code's history feel.
+    """
+
+    DEFAULT_CSS = f"""
+    _UserMessagePickerScreen {{
+        align: center bottom;
+        background: transparent;
+    }}
+    _UserMessagePickerScreen .fpscreen-container {{
+        width: 80;
+        height: auto;
+        max-height: 16;
+        padding: 0 1;
+        margin-bottom: 1;
+        background: {BG_RAISED};
+        border: round $primary 30%;
+    }}
+    _UserMessagePickerScreen .fpscreen-title {{ display: none; }}
+    _UserMessagePickerScreen .fpscreen-hint {{ display: none; }}
+    _UserMessagePickerScreen FuzzyPicker > #fp-input {{ dock: bottom; }}
+    _UserMessagePickerScreen FuzzyPicker > #fp-status {{ display: none; }}
+    _UserMessagePickerScreen FuzzyPicker > #fp-list {{ max-height: 12; }}
+    """
+
+    def __init__(self, jsonl_path: str) -> None:
+        self._jsonl_path = jsonl_path
+        self._snippets: dict[str, str] = {}
+        super().__init__(title="", hint="")
+
+    def _get_items(self) -> list[tuple[str, str]]:
+        prompts = extract_user_prompts(self._jsonl_path)
+        items: list[tuple[str, str]] = []
+        for idx, msg in enumerate(prompts):
+            item_id = f"msg-{idx}"
+            self._snippets[item_id] = _search_snippet(msg.text)
+            items.append((item_id, _picker_label(msg.text)))
+        return items
+
+    def _on_selected(self, item_id: str) -> None:
+        self.dismiss(self._snippets.get(item_id))
+
+    def on_mount(self) -> None:
+        self.call_after_refresh(self._highlight_last)
+
+    def _highlight_last(self) -> None:
+        try:
+            ol = self.query_one("#fp-list", OptionList)
+            if ol.option_count > 0:
+                ol.highlighted = ol.option_count - 1
+        except Exception:
+            pass
+
+    @on(Input.Changed, "#fp-input")
+    def _maybe_rehighlight(self, event: Input.Changed) -> None:
+        if not event.value:
+            self.call_after_refresh(self._highlight_last)
+
+
 # ── Claude Session Screen ────────────────────────────────────────────
 
 class ClaudeSessionScreen(Screen):
@@ -813,6 +902,7 @@ class ClaudeSessionScreen(Screen):
         Binding("ctrl+e", "extract_todo", "Extract todo", priority=True),
         Binding("ctrl+y", "toggle_auto_mode", "Auto mode", priority=True),
         Binding("ctrl+backslash", "go_back", "C-\\ back", priority=True),
+        Binding("ctrl+r", "jump_to_message", "Jump to msg", priority=True),
     ]
 
     DEFAULT_CSS = f"""
@@ -1251,6 +1341,20 @@ class ClaudeSessionScreen(Screen):
     def action_extract_todo(self) -> None:
         term = self.query_one("#cs-terminal", TerminalWidget)
         term._write_to_pty("/user:extract-orch-todo\r")
+
+    # ── C-r: jump to a previous user message ──────────────────────
+
+    def action_jump_to_message(self) -> None:
+        def _handle(snippet: str | None) -> None:
+            if not snippet:
+                return
+            try:
+                term = self.query_one("#cs-terminal", TerminalWidget)
+            except Exception:
+                return
+            term.search_backward(snippet)
+
+        self.app.push_screen(_UserMessagePickerScreen(self._jsonl), _handle)
 
     # ── C-y: auto mode (coordinator/implementer loop) ─────────────
 

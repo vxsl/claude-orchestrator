@@ -541,6 +541,45 @@ def extract_session_content(jsonl_path: str) -> list[SessionMessage]:
     return messages
 
 
+def extract_user_prompts(jsonl_path: str) -> list[SessionMessage]:
+    """Extract human-typed user prompts from a session JSONL.
+
+    Skips tool_result-only user entries, interrupt markers, and CLI-local
+    bookkeeping (slash-command stdout, caveat wrappers). Returned in
+    chronological order.
+    """
+    prompts: list[SessionMessage] = []
+    try:
+        with open(jsonl_path) as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    data = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if data.get("type") != "user":
+                    continue
+                if _is_cli_local_message(data):
+                    continue
+                if _is_interrupt_marker(data):
+                    continue
+                if not _is_human_turn(data):
+                    continue
+                text = _extract_full_text(data)
+                if not text:
+                    continue
+                prompts.append(SessionMessage(
+                    role="user",
+                    text=text,
+                    timestamp=data.get("timestamp", ""),
+                ))
+    except OSError:
+        pass
+    return prompts
+
+
 def _last_tool_name(msg: dict) -> str:
     """Return the name of the last tool_use block in an assistant message, or ''."""
     name = ""

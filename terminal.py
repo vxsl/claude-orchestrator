@@ -460,7 +460,7 @@ class TerminalWidget(Widget, can_focus=True):
             "set -g prefix None\n"
             "set -s escape-time 0\n"
             "set -g mouse on\n"
-            "set -g history-limit 10000\n"
+            "set -g history-limit 50000\n"
             # Make tmux emit OSC 52 on copy.  Our terminal widget
             # extracts these and forwards them to the outer TTY, so
             # yanks reach the user's local clipboard even over SSH.
@@ -1183,6 +1183,36 @@ class TerminalWidget(Widget, can_focus=True):
                 )
         except Exception:
             pass
+
+    def search_backward(self, pattern: str) -> bool:
+        """Enter copy-mode, jump to history bottom, and literal-search backward.
+
+        Lands the user on the first match above current view so they can
+        navigate further with the existing copy-mode bindings (n/N, hjkl,
+        v to select, y to yank, q/Esc to leave). Returns False if no
+        persistent tmux session is attached or the pattern is empty.
+        """
+        if not self._persistent_session or not pattern:
+            return False
+        sess = self._persistent_session
+        try:
+            subprocess.run(
+                ["tmux", "-L", self.TMUX_SOCKET, "copy-mode", "-t", sess],
+                capture_output=True, timeout=2,
+            )
+            subprocess.run(
+                ["tmux", "-L", self.TMUX_SOCKET,
+                 "send-keys", "-t", sess, "-X", "history-bottom"],
+                capture_output=True, timeout=2,
+            )
+            subprocess.run(
+                ["tmux", "-L", self.TMUX_SOCKET,
+                 "send-keys", "-t", sess, "-X", "search-backward-text", pattern],
+                capture_output=True, timeout=2,
+            )
+            return True
+        except Exception:
+            return False
 
     # Map of Textual key names → tmux copy-mode commands.  When a
     # persistent (tmux) session is attached, these keys auto-enter
