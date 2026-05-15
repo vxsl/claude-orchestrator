@@ -963,6 +963,7 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         Binding("X", "trash_session", "Trash", show=False),
         Binding("T", "view_trash", "Trash view", show=False),
         Binding("/", "search", "Search", show=False, priority=True),
+        Binding("backslash", "search_titles", "Search titles", show=False, priority=True),
         # Delegate to app — OptionList type-ahead consumes these before
         # they reach app-level bindings in a ModalScreen.
         Binding("colon", "command_palette", ":", show=False),
@@ -1127,6 +1128,7 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         self._content_ready: bool = False
         self._content_results: list[SessionSearchResult] = []
         self._content_search_active: bool = False
+        self._title_only_search: bool = False  # true when '\' opened search (titles-only mode)
         # Full unfiltered lists (set once sessions are loaded)
         self._all_sessions: list[ClaudeSession] = []
         self._all_archived: list[ClaudeSession] = []
@@ -2481,7 +2483,7 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
             ("space", "archive/restore"),
             ("z", "defer/undefer"),
             ("p", "peek"), ("y", "yank cmd"),
-            ("^j/^k", "panels"), ("/", "search"),
+            ("^j/^k", "panels"), ("/", "search"), ("\\", "titles"),
             ("^H", "back"),
         ]
         return "  ".join(f"[{C_YELLOW}]{k}[/{C_YELLOW}] {v}" for k, v in pairs)
@@ -2541,6 +2543,8 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
     def action_search(self):
         """Show the search input and focus it."""
         search_input = self.query_one("#detail-search-input", _SearchInput)
+        self._title_only_search = False
+        search_input.placeholder = "search..."
         search_input.add_class("visible")
         search_input.focus()
         # Hide archived pane so search results get full width
@@ -2549,13 +2553,24 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         if not self._content_ready:
             self._warm_content_cache()
 
+    def action_search_titles(self):
+        """Open search in title-only mode — filters by session display name only."""
+        search_input = self.query_one("#detail-search-input", _SearchInput)
+        self._title_only_search = True
+        search_input.placeholder = "search titles..."
+        search_input.add_class("visible")
+        search_input.focus()
+        self.query_one("#detail-archived-pane").display = False
+
     def _cancel_search(self):
         """Hide search input and restore normal session lists."""
         search_input = self.query_one("#detail-search-input", _SearchInput)
         search_input.value = ""
         search_input.remove_class("visible")
+        search_input.placeholder = "search..."
         self._content_search_active = False
         self._content_results = []
+        self._title_only_search = False
         # Restore normal session lists and archived pane
         self._detail_sessions = list(self._all_sessions)
         self._archived_sessions = list(self._all_archived)
@@ -2608,7 +2623,9 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
             else:
                 self._rebuild_session_lists()
             return
-        if self._content_ready:
+        if self._title_only_search:
+            self._apply_title_only_filter()
+        elif self._content_ready:
             self._run_content_search_sync()
         else:
             self._apply_title_filter()
@@ -2790,6 +2807,19 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         for s in self._all_sessions + self._all_archived:
             searchable = " ".join(filter(None, [s.display_name, s.last_message_text, s.model]))
             sc = fuzzy_match(self._search_text, searchable)
+            if sc is not None:
+                scored.append((s, sc))
+        scored.sort(key=lambda t: t[1], reverse=True)
+        self._detail_sessions = [s for s, _ in scored]
+        self._archived_sessions = []
+        self._content_search_active = False
+        self._rebuild_session_lists()
+
+    def _apply_title_only_filter(self):
+        """Filter strictly on session display_name (triggered by '\\' search)."""
+        scored = []
+        for s in self._all_sessions + self._all_archived:
+            sc = fuzzy_match(self._search_text, s.display_name or "")
             if sc is not None:
                 scored.append((s, sc))
         scored.sort(key=lambda t: t[1], reverse=True)

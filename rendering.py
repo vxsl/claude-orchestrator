@@ -987,10 +987,17 @@ def _render_content_search_result(
     age_str = s.age
     sid = s.session_id[:8]
 
-    # Line 1: search icon + title, hit count right-aligned (badge position)
+    # Line 1: search icon + title (padded) + age + hit count (badge position)
+    # Matches _render_session_option layout so search results align with the list.
+    title_pad = " " * (title_width - len(title_raw))
     prefix_w = 3  # " ✸ "
-    fill = max(2, LINE_WIDTH - prefix_w - len(title_raw) - len(hits_str))
-    line1 = f" \u2738 {title}{' ' * fill}[{C_YELLOW}]{hits_str}[/{C_YELLOW}]"
+    age_col = f"{age_str:>4}"
+    age_w = 2 + 4  # "  " + age_col
+    fill = max(2, LINE_WIDTH - prefix_w - title_width - age_w - len(hits_str))
+    line1 = (
+        f" \u2738 {title}{title_pad}  [{C_DIM}]{age_col}[/{C_DIM}]"
+        f"{' ' * fill}[{C_YELLOW}]{hits_str}[/{C_YELLOW}]"
+    )
 
     # Line 2: model + stats dim, sid faint
     model_color = C_OPUS if model == "opus" else C_MID
