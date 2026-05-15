@@ -142,6 +142,7 @@ def _hydrate_session(row: dict) -> ClaudeSession:
         all_session_ids=json.loads(row["all_session_ids"]) if row["all_session_ids"] else [],
         last_message_text=row["last_message_text"],
         last_user_message_text=row["last_user_message_text"],
+        last_assistant_message_text=row.get("last_assistant_message_text", ""),
         last_tool_name=row["last_tool_name"],
         last_commit_sha=row["last_commit_sha"],
         last_commit_summary=row["last_commit_summary"],
@@ -694,6 +695,7 @@ class ClaudeSession:
     all_session_ids: list[str] = field(default_factory=list)  # All sessionIds found in JSONL (for resume matching)
     last_message_text: str = ""  # Snippet of last user or assistant message
     last_user_message_text: str = ""  # Snippet of last human (non-interrupt) user message
+    last_assistant_message_text: str = ""  # Snippet of last assistant message
     last_user_messages: list[str] = field(default_factory=list)  # Last 3 human turns, most-recent first
     last_tool_name: str = ""     # Name of last tool_use in assistant message
     last_commit_sha: str = ""    # SHA from last git commit (if session ended with one)
@@ -1007,6 +1009,8 @@ def parse_session(jsonl_path: Path) -> Optional[ClaudeSession]:
                             if not session.last_user_messages or session.last_user_messages[0] != snippet:
                                 session.last_user_messages.insert(0, snippet)
                                 session.last_user_messages = session.last_user_messages[:3]
+                        elif msg_type == "assistant":
+                            session.last_assistant_message_text = snippet
                     # Interrupted turns: the "[Request interrupted" user
                     # message means Claude is back at the prompt.
                     if msg_type == "user" and _is_interrupt_marker(data):
@@ -1153,6 +1157,8 @@ def refresh_session_tail(session: ClaudeSession, tail_bytes: int = 8192) -> bool
                         if not session.last_user_messages or session.last_user_messages[0] != snippet:
                             session.last_user_messages.insert(0, snippet)
                             session.last_user_messages = session.last_user_messages[:3]
+                    elif msg_type == "assistant":
+                        session.last_assistant_message_text = snippet
                 if msg_type == "user" and _is_interrupt_marker(data):
                     session.turn_complete = True
             if msg_type == "assistant" and "message" in data:

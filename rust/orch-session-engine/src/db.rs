@@ -37,6 +37,10 @@ fn migrate(conn: &Connection) -> Result<()> {
         "ALTER TABLE sessions ADD COLUMN total_work_ms INTEGER NOT NULL DEFAULT 0",
         [],
     );
+    let _ = conn.execute(
+        "ALTER TABLE sessions ADD COLUMN last_assistant_message_text TEXT NOT NULL DEFAULT ''",
+        [],
+    );
     // threads table may not exist on older DBs
     let _ = conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS threads (
@@ -75,6 +79,7 @@ fn create_tables(conn: &Connection) -> Result<()> {
             all_session_ids     TEXT NOT NULL DEFAULT '[]',
             last_message_text   TEXT NOT NULL DEFAULT '',
             last_user_message_text TEXT NOT NULL DEFAULT '',
+            last_assistant_message_text TEXT NOT NULL DEFAULT '',
             last_tool_name      TEXT NOT NULL DEFAULT '',
             last_commit_sha     TEXT NOT NULL DEFAULT '',
             last_commit_summary TEXT NOT NULL DEFAULT '',
@@ -197,11 +202,11 @@ pub fn upsert_session(
             last_stop_reason, turn_complete, all_session_ids, last_message_text,
             last_user_message_text, last_tool_name, last_commit_sha, last_commit_summary,
             tool_counts, files_mutated, git_branch, first_message, context_tokens,
-            total_work_ms, mtime
+            total_work_ms, mtime, last_assistant_message_text
         ) VALUES (
             ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10,
             ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19,
-            ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30
+            ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31
         )
         ON CONFLICT(session_id) DO UPDATE SET
             project_dir = excluded.project_dir,
@@ -223,6 +228,7 @@ pub fn upsert_session(
             all_session_ids = excluded.all_session_ids,
             last_message_text = excluded.last_message_text,
             last_user_message_text = excluded.last_user_message_text,
+            last_assistant_message_text = excluded.last_assistant_message_text,
             last_tool_name = excluded.last_tool_name,
             last_commit_sha = excluded.last_commit_sha,
             last_commit_summary = excluded.last_commit_summary,
@@ -264,6 +270,7 @@ pub fn upsert_session(
             session.context_tokens,
             session.total_work_ms,
             mtime,
+            session.last_assistant_message_text,
         ],
     )?;
     Ok(())

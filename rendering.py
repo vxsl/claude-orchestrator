@@ -884,7 +884,7 @@ def _render_session_option(
             line3 = f"{INDENT}{left}"
         lines.append(line3)
 
-    # Line 4: commit info (if resolved) or last message snippet
+    # Line 4+: commit info (if resolved) or last user + last assistant snippets
     if committed:
         sha_short = s.last_commit_sha[:7]
         max_msg = title_width + 4
@@ -892,33 +892,44 @@ def _render_session_option(
         if len(s.last_commit_summary) > max_msg:
             commit_msg += "…"
         lines.append(f"{INDENT}[{C_PURPLE}]{sha_short}[/{C_PURPLE}] [{s_dim}]{commit_msg}[/{s_dim}]")
-    elif s.last_message_text:
-        is_user = s.last_message_role == "user"
-        if is_user:
-            # Show user prompt with muted styling + "you: " prefix
+    else:
+        # Fall back to last_message_text if a role-specific snippet is missing
+        # (e.g. legacy DB rows without last_assistant_message_text populated).
+        user_text = s.last_user_message_text or (
+            s.last_message_text if s.last_message_role == "user" else ""
+        )
+        assistant_text = s.last_assistant_message_text or (
+            s.last_message_text if s.last_message_role == "assistant" else ""
+        )
+        user_color = C_DIM if stale else C_MID
+        user_lbl_color = C_FAINT if stale else C_DIM
+        asst_color = C_FAINT if stale else "#3b4048"
+        line_chars = max(20, LINE_WIDTH - 4)
+
+        if user_text:
             prefix = "you: "
-            line_chars = max(20, LINE_WIDTH - 4)
-            text = s.last_message_text.replace("\n", " ")
-            first_line_chars = line_chars - len(prefix)
-            line_a_raw = text[:first_line_chars]
-            remainder = text[first_line_chars:]
-            line_a = _rich_escape(line_a_raw)
-            msg_color = C_DIM if stale else C_MID
-            lbl_color = C_FAINT if stale else C_DIM
-            lines.append(f"{INDENT}[{lbl_color}]{prefix}[/{lbl_color}][{msg_color}]{line_a}[/{msg_color}]")
-            if remainder:
-                line_b_raw = remainder[:line_chars]
-                line_b = _rich_escape(line_b_raw)
-                if len(remainder) > line_chars:
-                    line_b += "…"
-                lines.append(f"{INDENT}[{msg_color}]{line_b}[/{msg_color}]")
-        else:
-            max_snippet = title_width + 12
-            snippet = _rich_escape(s.last_message_text[:max_snippet])
-            if len(s.last_message_text) > max_snippet:
-                snippet += "…"
-            msg_color = C_FAINT if stale else "#3b4048"
-            lines.append(f"{INDENT}[italic {msg_color}]{snippet}[/italic {msg_color}]")
+            body_chars = line_chars - len(prefix)
+            text = user_text.replace("\n", " ")
+            body_raw = text[:body_chars]
+            if len(text) > body_chars:
+                body_raw = body_raw[:-1] + "…"
+            body = _rich_escape(body_raw)
+            lines.append(
+                f"{INDENT}[{user_lbl_color}]{prefix}[/{user_lbl_color}]"
+                f"[{user_color}]{body}[/{user_color}]"
+            )
+        if assistant_text:
+            prefix = "a: "
+            body_chars = line_chars - len(prefix)
+            text = assistant_text.replace("\n", " ")
+            body_raw = text[:body_chars]
+            if len(text) > body_chars:
+                body_raw = body_raw[:-1] + "…"
+            body = _rich_escape(body_raw)
+            lines.append(
+                f"{INDENT}[{user_lbl_color}]{prefix}[/{user_lbl_color}]"
+                f"[italic {asst_color}]{body}[/italic {asst_color}]"
+            )
 
     return "\n".join(lines)
 

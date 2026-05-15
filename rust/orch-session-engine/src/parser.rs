@@ -69,6 +69,7 @@ pub struct Session {
     pub all_session_ids: Vec<String>,
     pub last_message_text: String,
     pub last_user_message_text: String,
+    pub last_assistant_message_text: String,
     pub last_tool_name: String,
     pub last_commit_sha: String,
     pub last_commit_summary: String,
@@ -469,6 +470,8 @@ pub fn parse_session(jsonl_path: &Path) -> Result<Session> {
                     session.last_message_text = snippet.clone();
                     if msg_type == "user" && is_human_turn(msg) {
                         session.last_user_message_text = snippet;
+                    } else if msg_type == "assistant" {
+                        session.last_assistant_message_text = snippet;
                     }
                 }
             }
@@ -664,6 +667,8 @@ pub fn refresh_session_tail(session: &mut Session, tail_bytes: u64) -> Result<bo
                     session.last_message_text = snippet.clone();
                     if msg_type == "user" && is_human_turn(msg) {
                         session.last_user_message_text = snippet;
+                    } else if msg_type == "assistant" {
+                        session.last_assistant_message_text = snippet;
                     }
                 }
             }
