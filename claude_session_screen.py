@@ -619,11 +619,10 @@ class WsSessionListWidget(Static):
         except Exception:
             last_seen = {}
 
-        # Match the workstream-list rule for the green/blue title badge:
-        #   THINKING (always) OR (AWAITING_INPUT|RESPONSE_READY + unseen + recent).
-        # Recent = activity within the last 2 hours; this drops stale unseen
-        # sessions from days ago without requiring is_live (a session whose
-        # tmux just exited but Claude spoke last is still actionable).
+        # Filter: THINKING always, plus any AWAITING_INPUT|RESPONSE_READY whose
+        # last_activity is within the last 2h. Seen-state is ignored — the user
+        # may have implicitly "seen" sessions via the workstream-list highlight
+        # without actually acknowledging them, so we surface them anyway.
         order = {
             ThreadActivity.THINKING: 0,
             ThreadActivity.AWAITING_INPUT: 1,
@@ -638,11 +637,7 @@ class WsSessionListWidget(Static):
             if act not in order:
                 continue
             seen = _is_session_seen(s, last_seen)
-            if act == ThreadActivity.THINKING:
-                pass  # always include
-            else:
-                if seen:
-                    continue
+            if act != ThreadActivity.THINKING:
                 if not _is_recent(s.last_activity or s.started_at, recent_cutoff):
                     continue
             candidates.append((order[act], -_iso_ts(s.last_activity or s.started_at), s, act, seen))
