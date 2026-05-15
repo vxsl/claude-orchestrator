@@ -619,9 +619,9 @@ class WsSessionListWidget(Static):
         except Exception:
             last_seen = {}
 
-        # Only live sessions: THINKING (mid-turn) or AWAITING_INPUT (your turn).
-        # RESPONSE_READY covers every non-live session with assistant-last history,
-        # which would flood the list with weeks-old idle sessions.
+        # "Blue or green": THINKING is always interesting (blue throbber);
+        # AWAITING_INPUT only counts if unseen (bright green dot, not the
+        # dim-green already-acknowledged variant).
         order = {
             ThreadActivity.THINKING: 0,
             ThreadActivity.AWAITING_INPUT: 1,
@@ -638,6 +638,8 @@ class WsSessionListWidget(Static):
             seen_ts = last_seen.get(s.session_id, "")
             anchor = s.last_activity or s.started_at or ""
             seen = bool(seen_ts and anchor and seen_ts >= anchor)
+            if act == ThreadActivity.AWAITING_INPUT and seen:
+                continue
             candidates.append((order[act], -_iso_ts(s.last_activity or s.started_at), s, act, seen))
         candidates.sort(key=lambda x: (x[0], x[1]))
 
