@@ -580,8 +580,8 @@ class WsSessionListWidget(Static):
         super().__init__("", **kwargs)
         self._ws_id = ws_id
         self._current_session_id = current_session_id
-        # rows: (session_id, title, activity, age, seen, last_assistant_text)
-        self._rows: list[tuple[str, str, ThreadActivity, str, bool, str]] = []
+        # rows: (sid, title, activity, age, seen, last_asst, is_current)
+        self._rows: list[tuple[str, str, ThreadActivity, str, bool, str, bool]] = []
         self._selected_sid: str | None = None
         self._throbber_frame = 0
         self._last_had_items = False
@@ -631,22 +631,25 @@ class WsSessionListWidget(Static):
         }
         candidates = []
         for s in sessions:
-            if s.session_id == self._current_session_id:
-                continue
+            is_current = s.session_id == self._current_session_id
             act = session_activity(s, last_seen)
             if act not in order:
-                continue
+                # Current session might be IDLE (no messages yet); include anyway
+                if not is_current:
+                    continue
+                act = ThreadActivity.AWAITING_INPUT  # placeholder for sort
             seen = _is_session_seen(s, last_seen)
-            if act != ThreadActivity.THINKING and seen:
+            if not is_current and act != ThreadActivity.THINKING and seen:
                 continue
-            candidates.append((order[act], -_iso_ts(s.last_activity or s.started_at), s, act, seen))
+            candidates.append((order.get(act, 99), -_iso_ts(s.last_activity or s.started_at), s, act, seen))
         candidates.sort(key=lambda x: (x[0], x[1]))
 
-        new_rows: list[tuple[str, str, ThreadActivity, str, bool, str]] = []
+        new_rows: list[tuple[str, str, ThreadActivity, str, bool, str, bool]] = []
         for _, _, s, act, seen in candidates:
             title = _session_title(s)
             last_asst = s.last_assistant_message_text or ""
-            new_rows.append((s.session_id, title, act, s.age, seen, last_asst))
+            is_current = s.session_id == self._current_session_id
+            new_rows.append((s.session_id, title, act, s.age, seen, last_asst, is_current))
 
         self._rows = new_rows
 
@@ -670,7 +673,7 @@ class WsSessionListWidget(Static):
         WIDTH = max(20, self.content_size.width or 32)
         focused = self.has_focus
         lines = []
-        for sid, title, act, age, seen, last_asst in self._rows:
+        for sid, title, act, age, seen, last_asst, is_current in self._rows:
             icon = _activity_icon(act, self._throbber_frame, seen=seen)
             age_str = age.replace(" ago", "")
 
@@ -686,8 +689,12 @@ class WsSessionListWidget(Static):
             is_sel = sid == self._selected_sid
             sel_bar = "▍" if is_sel else " "
 
-            # Line 1: ▍|space + icon + title + right-aligned age
-            avail = max(4, WIDTH - 3 - len(age_str) - 1)  # bar + icon + space + age
+            # Right-side chip: "you" for the current session, age otherwise.
+            right_text = "you" if is_current else age_str
+            right_color = C_PURPLE if is_current else C_DIM
+
+            # Line 1: ▍|space + icon + title + right chip
+            avail = max(4, WIDTH - 3 - len(right_text) - 1)  # bar + icon + space + chip
             t = title.replace("\n", " ").strip()
             if len(t) > avail:
                 t = t[: max(1, avail - 1)] + "…"
@@ -699,7 +706,7 @@ class WsSessionListWidget(Static):
                 title_fmt = f"[{title_color}]{inner}[/{title_color}]"
             else:
                 title_fmt = f"[bold]{title_esc}[/bold]" if bold else title_esc
-            line1 = f"{sel_bar}{icon} {title_fmt}{pad}[{C_DIM}]{age_str}[/{C_DIM}]"
+            line1 = f"{sel_bar}{icon} {title_fmt}{pad}[{right_color}]{right_text}[/{right_color}]"
 
             # Line 2: indented snippet of last assistant message
             snippet_avail = max(4, WIDTH - 4)
@@ -755,7 +762,8 @@ class WsSessionListWidget(Static):
         elif event.key in ("enter", "l", "L"):
             event.stop()
             event.prevent_default()
-            if self._selected_sid:
+            # No-op when the selection is the session we're already in.
+            if self._selected_sid and self._selected_sid != self._current_session_id:
                 self.post_message(self.SessionSelected(self._selected_sid))
 
 
