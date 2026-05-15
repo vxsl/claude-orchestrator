@@ -810,14 +810,6 @@ def _is_recent(ts: str, cutoff_ts: float) -> bool:
 # ── User-message picker (inline overlay) ─────────────────────────────
 
 
-def _picker_label(text: str, max_w: int = 60) -> str:
-    """Render a user-message preview for the picker option list."""
-    line = text.strip().splitlines()[0] if text.strip() else ""
-    if len(line) > max_w:
-        line = line[: max_w - 1] + "…"
-    return _rich_escape(line) or f"[{C_DIM}](empty)[/{C_DIM}]"
-
-
 def _search_snippet(text: str, max_len: int = 30) -> str:
     """Pick a short, distinctive substring from a user message for tmux search.
 
@@ -831,11 +823,13 @@ def _search_snippet(text: str, max_len: int = 30) -> str:
     return text.strip()[:max_len]
 
 
-def _build_picker_items(jsonl_path: str) -> tuple[list[tuple[str, str]], dict[str, str]]:
+def _build_picker_items(
+    jsonl_path: str, row_width: int = 72
+) -> tuple[list[tuple[str, str]], dict[str, str]]:
     """Return (option_items, id→snippet) for the message picker.
 
-    Items are chronological (oldest first, newest last — so newest sits
-    nearest the bottom-docked input).
+    Items are chronological (oldest first, newest last). Each label is
+    laid out as: message snippet ← padded → dim relative time right-edge.
     """
     prompts = extract_user_prompts(jsonl_path)
     items: list[tuple[str, str]] = []
@@ -843,10 +837,19 @@ def _build_picker_items(jsonl_path: str) -> tuple[list[tuple[str, str]], dict[st
     for idx, msg in enumerate(prompts):
         item_id = f"msg-{idx}"
         snippets[item_id] = _search_snippet(msg.text)
-        label = _picker_label(msg.text)
+        plain = msg.text.strip().splitlines()[0] if msg.text.strip() else "(empty)"
         age = _relative_time(msg.timestamp) if msg.timestamp else ""
-        if age and age != "unknown":
-            label = f"{label}  [{C_DIM}]{age}[/{C_DIM}]"
+        if age == "unknown":
+            age = ""
+        budget = max(8, row_width - len(age) - 2)
+        if len(plain) > budget:
+            plain = plain[: budget - 1] + "…"
+        pad = max(2, row_width - len(plain) - len(age))
+        msg_md = _rich_escape(plain)
+        if age:
+            label = f"{msg_md}{' ' * pad}[{C_DIM}]{age}[/{C_DIM}]"
+        else:
+            label = msg_md
         items.append((item_id, label))
     return items, snippets
 
@@ -872,10 +875,12 @@ class ClaudeSessionScreen(Screen):
     }}
     #cs-picker-overlay {{
         layer: overlay;
+        dock: bottom;
         width: 100%;
-        height: 100%;
+        height: auto;
+        max-height: 18;
         align: center bottom;
-        background: transparent;
+        background: $background 0%;
     }}
     #cs-picker-overlay.hidden {{ display: none; }}
     #cs-picker-box {{
