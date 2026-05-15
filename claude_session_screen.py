@@ -592,18 +592,18 @@ class WsSessionListWidget(Static):
         self.set_interval(0.1, self._tick_throbber)
 
     def on_focus(self) -> None:
-        self._render()
+        self._repaint()
 
     def on_blur(self) -> None:
-        self._render()
+        self._repaint()
 
     def on_resize(self, event) -> None:
-        self._render()
+        self._repaint()
 
     def _tick_throbber(self) -> None:
         if any(r[2] == ThreadActivity.THINKING for r in self._rows):
             self._throbber_frame = (self._throbber_frame + 1) % len(THROBBER_FRAMES)
-            self._render()
+            self._repaint()
 
     def _refresh(self) -> None:
         try:
@@ -619,15 +619,18 @@ class WsSessionListWidget(Static):
         except Exception:
             last_seen = {}
 
-        # Order: THINKING > AWAITING_INPUT > RESPONSE_READY, then by recency
+        # Only live sessions: THINKING (mid-turn) or AWAITING_INPUT (your turn).
+        # RESPONSE_READY covers every non-live session with assistant-last history,
+        # which would flood the list with weeks-old idle sessions.
         order = {
             ThreadActivity.THINKING: 0,
             ThreadActivity.AWAITING_INPUT: 1,
-            ThreadActivity.RESPONSE_READY: 2,
         }
         candidates = []
         for s in sessions:
             if s.session_id == self._current_session_id:
+                continue
+            if not s.is_live:
                 continue
             act = session_activity(s, last_seen)
             if act not in order:
@@ -655,9 +658,9 @@ class WsSessionListWidget(Static):
             self._last_had_items = has_items
             self.post_message(self.ItemsChanged(has_items))
 
-        self._render()
+        self._repaint()
 
-    def _render(self) -> None:
+    def _repaint(self) -> None:
         if not self._rows:
             self.update(f"[{C_FAINT}]no other active sessions[/{C_FAINT}]")
             return
@@ -701,7 +704,7 @@ class WsSessionListWidget(Static):
             idx = 0
         idx = max(0, min(len(sids) - 1, idx + delta))
         self._selected_sid = sids[idx]
-        self._render()
+        self._repaint()
 
     def on_key(self, event: events.Key) -> None:
         if event.key in ("j", "down"):
@@ -717,13 +720,13 @@ class WsSessionListWidget(Static):
             event.prevent_default()
             if self._rows:
                 self._selected_sid = self._rows[0][0]
-                self._render()
+                self._repaint()
         elif event.key == "G":
             event.stop()
             event.prevent_default()
             if self._rows:
                 self._selected_sid = self._rows[-1][0]
-                self._render()
+                self._repaint()
         elif event.key == "enter":
             event.stop()
             event.prevent_default()
