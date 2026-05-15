@@ -274,6 +274,136 @@ def ensure_rust_engine_running() -> bool:
         return False
 
 
+def _newest_source_mtime(rust_src: Path) -> float:
+    """Newest mtime among Cargo.toml + every .rs file under src/.
+
+    Cargo.lock is excluded — it churns from unrelated workspace updates.
+    """
+    newest = 0.0
+    cargo = rust_src / "Cargo.toml"
+    if cargo.exists():
+        newest = cargo.stat().st_mtime
+    src = rust_src / "src"
+    if src.exists():
+        for p in src.rglob("*.rs"):
+            try:
+                m = p.stat().st_mtime
+                if m > newest:
+                    newest = m
+            except OSError:
+                continue
+    return newest
+
+
+def _kill_stale_daemons(binary_path: str) -> int:
+    """Kill any running orch-session-engine daemon. Returns count killed.
+
+    Best-effort — scans /proc for processes whose exe symlink points at
+    the orch-session-engine binary. Falls back to no-op on non-Linux.
+
+    Match by basename: when the on-disk binary has been replaced by a
+    fresh `cargo install`, the daemon's /proc/PID/exe symlink reads as
+    "<path> (deleted)". realpath() can't follow that, so we strip the
+    suffix and compare basenames.
+    """
+    import signal as _signal
+    proc_root = Path("/proc")
+    if not proc_root.exists():
+        return 0
+    killed = 0
+    target_name = os.path.basename(binary_path)
+    for entry in proc_root.iterdir():
+        if not entry.name.isdigit():
+            continue
+        try:
+            exe = os.readlink(entry / "exe")
+        except (OSError, PermissionError):
+            continue
+        # Strip "(deleted)" marker that the kernel appends after unlink.
+        if exe.endswith(" (deleted)"):
+            exe = exe[: -len(" (deleted)")]
+        if os.path.basename(exe) != target_name:
+            continue
+        try:
+            os.kill(int(entry.name), _signal.SIGTERM)
+            killed += 1
+        except (OSError, ProcessLookupError):
+            pass
+    # Remove the pipe so ensure_rust_engine_running spawns a fresh daemon.
+    pipe = Path(f"/tmp/orch-session-engine.{os.getuid()}.pipe")
+    try:
+        pipe.unlink()
+    except FileNotFoundError:
+        pass
+    except OSError:
+        pass
+    return killed
+
+
+def check_engine_freshness() -> None:
+    """Detect stale binary or stale daemon and act on each.
+
+    Two kinds of staleness, each handled differently:
+
+    (a) Source newer than installed binary — user edited rust/ but didn't
+        reinstall. Print the reinstall command and exit, matching the
+        require_rust_engine_or_exit UX.
+
+    (b) Installed binary newer than running daemon — user reinstalled but
+        the old daemon process is still serving stale code from memory.
+        Kill it; ensure_rust_engine_running will respawn the new one.
+
+    Skipped silently when ORCH_SKIP_FRESHNESS_CHECK=1 (for tests / CI).
+    """
+    if os.environ.get("ORCH_SKIP_FRESHNESS_CHECK"):
+        return
+    binary = shutil.which("orch-session-engine")
+    if binary is None:
+        return  # require_rust_engine_or_exit handles this
+    try:
+        binary_mtime = os.path.getmtime(binary)
+    except OSError:
+        return
+
+    # (a) Source-newer-than-binary — only meaningful when we're running
+    # from inside the repo (rust/ source is colocated with sessions.py).
+    repo_dir = Path(__file__).resolve().parent
+    rust_src = repo_dir / "rust" / "orch-session-engine"
+    if rust_src.exists():
+        src_mtime = _newest_source_mtime(rust_src)
+        if src_mtime > binary_mtime:
+            import sys
+            from datetime import datetime
+            src_age = datetime.fromtimestamp(src_mtime).strftime("%Y-%m-%d %H:%M")
+            bin_age = datetime.fromtimestamp(binary_mtime).strftime("%Y-%m-%d %H:%M")
+            sys.stderr.write(
+                "\n"
+               f"  orch-session-engine source is newer than the installed binary.\n"
+               f"    source last modified:  {src_age}\n"
+               f"    binary last installed: {bin_age}\n"
+                "\n"
+                "  Reinstall:\n"
+               f"    cargo install --path {rust_src}\n"
+                "\n"
+                "  To bypass:  ORCH_SKIP_FRESHNESS_CHECK=1 orch …\n"
+                "\n"
+            )
+            sys.exit(2)
+
+    # (b) Binary-newer-than-daemon — kill the stale daemon and respawn
+    # immediately so subsequent calls (including CLI like `orch list`)
+    # are warm rather than cold-starting through Python-side DB reads.
+    pipe = Path(f"/tmp/orch-session-engine.{os.getuid()}.pipe")
+    if pipe.exists():
+        try:
+            pipe_mtime = pipe.stat().st_mtime
+        except OSError:
+            pipe_mtime = binary_mtime  # be safe — don't restart on stat error
+        if binary_mtime > pipe_mtime + 1.0:  # +1s slack for filesystem rounding
+            if _kill_stale_daemons(binary) > 0:
+                ensure_rust_engine_running()
+
+
 def require_rust_engine_or_exit() -> None:
     """Refuse to start if orch-session-engine isn't installed.
 

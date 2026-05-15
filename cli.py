@@ -1439,8 +1439,9 @@ examples:
     # is excluded because it's pure stdout (no session discovery) and is
     # invoked from shell-init paths that mustn't fail.
     if args.command != "completions":
-        from sessions import require_rust_engine_or_exit
+        from sessions import require_rust_engine_or_exit, check_engine_freshness
         require_rust_engine_or_exit()
+        check_engine_freshness()
 
     commands = {
         "tui": cmd_tui,
