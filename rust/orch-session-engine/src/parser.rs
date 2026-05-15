@@ -411,15 +411,19 @@ pub fn parse_session(jsonl_path: &Path) -> Result<Session> {
             }
         }
 
-        // Track timestamps — CLI-local messages excluded from last_ts so
-        // that last_activity reflects meaningful Claude activity only.
-        // _is_session_seen uses last_activity as its anchor.
+        // Track timestamps — bookkeeping entries (CLI-local user messages
+        // and autonomous system events like turn_duration, stop_hook_summary,
+        // away_summary) excluded so last_activity reflects meaningful
+        // conversation progress. _is_session_seen uses last_activity as its
+        // anchor; without this filter an autonomous away_summary recap would
+        // bump last_activity past last_seen and flip a previously-viewed
+        // session back to "unseen → green".
         if let Some(ts) = data["timestamp"].as_str() {
             if !ts.is_empty() {
                 if first_ts.is_none() {
                     first_ts = Some(ts.to_string());
                 }
-                if !is_cli_local_message(&data) {
+                if msg_type != "system" && !is_cli_local_message(&data) {
                     last_ts = Some(ts.to_string());
                 }
             }
@@ -608,13 +612,16 @@ pub fn refresh_session_tail(session: &mut Session, tail_bytes: u64) -> Result<bo
             Err(_) => continue,
         };
 
+        let msg_type = data["type"].as_str().unwrap_or("");
+
+        // See parse_session_full: system events are autonomous bookkeeping
+        // (turn_duration, stop_hook_summary, away_summary) and must not
+        // bump last_activity, or recaps would flip seen→unseen.
         if let Some(ts) = data["timestamp"].as_str() {
-            if !ts.is_empty() && !is_cli_local_message(&data) {
+            if !ts.is_empty() && msg_type != "system" && !is_cli_local_message(&data) {
                 session.last_activity = ts.to_string();
             }
         }
-
-        let msg_type = data["type"].as_str().unwrap_or("");
 
         // Extract commit SHA from tool_result after a git commit
         if pending_commit && msg_type == "user" {

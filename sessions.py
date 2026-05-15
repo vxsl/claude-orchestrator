@@ -956,16 +956,19 @@ def parse_session(jsonl_path: Path) -> Optional[ClaudeSession]:
                                         session.first_message = text[:200]
                                         break
 
-                # Track timestamps — CLI-local messages (slash commands,
-                # local-command output) are excluded from last_ts so that
-                # last_activity reflects meaningful Claude activity only.
-                # This lets _is_session_seen use last_activity as the anchor
-                # without being fooled by automated command bookkeeping.
+                # Track timestamps — bookkeeping entries (CLI-local user
+                # messages and autonomous system events like turn_duration,
+                # stop_hook_summary, away_summary) are excluded from last_ts
+                # so last_activity reflects meaningful conversation progress
+                # only. _is_session_seen uses last_activity as the anchor;
+                # without this filter, an autonomous away_summary recap
+                # would bump last_activity past last_seen and flip a
+                # previously-viewed session back to "unseen → green".
                 ts = data.get("timestamp")
                 if ts:
                     if first_ts is None:
                         first_ts = ts
-                    if not _is_cli_local_message(data):
+                    if msg_type != "system" and not _is_cli_local_message(data):
                         last_ts = ts
 
                 # Track last message role (user or assistant)
@@ -1110,11 +1113,13 @@ def refresh_session_tail(session: ClaudeSession, tail_bytes: int = 8192) -> bool
             except json.JSONDecodeError:
                 continue
 
-            ts = data.get("timestamp")
-            if ts and not _is_cli_local_message(data):
-                session.last_activity = ts
-
             msg_type = data.get("type", "")
+            ts = data.get("timestamp")
+            # See parse_session: system events (turn_duration, away_summary,
+            # stop_hook_summary) are bookkeeping and must not bump
+            # last_activity, or autonomous recaps would flip seen→unseen.
+            if ts and msg_type != "system" and not _is_cli_local_message(data):
+                session.last_activity = ts
 
             # Extract commit SHA from tool_result after a git commit
             if _pending_commit and msg_type == "user" and "message" in data:

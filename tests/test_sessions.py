@@ -197,6 +197,34 @@ class TestParseSession:
         assert session.last_stop_reason == ""
         assert session.last_tool_name == ""
 
+    def test_away_summary_does_not_bump_last_activity(self, tmp_path):
+        """Autonomous system:away_summary recaps must not advance last_activity.
+
+        Claude writes these on its own when idle. If they bumped last_activity,
+        a previously-viewed session would flip back to "unseen → green"
+        without the user doing anything.
+        """
+        f = tmp_path / "projects" / "test" / "session.jsonl"
+        f.parent.mkdir(parents=True)
+        lines = [
+            json.dumps({"type": "user", "message": {"content": "hi"},
+                        "timestamp": "2026-03-20T10:00:00Z"}),
+            json.dumps({"type": "assistant", "message": {"model": "claude-opus-4-6",
+                        "content": [{"type": "text", "text": "hi back"}],
+                        "usage": {"input_tokens": 10, "output_tokens": 5},
+                        "stop_reason": "end_turn"},
+                        "timestamp": "2026-03-20T10:00:01Z"}),
+            # Autonomous recap written hours later — must NOT bump last_activity
+            json.dumps({"type": "system", "subtype": "away_summary",
+                        "content": "recap text",
+                        "timestamp": "2026-03-20T14:00:00Z"}),
+        ]
+        f.write_text("\n".join(lines) + "\n")
+        session = parse_session(f)
+        assert session.last_activity == "2026-03-20T10:00:01Z", (
+            f"system:away_summary must not bump last_activity; got {session.last_activity!r}"
+        )
+
     def test_mid_turn_last_prompt_does_not_complete_turn(self, tmp_path):
         """Modern Claude writes last-prompt/custom-title between tool calls.
 
