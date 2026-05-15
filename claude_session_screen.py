@@ -752,7 +752,7 @@ class WsSessionListWidget(Static):
             if self._rows:
                 self._selected_sid = self._rows[-1][0]
                 self._repaint()
-        elif event.key == "enter":
+        elif event.key in ("enter", "l", "L"):
             event.stop()
             event.prevent_default()
             if self._selected_sid:
