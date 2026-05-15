@@ -588,7 +588,10 @@ class WsSessionListWidget(Static):
 
     def on_mount(self) -> None:
         self._refresh()
-        self.set_interval(2.0, self._refresh)
+        # Fast poll: sessions_for_ws is cached, so this is ~free unless the
+        # daemon just invalidated. Catches state transitions (e.g. thinking
+        # → ready) within ~half a second instead of waiting for the next 2s tick.
+        self.set_interval(0.5, self._refresh)
         self.set_interval(0.1, self._tick_throbber)
 
     def on_focus(self) -> None:
