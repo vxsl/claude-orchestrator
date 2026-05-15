@@ -27,6 +27,7 @@ htmlcov/
 # App data
 data.json
 data.json.*
+.data.json.lock
 backups/
 
 # OS
