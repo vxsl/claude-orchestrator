@@ -2801,9 +2801,18 @@ class OrchestratorApp(App):
             if self.state.search_mode == "sessions"
             else "Search workstreams..."
         )
+        # Start fresh: `/` means "begin a new search", not "reopen the last one".
         search_input.display = True
-        search_input.value = self.state.search_text
+        search_input.value = ""
+        self.state.search_text = ""
         search_input.focus()
+        # Defend against the `/` keystroke leaking into the now-focused input
+        # during the focus transition (observed: bar reading `/layerid`).
+        # Clear again on the next frame after Textual has settled.
+        def _clear():
+            if search_input.value.startswith("/"):
+                search_input.value = search_input.value.lstrip("/")
+        self.call_after_refresh(_clear)
 
     @on(Input.Submitted, "#search-input")
     def on_search_submitted(self, event: Input.Submitted):
