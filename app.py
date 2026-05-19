@@ -1700,13 +1700,21 @@ class OrchestratorApp(App):
         result→ws map on self so the Enter handler doesn't have to recompute.
         """
         n_sessions = len(self.state.sessions)
-        results = self.state.global_session_search(self.state.search_text)
+        try:
+            results = self.state.global_session_search(self.state.search_text)
+        except Exception as e:
+            self.notify(f"Search error: {type(e).__name__}: {e}", severity="error", timeout=10)
+            results = []
         self._global_search_map = {r.session.session_id: ws for r, ws in results}
         table.clear_options()
         if not results:
+            cache = self.state._global_content_cache
+            cached_with_msgs = sum(1 for v in cache.values() if v)
+            cached_empty = sum(1 for v in cache.values() if not v)
             hint = (
                 f"  [{C_DIM}]No session matches "
-                f"(searched {n_sessions} sessions)[/{C_DIM}]"
+                f"(searched {n_sessions} sessions; cache: {cached_with_msgs} with msgs, "
+                f"{cached_empty} empty)[/{C_DIM}]"
             )
             if n_sessions == 0:
                 hint = f"  [{C_DIM}]Sessions still loading… try again in a moment[/{C_DIM}]"
