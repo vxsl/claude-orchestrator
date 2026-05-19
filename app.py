@@ -119,9 +119,8 @@ class SearchInput(Input):
         self.value = ""
         app = self.app
         app.state.search_text = ""
-        # Leaving search also returns to the default workstream-filter mode so
-        # a future '/' press is consistent.
-        app.state.search_mode = "ws"
+        # Keep search_mode as-is so a future '/' reopens in whatever the user
+        # last used (sessions by default, Tab to flip to workstream filter).
         app._refresh_ws_table()
         self.display = False
         app._active_table().focus()
@@ -135,6 +134,8 @@ class SearchInput(Input):
             if app.state.search_mode == "sessions"
             else "Search workstreams..."
         )
+        mode_label = "sessions (content)" if app.state.search_mode == "sessions" else "workstreams"
+        app.notify(f"Search mode: {mode_label}", timeout=2)
         # Re-run the current query under the new mode so results update live.
         app._refresh_ws_table()
 
@@ -1698,14 +1699,18 @@ class OrchestratorApp(App):
         Enter to the owning workstream's DetailScreen.  We stash the
         result→ws map on self so the Enter handler doesn't have to recompute.
         """
+        n_sessions = len(self.state.sessions)
         results = self.state.global_session_search(self.state.search_text)
         self._global_search_map = {r.session.session_id: ws for r, ws in results}
         table.clear_options()
         if not results:
-            table.add_options([Option(
-                f"  [{C_DIM}]No session matches[/{C_DIM}]",
-                id="__no_results__", disabled=True,
-            )])
+            hint = (
+                f"  [{C_DIM}]No session matches "
+                f"(searched {n_sessions} sessions)[/{C_DIM}]"
+            )
+            if n_sessions == 0:
+                hint = f"  [{C_DIM}]Sessions still loading… try again in a moment[/{C_DIM}]"
+            table.add_options([Option(hint, id="__no_results__", disabled=True)])
         else:
             options = []
             for r, ws in results:

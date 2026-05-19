@@ -616,8 +616,10 @@ class AppState:
         self.sessions_loaded: bool = False  # True after first session discovery completes
         # Global session content-search state (cross-workstream search from home).
         # search_mode toggles the home '/' input between filtering workstreams
-        # and content-searching every session in self.sessions.
-        self.search_mode: str = "ws"  # "ws" | "sessions"
+        # and content-searching every session in self.sessions.  Sessions is
+        # the default mode (content search across all workstreams); Tab in the
+        # search input flips to workstream-name filter.
+        self.search_mode: str = "sessions"  # "ws" | "sessions"
         self._global_content_cache: dict[str, list[SessionMessage]] = {}
         self.infer_repo_paths()
 
