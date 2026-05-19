@@ -614,6 +614,11 @@ class AppState:
         self._sessions_by_id: dict[str, ClaudeSession] = {}
         self.git_status_cache: dict[str, object] = {}  # path -> WorktreeStatus
         self.sessions_loaded: bool = False  # True after first session discovery completes
+        # Global session content-search state (cross-workstream search from home).
+        # search_mode toggles the home '/' input between filtering workstreams
+        # and content-searching every session in self.sessions.
+        self.search_mode: str = "ws"  # "ws" | "sessions"
+        self._global_content_cache: dict[str, list[SessionMessage]] = {}
         self.infer_repo_paths()
 
     # ── Filtering & sorting ──
@@ -1154,6 +1159,21 @@ class AppState:
         self._sessions_for_ws_cache[cache_key] = result
         return result
 
+    def global_session_search(
+        self, query: str
+    ) -> list[tuple[SessionSearchResult, Workstream | None]]:
+        """Search every discovered session for *query* and pair with its workstream.
+
+        Used by the home-screen cross-workstream search.  Results are ranked
+        by total_score (recency-bonused inside content_search) and each is
+        paired with the owning workstream when one can be reverse-resolved.
+        Returns an empty list when query is empty.
+        """
+        if not query.strip():
+            return []
+        results = content_search(query, self.sessions, self._global_content_cache)
+        return [(r, self.find_ws_for_session(r.session)) for r in results]
+
     def find_ws_for_session(self, session: ClaudeSession) -> Workstream | None:
         """Reverse-lookup: find a workstream that owns this session."""
         sp = session.project_path.rstrip("/")
@@ -1379,6 +1399,12 @@ class AppState:
         """Clear derived-data caches after session/thread updates."""
         self._sessions_for_ws_cache.clear()
         self._last_seen_valid = False
+        # Drop global-search content cache entries for sessions that disappeared,
+        # but keep the rest so a re-query is fast.
+        live_sids = {s.session_id for s in self.sessions}
+        stale = [sid for sid in self._global_content_cache if sid not in live_sids]
+        for sid in stale:
+            self._global_content_cache.pop(sid, None)
 
     def refresh_liveness(self) -> bool:
         """Update is_live flags and tail-read active sessions. Returns True if anything changed."""

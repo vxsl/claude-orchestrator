@@ -1327,6 +1327,71 @@ class TestContentSearch:
         assert len(results) == 1
 
 
+class TestGlobalSessionSearch:
+    """state.global_session_search — cross-workstream content search.
+
+    Backs the home `/` Tab-toggle 'sessions' mode.  Verifies each hit is
+    paired with the workstream that owns the session's project_path, and
+    that empty queries short-circuit cleanly.
+    """
+
+    def _ws_with_repo(self, store, name, repo_path):
+        ws = Workstream(name=name, repo_path=repo_path)
+        store.add(ws)
+        return ws
+
+    def test_pairs_results_with_owning_workstream(self, state, tmp_path):
+        repo_a = tmp_path / "repo-a"
+        repo_b = tmp_path / "repo-b"
+        repo_a.mkdir()
+        repo_b.mkdir()
+        ws_a = self._ws_with_repo(state.store, "WS A", str(repo_a))
+        ws_b = self._ws_with_repo(state.store, "WS B", str(repo_b))
+        s_a = _make_search_session("a1")
+        s_a.project_path = str(repo_a)
+        s_a.jsonl_path = ""
+        s_b = _make_search_session("b1")
+        s_b.project_path = str(repo_b)
+        s_b.jsonl_path = ""
+        state.sessions = [s_a, s_b]
+        state._global_content_cache = {
+            "a1": _make_messages("we need to deploy the migration tonight"),
+            "b1": _make_messages("totally unrelated discussion"),
+        }
+        pairs = state.global_session_search("deploy migration")
+        assert len(pairs) == 1
+        result, ws = pairs[0]
+        assert result.session.session_id == "a1"
+        assert ws is not None and ws.id == ws_a.id
+
+    def test_unowned_session_returns_none_ws(self, state, tmp_path):
+        s = _make_search_session("orphan")
+        s.project_path = str(tmp_path / "nowhere")  # no ws claims this path
+        s.jsonl_path = ""
+        state.sessions = [s]
+        state._global_content_cache = {"orphan": _make_messages("deploy now")}
+        pairs = state.global_session_search("deploy")
+        assert len(pairs) == 1
+        _, ws = pairs[0]
+        assert ws is None
+
+    def test_empty_query_returns_empty(self, state):
+        state.sessions = [_make_search_session("x")]
+        assert state.global_session_search("") == []
+        assert state.global_session_search("   ") == []
+
+    def test_invalidate_caches_drops_stale_entries(self, state):
+        s = _make_search_session("keep")
+        state.sessions = [s]
+        state._global_content_cache = {
+            "keep": _make_messages("hello"),
+            "gone": _make_messages("removed"),
+        }
+        state.invalidate_caches()
+        assert "keep" in state._global_content_cache
+        assert "gone" not in state._global_content_cache
+
+
 # ─── TabManager ──────────────────────────────────────────────────────
 
 from state import TabManager, TabState

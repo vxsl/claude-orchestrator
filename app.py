@@ -75,7 +75,8 @@ from rendering import (
     _token_color, _token_color_markup,
     _category_markup,
     _is_session_seen, _is_today, _any_session_today,
-    _render_session_option, _render_ws_option, _session_title,
+    _render_session_option, _render_ws_option, _render_global_search_result,
+    _session_title,
     _rich_escape,
     _best_activity, _activity_icon,
 )
@@ -108,15 +109,34 @@ def _divider_option(width: int = 40) -> Option:
 # ─── Inline Inputs ──────────────────────────────────────────────────
 
 class SearchInput(Input):
-    BINDINGS = [Binding("escape", "cancel_search", "Cancel", priority=True)]
+    BINDINGS = [
+        Binding("escape", "cancel_search", "Cancel", priority=True),
+        Binding("tab", "toggle_mode", "Toggle mode", priority=True),
+        Binding("shift+tab", "toggle_mode", "Toggle mode", priority=True),
+    ]
 
     def action_cancel_search(self):
         self.value = ""
         app = self.app
         app.state.search_text = ""
+        # Leaving search also returns to the default workstream-filter mode so
+        # a future '/' press is consistent.
+        app.state.search_mode = "ws"
         app._refresh_ws_table()
         self.display = False
         app._active_table().focus()
+
+    def action_toggle_mode(self):
+        """Swap between filtering workstreams and content-searching every session."""
+        app = self.app
+        app.state.search_mode = "sessions" if app.state.search_mode == "ws" else "ws"
+        self.placeholder = (
+            "Search sessions across all workstreams..."
+            if app.state.search_mode == "sessions"
+            else "Search workstreams..."
+        )
+        # Re-run the current query under the new mode so results update live.
+        app._refresh_ws_table()
 
 
 class QuickNoteInput(Input):
@@ -1447,7 +1467,12 @@ class OrchestratorApp(App):
         line2 = f" {SEP.join(preset_parts)}"
 
         if self.state.search_text:
-            line2 += f"  [{C_DIM}]·[/{C_DIM}]  [{C_DIM}]search:[/{C_DIM}] [{C_YELLOW}]{_rich_escape(self.state.search_text)}[/{C_YELLOW}]"
+            label = "sessions" if self.state.search_mode == "sessions" else "search"
+            hint = f"  [{C_FAINT}](Tab toggles)[/{C_FAINT}]"
+            line2 += (
+                f"  [{C_DIM}]·[/{C_DIM}]  [{C_DIM}]{label}:[/{C_DIM}] "
+                f"[{C_YELLOW}]{_rich_escape(self.state.search_text)}[/{C_YELLOW}]{hint}"
+            )
 
         return f"{line1}\n{line2}"
 
@@ -1548,6 +1573,11 @@ class OrchestratorApp(App):
         try:
             table = self.query_one("#ws-table", OptionList)
         except Exception:
+            return
+        # Cross-workstream session-search mode owns the table — render results
+        # and bail before the workstream-row pipeline runs.
+        if self.state.search_mode == "sessions" and self.state.search_text:
+            self._render_global_session_results(table)
             return
         old_key = self._olist_cursor_key(table)
         old_idx = table.highlighted
@@ -1660,6 +1690,38 @@ class OrchestratorApp(App):
                               (_time.monotonic() - _t2) * 1000,
                               "skipped" if bar_skipped else "rendered",
                               (_time.monotonic() - _t0) * 1000)
+
+    def _render_global_session_results(self, table: OptionList):
+        """Populate the workstream table with cross-workstream session results.
+
+        Each option's id is "gs:<session_id>" so on_ws_row_selected can route
+        Enter to the owning workstream's DetailScreen.  We stash the
+        result→ws map on self so the Enter handler doesn't have to recompute.
+        """
+        results = self.state.global_session_search(self.state.search_text)
+        self._global_search_map = {r.session.session_id: ws for r, ws in results}
+        table.clear_options()
+        if not results:
+            table.add_options([Option(
+                f"  [{C_DIM}]No session matches[/{C_DIM}]",
+                id="__no_results__", disabled=True,
+            )])
+        else:
+            options = []
+            for r, ws in results:
+                ws_name = ws.name if ws else None
+                prompt = _render_global_search_result(r, ws_name)
+                options.append(Option(prompt, id=f"gs:{r.session.session_id}"))
+            table.add_options(options)
+            table.highlighted = 0
+        # Invalidate caches the normal path relies on so a return to ws-mode
+        # rebuilds cleanly.
+        self._ws_render_cache = {}
+        self._ws_table_ids = None
+        # Refresh the filter bar so the search caption updates.
+        bar_fp = self._bar_fingerprint()
+        if bar_fp != getattr(self, '_last_bar_fp', None):
+            self._update_all_bars()
 
     def _selected_ws(self) -> Workstream | None:
         try:
@@ -1836,6 +1898,29 @@ class OrchestratorApp(App):
 
     @on(OptionList.OptionSelected, "#ws-table")
     def on_ws_row_selected(self, event: OptionList.OptionSelected):
+        oid = event.option_id or ""
+        if oid.startswith("gs:"):
+            sid = oid[3:]
+            ws = getattr(self, '_global_search_map', {}).get(sid)
+            if ws is None:
+                # Fall back to the session's project_path workstream if we
+                # didn't capture a mapping (e.g. cache cleared between render
+                # and selection).
+                sess = next((s for s in self.state.sessions if s.session_id == sid), None)
+                if sess:
+                    ws = self.state.find_ws_for_session(sess)
+            if ws is None:
+                self.notify("No workstream owns that session", timeout=3)
+                return
+            # Close the search overlay before pushing the detail screen so
+            # the home returns to ws-mode after the user backs out.
+            try:
+                search_input = self.query_one("#search-input", SearchInput)
+                search_input.action_cancel_search()
+            except Exception:
+                pass
+            self._open_detail_for_ws(ws, highlight_session_id=sid)
+            return
         self._open_detail()
 
     @on(OptionList.OptionSelected, "#preview-sessions")
@@ -1860,10 +1945,11 @@ class OrchestratorApp(App):
         if ws:
             self._open_detail_for_ws(ws)
 
-    def _open_detail_for_ws(self, ws: Workstream):
+    def _open_detail_for_ws(self, ws: Workstream, highlight_session_id: str | None = None):
         """Open a workstream in a tab and push its DetailScreen.
 
         Used by thought-to-thread flows (brain dump launch, ticket pick, etc.)
+        and by the cross-workstream session search (highlight_session_id).
         """
         self.tabs.open_tab(ws.id, ws.name, "\u00b7")
         self._sync_tab_bar()
@@ -1873,6 +1959,10 @@ class OrchestratorApp(App):
             screen = DetailScreen(ws, self.state.store)
             self._detail_screen_cache[ws.id] = screen
             self.install_screen(screen, screen_name)
+        else:
+            screen = self._detail_screen_cache[ws.id]
+        if highlight_session_id:
+            screen.request_session_highlight(highlight_session_id)
         self.push_screen(screen_name, callback=lambda _: self._on_detail_dismissed())
         # Update the detail screen's tab bar now that it's the active screen
         self._sync_tab_bar()
@@ -2693,6 +2783,11 @@ class OrchestratorApp(App):
 
     def action_search(self):
         search_input = self.query_one("#search-input", SearchInput)
+        search_input.placeholder = (
+            "Search sessions across all workstreams..."
+            if self.state.search_mode == "sessions"
+            else "Search workstreams..."
+        )
         search_input.display = True
         search_input.value = self.state.search_text
         search_input.focus()

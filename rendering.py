@@ -1075,6 +1075,29 @@ def _render_content_search_result(
     return "\n".join(lines)
 
 
+def _render_global_search_result(
+    result,
+    ws_name: str | None,
+    title_width: int = 48,
+) -> str:
+    """Render a cross-workstream search result.
+
+    Reuses the per-workstream search row layout but tags it with the owning
+    workstream's name on the first line so the user can tell where the hit
+    came from before jumping in.
+    """
+    base = _render_content_search_result(result, title_width=title_width, ws_repo_path="")
+    tag = ws_name or "no workstream"
+    tag_color = C_BLUE if ws_name else C_FAINT
+    lines = base.split("\n")
+    # Inject the ws tag on its own line above the row so the existing 4-line
+    # layout stays measurable/cacheable. _render_session_option rows are 4
+    # lines; adding a 5th here is fine because the OptionList will still
+    # treat the whole multi-line string as one entry.
+    header = f" [{tag_color}]{_rich_escape(tag)}[/{tag_color}]"
+    return header + "\n" + "\n".join(lines)
+
+
 # ─── Notification Feed rendering ─────────────────────────────────
 
 def _render_notification_option(notif, max_width: int = 40) -> str:

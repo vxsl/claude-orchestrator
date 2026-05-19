@@ -1133,6 +1133,7 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         # Full unfiltered lists (set once sessions are loaded)
         self._all_sessions: list[ClaudeSession] = []
         self._all_archived: list[ClaudeSession] = []
+        self._pending_highlight_sid: str | None = None  # set by request_session_highlight
         self._peek_mode: bool = False
         self._loading_frame: int = 0
         self._loading_timer = None
@@ -1147,6 +1148,27 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         if self._sidebar_enabled:
             self._tigrc_path = generate_tig_tigrc(subtle=True)
             self._tig_env = {"TIGRC_USER": self._tigrc_path, "GIT_OPTIONAL_LOCKS": "0"}
+
+    def request_session_highlight(self, session_id: str) -> None:
+        """Queue a session highlight to apply once the list is built.
+
+        Called by the home cross-workstream search before pushing this screen.
+        Applied in _initial_mount / _resume_refresh after the OptionList exists.
+        """
+        self._pending_highlight_sid = session_id
+
+    def _apply_pending_highlight(self) -> None:
+        """Move the cursor to the queued session id, if any, then clear the queue."""
+        sid = self._pending_highlight_sid
+        if not sid:
+            return
+        self._pending_highlight_sid = None
+        try:
+            olist = self.query_one("#detail-sessions", OptionList)
+        except Exception:
+            return
+        self._restore_highlight_by_sid(olist, self._detail_sessions, sid)
+        olist.focus()
 
     def _detect_git_sidebar(self) -> bool:
         """Return True if the workstream has a git repo we can show tig for."""
@@ -1263,6 +1285,7 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         olist = self.query_one("#detail-sessions", OptionList)
         if olist.option_count > 0 and olist.highlighted is None:
             olist.highlighted = 0
+        self._apply_pending_highlight()
         olist.focus()
 
     def on_screen_resume(self):
@@ -1303,6 +1326,7 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
             except Exception:
                 pass
             self._update_pane_labels()
+        self._apply_pending_highlight()
 
     def on_screen_suspend(self):
         """Pause timers when screen is covered or dismissed."""
