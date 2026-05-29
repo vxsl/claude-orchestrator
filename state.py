@@ -1177,8 +1177,16 @@ class AppState:
         return [(r, self.find_ws_for_session(r.session)) for r in results]
 
     def find_ws_for_session(self, session: ClaudeSession) -> Workstream | None:
-        """Reverse-lookup: find a workstream that owns this session."""
+        """Reverse-lookup: find a workstream that owns this session.
+
+        An explicit ``claude-session`` link wins outright. Otherwise we match by
+        path prefix and keep the *most specific* (longest) matching path so a
+        broad workstream (e.g. ``Home`` at ``~``) can't shadow the nested repo
+        the session actually lives in.
+        """
         sp = session.project_path.rstrip("/")
+        best: Workstream | None = None
+        best_len = -1
         for ws in self.store.active:
             for link in ws.links:
                 if link.kind == "claude-session" and (
@@ -1188,14 +1196,14 @@ class AppState:
                     return ws
             if ws.repo_path:
                 rp = os.path.expanduser(ws.repo_path).rstrip("/")
-                if sp == rp or sp.startswith(rp + "/"):
-                    return ws
+                if (sp == rp or sp.startswith(rp + "/")) and len(rp) > best_len:
+                    best, best_len = ws, len(rp)
             for link in ws.links:
                 if link.kind in ("worktree", "file"):
                     expanded = os.path.expanduser(link.value).rstrip("/")
-                    if os.path.isdir(expanded) and (sp == expanded or sp.startswith(expanded + "/")):
-                        return ws
-        return None
+                    if os.path.isdir(expanded) and (sp == expanded or sp.startswith(expanded + "/")) and len(expanded) > best_len:
+                        best, best_len = ws, len(expanded)
+        return best
 
     # ── Mutations ──
 

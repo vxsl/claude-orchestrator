@@ -524,6 +524,40 @@ class TestSessionManagement:
         session = _make_session(project_path="/some/other/path")
         assert state.find_ws_for_session(session) is None
 
+    def test_find_ws_for_session_prefers_most_specific_repo_path(self, state, tmp_path):
+        """A broad parent workstream must not shadow the nested repo a session lives in."""
+        home = tmp_path / "home"
+        repo = home / "work" / "repos" / "ul"
+        repo.mkdir(parents=True)
+
+        # Broad "Home" workstream added FIRST so it would win under first-match.
+        broad = Workstream(name="Home", repo_path=str(home))
+        nested = Workstream(name="ul", repo_path=str(repo))
+        state.store.add(broad)
+        state.store.add(nested)
+
+        session = _make_session(project_path=str(repo / "client" / "web"))
+        found = state.find_ws_for_session(session)
+        assert found is not None
+        assert found.id == nested.id
+
+    def test_find_ws_for_session_explicit_link_beats_broader_path(self, state, tmp_path):
+        """An explicit claude-session link wins even over a more specific path match."""
+        home = tmp_path / "home"
+        repo = home / "repo"
+        repo.mkdir(parents=True)
+
+        path_ws = Workstream(name="by-path", repo_path=str(repo))
+        link_ws = Workstream(name="by-link", repo_path=str(home))
+        link_ws.add_link("claude-session", "abc123", "session")
+        state.store.add(path_ws)
+        state.store.add(link_ws)
+
+        session = _make_session("abc123", project_path=str(repo))
+        found = state.find_ws_for_session(session)
+        assert found is not None
+        assert found.id == link_ws.id
+
     def test_refresh_liveness_matches_resumed_session_alias(self, state, monkeypatch):
         """Resumed sessions stay is_live when only their alias ID is in live_ids.
 
