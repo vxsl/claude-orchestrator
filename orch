@@ -1,7 +1,12 @@
 #!/bin/bash
 export PYENV_ROOT="$HOME/.pyenv"
 export PATH="$PYENV_ROOT/bin:$PATH"
-eval "$(pyenv init -)"
+# --no-rehash: do NOT run `pyenv rehash` on every launch. orch installs no
+# Python executables, so a rehash is pointless here — and a stale rehash lock
+# (~/.pyenv/shims/.pyenv-shim, left behind when a rehash is hard-killed) makes
+# the default `pyenv init -` block for PYENV_REHASH_TIMEOUT (60s) and print
+# "pyenv: cannot rehash: couldn't acquire lock" before the TUI ever renders.
+eval "$(pyenv init - --no-rehash)"
 SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
 
 # C-j/C-k passthrough is handled in tmux.conf via session-name detection.
