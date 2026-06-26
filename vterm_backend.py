@@ -124,7 +124,6 @@ _vterm_set_utf8 = _sig("vterm_set_utf8", None, [c_void_p, c_int])
 
 # Constants
 _DAMAGE_ROW = 1
-_PROP_ALTSCREEN = 3     # VTERM_PROP_ALTSCREEN: app switched to alternate screen
 _PROP_CURSORSHAPE = 7   # VTERM_PROP_CURSORSHAPE: 1=block, 2=underline, 3=bar
 _PROP_MOUSE = 8
 _CELL_SIZE = ctypes.sizeof(VTermScreenCell)
@@ -156,7 +155,6 @@ class VTermBackend:
         self.cursor_x = 0
         self.cursor_shape = 1  # 1=block, 2=underline, 3=bar (VTERM_PROP_CURSORSHAPE)
         self.mouse_tracking = False
-        self.alt_screen = False  # app is on the alternate screen (no scrollback)
 
         # Prevent GC of callback pointers
         self._cb_damage = _damage_cb(self._on_damage)
@@ -221,8 +219,6 @@ class VTermBackend:
             self.dirty_rows.add(self.cursor_y)  # shape change has no damage event
         elif prop == _PROP_MOUSE and val:
             self.mouse_tracking = ctypes.cast(val, POINTER(c_int))[0] > 0
-        elif prop == _PROP_ALTSCREEN and val:
-            self.alt_screen = ctypes.cast(val, POINTER(c_int))[0] > 0
         return 0
 
     def _on_sb_pushline(self, cols, cells_ptr, user):
