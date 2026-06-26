@@ -312,6 +312,7 @@ class TerminalWidget(Widget, can_focus=True):
         self._ncol = 80
         self._nrow = 24
         self._mouse_tracking = False
+        self._alt_screen = False  # inner app on alternate screen (no scrollback)
         self._sync_output = False  # DEC private mode 2026 (synchronized output)
         self._cursor_shape = 1  # DECSCUSR: 1/2=block, 3/4=underline, 5/6=bar
 
@@ -740,6 +741,10 @@ class TerminalWidget(Widget, can_focus=True):
                     self._mouse_tracking = True
                 if "1000l" in params:
                     self._mouse_tracking = False
+                if "1049h" in params or "47h" in params or "1047h" in params:
+                    self._alt_screen = True
+                if "1049l" in params or "47l" in params or "1047l" in params:
+                    self._alt_screen = False
                 if "2026h" in params:
                     self._sync_output = True
                 if "2026l" in params:
@@ -841,6 +846,7 @@ class TerminalWidget(Widget, can_focus=True):
             except OSError:
                 pass
         self._mouse_tracking = self._backend.mouse_tracking
+        self._alt_screen = self._backend.alt_screen
         # Compensate scroll offset for new scrollback lines
         if self._scroll_offset > 0 and self._backend.new_scrollback_lines:
             self._scroll_offset += self._backend.new_scrollback_lines
@@ -1158,6 +1164,38 @@ class TerminalWidget(Widget, can_focus=True):
         self._scroll_offset = max(self._scroll_offset - lines, 0)
         self.refresh()
 
+    # Wheel-tick counts per scroll key, for forwarding to alt-screen apps
+    # that own their own scrollback (mirrors the non-tmux fallback's "5
+    # ticks per half-page").  history-top/bottom are best-effort: enough
+    # ticks to reach the ends of a typical transcript; the app clamps.
+    _WHEEL_SCROLL_COUNTS = {
+        "ctrl+u": ("up", 5),
+        "shift+pageup": ("up", 5),
+        "ctrl+d": ("down", 5),
+        "shift+pagedown": ("down", 5),
+        "shift+up": ("up", 1),
+        "shift+down": ("down", 1),
+        "shift+home": ("up", 120),
+        "shift+end": ("down", 120),
+    }
+
+    def _forward_wheel_scroll(self, key: str) -> None:
+        """Forward a scroll key as SGR mouse-wheel events to the inner app.
+
+        Used when the pane is on the alternate screen, where tmux copy-mode
+        has no scrollback.  The app receives the wheel events (via tmux's
+        mouse passthrough) and scrolls its own viewport.
+        """
+        spec = self._WHEEL_SCROLL_COUNTS.get(key)
+        if not spec:
+            return
+        direction, count = spec
+        btn = 64 if direction == "up" else 65
+        cx, cy = self._ncol // 2 + 1, self._nrow // 2 + 1
+        seq = f"\x1b[<{btn};{cx};{cy}M"
+        for _ in range(count):
+            self._write_to_pty(seq)
+
     def _tmux_copy_mode_nav(self, action: str | None = None) -> None:
         """Enter tmux copy-mode (idempotent) and optionally run a copy-mode command.
 
@@ -1253,9 +1291,19 @@ class TerminalWidget(Widget, can_focus=True):
         if self._persistent_session:
             nav = self._TMUX_NAV_KEYS.get(key)
             if nav is not None:
-                self._tmux_copy_mode_nav(nav)
+                # When the inner app is on the alternate screen (e.g. Claude
+                # Code's full-screen UI), tmux has no scrollback — copy-mode
+                # would dead-end at [0/0].  Forward wheel events so the app
+                # scrolls its own buffer instead.  tmux (mouse on) passes
+                # these straight through to the mouse-tracking app.
+                if self._alt_screen:
+                    self._forward_wheel_scroll(key)
+                else:
+                    self._tmux_copy_mode_nav(nav)
                 return
-            # Explicit "enter copy-mode without scrolling" trigger
+            # Explicit "enter copy-mode without scrolling" trigger.  Works
+            # even in alt-screen: copy-mode can still select the visible
+            # screen, there's just no scrollback history above it.
             if key == "alt+v":
                 self._tmux_copy_mode_nav()
                 return
