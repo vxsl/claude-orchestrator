@@ -25,6 +25,12 @@ if [ -n "$TMUX" ]; then
     tmux set -s extended-keys on 2>/dev/null || true
     tmux show-options -s terminal-features 2>/dev/null | grep -q extkeys \
         || tmux set -as terminal-features '*:extkeys' 2>/dev/null || true
+
+    # C-S-j/C-S-k must reach the TUI (handled by ClaudeSessionScreen), not a
+    # tmux binding. An earlier version bound them here; tmux binds persist on
+    # the server across restarts, so clear any stale ones defensively.
+    tmux unbind -n C-S-j 2>/dev/null || true
+    tmux unbind -n C-S-k 2>/dev/null || true
 fi
 
 export TEXTUAL_COLOR_SYSTEM=truecolor
