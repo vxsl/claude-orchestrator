@@ -16,6 +16,24 @@ if [ -n "$TMUX" ]; then
     tmux bind -n C-h if-shell '[ "#{window_index}" = "0" ]' 'send-keys C-h' 'select-window -t orch:0' 2>/dev/null
     # Disable tmux prefix in the orch session so ctrl+b passes through to the TUI
     tmux set-option prefix None 2>/dev/null || true
+
+    # Distinguish Ctrl-Shift from Ctrl so C-S-j/C-S-k are bindable. Needs a
+    # terminal that speaks the kitty/CSI-u keyboard protocol (Alacritty >=0.13,
+    # foot, kitty, recent xterm); harmless on terminals that don't. tmux only
+    # forwards extended keys to inner apps that request them, so the TUI and
+    # Claude itself are unaffected.
+    tmux set -s extended-keys on 2>/dev/null || true
+    tmux set -as terminal-features '*:extkeys' 2>/dev/null || true
+
+    # C-S-j / C-S-k: switch among the live session windows of the current
+    # workstream, newest-first (same order as the session panel). The guard
+    # makes them no-ops (passthrough) outside orch session windows.
+    tmux bind -n C-S-j if-shell -F '#{@orch_ws_id}' \
+        "run-shell '$SCRIPT_DIR/orch-switch-session next'" \
+        'send-keys C-S-j' 2>/dev/null
+    tmux bind -n C-S-k if-shell -F '#{@orch_ws_id}' \
+        "run-shell '$SCRIPT_DIR/orch-switch-session prev'" \
+        'send-keys C-S-k' 2>/dev/null
 fi
 
 export TEXTUAL_COLOR_SYSTEM=truecolor

@@ -188,7 +188,11 @@ SIDEBAR_PANE=$(tmux split-window -h -l 36 -P -F '#{pane_id}' \
 tmux select-pane -L
 
 # ─── Tag this window with session ID (for reattach detection) ────
+# @orch_ws_id + @orch_jsonl let orch-switch-session (C-S-j/C-S-k) find the
+# sibling session windows of this workstream and order them by recency.
 tmux set-option -w @orch_session_id "$SESSION_ID" 2>/dev/null || true
+tmux set-option -w @orch_ws_id "$WS_ID" 2>/dev/null || true
+tmux set-option -w @orch_jsonl "$JSONL_PATH" 2>/dev/null || true
 
 # ─── Capture main pane ID and bind action keys ──────────────────
 MAIN_PANE=$(tmux display-message -p '#{pane_id}')
