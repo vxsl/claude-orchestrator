@@ -26,11 +26,18 @@ if [ -n "$TMUX" ]; then
     tmux show-options -s terminal-features 2>/dev/null | grep -q extkeys \
         || tmux set -as terminal-features '*:extkeys' 2>/dev/null || true
 
-    # C-S-j/C-S-k must reach the TUI (handled by ClaudeSessionScreen), not a
-    # tmux binding. An earlier version bound them here; tmux binds persist on
-    # the server across restarts, so clear any stale ones defensively.
-    tmux unbind -n C-S-j 2>/dev/null || true
-    tmux unbind -n C-S-k 2>/dev/null || true
+    # C-S-j / C-S-k: switch among a workstream's sessions (handled by the TUI's
+    # ClaudeSessionScreen). The Alacritty->tmux->Textual stack collapses these
+    # to plain C-j/C-k by the time they reach the app, so the TUI can't bind
+    # them directly. Intercept at tmux and inject the exact kitty CSI-u bytes
+    # Textual decodes as ctrl+shift+j / ctrl+shift+k:
+    #   \033[106;6u  -> ctrl+shift+j   (1b 5b 31 30 36 3b 36 75)
+    #   \033[107;6u  -> ctrl+shift+k   (1b 5b 31 30 37 3b 36 75)
+    # Gated to the orch session; passthrough elsewhere.
+    tmux bind -n C-S-j if-shell 'tmux display-message -p "#{session_name}" | grep -q "^orch"' \
+        'send-keys -H 1b 5b 31 30 36 3b 36 75' 'send-keys C-S-j' 2>/dev/null
+    tmux bind -n C-S-k if-shell 'tmux display-message -p "#{session_name}" | grep -q "^orch"' \
+        'send-keys -H 1b 5b 31 30 37 3b 36 75' 'send-keys C-S-k' 2>/dev/null
 fi
 
 export TEXTUAL_COLOR_SYSTEM=truecolor
