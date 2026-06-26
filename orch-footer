@@ -55,7 +55,6 @@ fi
 LINE+="  ${D}│${X}"
 LINE+="  ${G}C-e${X} ${D}extract${X}"
 LINE+="  ${G}C-h${X} ${D}orch${X}"
-LINE+="  ${G}C-S-j/k${X} ${D}sessions${X}"
 
 LINE+=" ${EL}${RST}"
 

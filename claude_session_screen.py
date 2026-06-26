@@ -41,7 +41,7 @@ from threads import ThreadActivity, session_activity
 from widgets import FuzzyPicker
 
 # Keys that pass through the TerminalWidget to the screen for panel navigation
-_PASSTHROUGH_KEYS = {"ctrl+j", "ctrl+k", "ctrl+e", "ctrl+h", "ctrl+z", "ctrl+backslash", "ctrl+b", "ctrl+x", "ctrl+@", "ctrl+y", "ctrl+r"}
+_PASSTHROUGH_KEYS = {"ctrl+j", "ctrl+k", "ctrl+shift+j", "ctrl+shift+k", "ctrl+e", "ctrl+h", "ctrl+z", "ctrl+backslash", "ctrl+b", "ctrl+x", "ctrl+@", "ctrl+y", "ctrl+r"}
 
 ORCH_DIR = str(Path(__file__).parent)
 
@@ -765,6 +765,26 @@ class WsSessionListWidget(Static):
         self._selected_sid = sids[idx]
         self._repaint()
 
+    def cycle_target(self, anchor_sid: str, delta: int) -> str | None:
+        """Session id `delta` steps from `anchor_sid` in displayed order,
+        wrapping at the ends. Returns None when there's nothing to switch to.
+
+        Used by the screen's Ctrl-Shift-J/K bindings so cycling follows the
+        exact order shown in this list.
+        """
+        sids = [r[0] for r in self._rows]
+        if not sids:
+            return None
+        try:
+            idx = sids.index(anchor_sid)
+        except ValueError:
+            # Anchor isn't in the list — jump to the nearest end.
+            return sids[0] if delta > 0 else sids[-1]
+        if len(sids) < 2:
+            return None
+        target = sids[(idx + delta) % len(sids)]
+        return target if target != anchor_sid else None
+
     def on_key(self, event: events.Key) -> None:
         if event.key in ("j", "down"):
             event.stop()
@@ -872,6 +892,8 @@ class ClaudeSessionScreen(Screen):
         Binding("ctrl+y", "toggle_auto_mode", "Auto mode", priority=True),
         Binding("ctrl+backslash", "go_back", "C-\\ back", priority=True),
         Binding("ctrl+r", "jump_to_message", "Jump to msg", priority=True),
+        Binding("ctrl+shift+j", "next_session", "Next session", priority=True),
+        Binding("ctrl+shift+k", "prev_session", "Prev session", priority=True),
         Binding("escape", "close_picker", show=False),
     ]
 
@@ -1456,7 +1478,12 @@ class ClaudeSessionScreen(Screen):
         self, event: "WsSessionListWidget.SessionSelected"
     ) -> None:
         """Switch the screen to the selected session — detach current, push new."""
-        target_sid = event.session_id
+        self._switch_to_session(event.session_id)
+
+    def _switch_to_session(self, target_sid: str) -> None:
+        """Detach the current session (keeps running in tmux) and open another."""
+        if not target_sid or target_sid == self._session_id:
+            return
         sessions = self.app.state.sessions_for_ws(self._ws)
         target = next((s for s in sessions if s.session_id == target_sid), None)
         if not target:
@@ -1471,6 +1498,23 @@ class ClaudeSessionScreen(Screen):
             "jsonl": self._jsonl,
         })
         self.app.launch_claude_session(self._ws, session_id=target_sid)
+
+    def _cycle_session(self, delta: int) -> None:
+        """Jump to the next/previous session in the order shown by the
+        workstream session list (Ctrl-Shift-J = down/next, Ctrl-Shift-K = up)."""
+        try:
+            lst = self.query_one("#cs-other-sessions", WsSessionListWidget)
+        except Exception:
+            return  # sidebar disabled / list not mounted
+        target = lst.cycle_target(self._session_id, delta)
+        if target:
+            self._switch_to_session(target)
+
+    def action_next_session(self) -> None:
+        self._cycle_session(1)
+
+    def action_prev_session(self) -> None:
+        self._cycle_session(-1)
 
 
 # ── Helpers ───────────────────────────────────────────────────────────
