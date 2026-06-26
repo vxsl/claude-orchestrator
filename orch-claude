@@ -223,6 +223,11 @@ export ORCH_SESSION_ID="$SESSION_ID"
 export CLAUDE_SESSION_ID="$SESSION_ID"  # used by notify hook to link notifications to sessions
 export ORCH_DIR
 export CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING=1
+# Force the classic (inline) renderer, not the fullscreen alt-screen TUI
+# (default since v2.1.172). Fullscreen owns its own scrollback, leaving
+# tmux's empty so scroll/copy-mode can't reach the transcript. The classic
+# renderer streams into tmux's scrollback. See claude-code#67289.
+export CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN=1
 
 # ─── Build and run Claude command ────────────────────────────────
 cd "$CWD"

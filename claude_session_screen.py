@@ -228,6 +228,14 @@ def build_session_env(ws_id: str, session_id: str) -> dict[str, str]:
         "ORCH_SESSION_ID": session_id,
         "CLAUDE_SESSION_ID": session_id,
         "ORCH_DIR": ORCH_DIR,
+        # Force Claude Code's classic (inline) renderer instead of the
+        # fullscreen TUI it defaults to since v2.1.172.  The fullscreen TUI
+        # draws on the alternate screen and owns its own scrollback, which
+        # leaves tmux's scrollback empty (history_size=0) — so copy-mode
+        # scroll/select in the embedded terminal dead-ends at [0/0].  The
+        # classic renderer streams the transcript into tmux's main buffer,
+        # restoring unified scrollback + copy-mode.  See claude-code#67289.
+        "CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN": "1",
     }
 
 
