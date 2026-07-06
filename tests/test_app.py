@@ -941,6 +941,28 @@ class TestTabBarE2E:
             pilot.app.action_close_tab()
             assert len(pilot.app.tabs.tabs) == tab_count_after_open - 1
 
+    async def test_close_tab_from_detail_then_reopen(self, app_with_store):
+        """Regression: closing a tab while its DetailScreen is on the stack
+        must not leave a stale installed screen that crashes the next open
+        with "Can't install screen; 'detail:<id>' is already installed"."""
+        from screens import DetailScreen
+        async with app_with_store.run_test(size=(120, 40)) as pilot:
+            await pilot.press("enter")  # open detail for selected ws
+            assert isinstance(pilot.app.screen, DetailScreen)
+            ws_id = pilot.app.screen.ws.id
+            await pilot.press("x")  # close tab from inside the detail screen
+            await pilot.pause()
+            await pilot.pause()  # let the deferred uninstall fire
+            assert not pilot.app.is_screen_installed(f"detail:{ws_id}")
+            assert ws_id not in pilot.app._detail_screen_cache
+            # Reopen the same ws via the path from the crash traceback —
+            # used to raise ScreenError ("already installed").
+            ws = pilot.app.state.store.get(ws_id)
+            pilot.app._open_detail_for_ws(ws)
+            await pilot.pause()
+            assert isinstance(pilot.app.screen, DetailScreen)
+            assert pilot.app.is_screen_installed(f"detail:{ws_id}")
+
     async def test_x_cannot_close_home(self, app_with_store):
         """x on Home tab should not close it."""
         async with app_with_store.run_test(size=(120, 40)) as pilot:

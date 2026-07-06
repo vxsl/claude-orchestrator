@@ -25,7 +25,7 @@ if _PERF_ENABLED:
     _perf_log.setLevel(logging.WARNING)
 
 from textual import on, work
-from textual.app import App, ComposeResult
+from textual.app import App, ComposeResult, ScreenError
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
 from textual.theme import Theme
@@ -718,14 +718,45 @@ class OrchestratorApp(App):
         if closed:
             # Evict cached screen for closed tab
             self._tab_active_session.pop(closed, None)
-            if closed in self._detail_screen_cache:
-                screen_name = f"detail:{closed}"
+            evicted = self._detail_screen_cache.pop(closed, None)
+            self._apply_tab_switch()
+            if evicted is not None:
+                # The closed tab's DetailScreen may still be on the screen
+                # stack right now (we just closed the active tab), and
+                # uninstall_screen raises while it is.  Defer until the tab
+                # switch has settled; _ensure_detail_screen reconciles any
+                # stragglers on the next open.
+                self.call_after_refresh(self._uninstall_detail_screen, closed)
+
+    def _uninstall_detail_screen(self, ws_id: str) -> None:
+        """Uninstall a closed tab's DetailScreen once it is off the stack."""
+        try:
+            self.uninstall_screen(f"detail:{ws_id}")
+        except ScreenError:
+            pass  # still on the stack; reconciled by _ensure_detail_screen
+
+    def _ensure_detail_screen(self, ws: Workstream) -> str:
+        """Return the installed screen name for ws's DetailScreen, creating it if needed.
+
+        Also reconciles the cache with Textual's installed-screen registry:
+        a deferred uninstall that fired while the screen was still on the
+        stack leaves a stale screen installed under this name with no cache
+        entry, and installing a fresh one over it would raise ScreenError.
+        """
+        screen_name = f"detail:{ws.id}"
+        if ws.id not in self._detail_screen_cache:
+            if self.is_screen_installed(screen_name):
                 try:
                     self.uninstall_screen(screen_name)
-                except Exception:
-                    pass
-                del self._detail_screen_cache[closed]
-            self._apply_tab_switch()
+                except ScreenError:
+                    # Stale screen still on the stack — adopt it back into
+                    # the cache instead of crashing on a duplicate install.
+                    self._detail_screen_cache[ws.id] = self.get_screen(screen_name)
+                    return screen_name
+            screen = DetailScreen(ws, self.state.store)
+            self._detail_screen_cache[ws.id] = screen
+            self.install_screen(screen, screen_name)
+        return screen_name
 
     def _apply_tab_switch(self):
         """Handle tab switch — open DetailScreen, CurrentSessionsScreen, or return to Home."""
@@ -820,11 +851,7 @@ class OrchestratorApp(App):
     def _finish_tab_switch(self, ws: Workstream) -> None:
         """Core: install/push the DetailScreen for ws and schedule optional session resume."""
         self._detail_screen_active = True
-        screen_name = f"detail:{ws.id}"
-        if ws.id not in self._detail_screen_cache:
-            screen = DetailScreen(ws, self.state.store)
-            self._detail_screen_cache[ws.id] = screen
-            self.install_screen(screen, screen_name)
+        screen_name = self._ensure_detail_screen(ws)
         self.push_screen(screen_name, callback=lambda _: self._on_detail_dismissed())
         self.call_after_refresh(lambda: setattr(self, '_tab_switch_in_progress', False))
         self._sync_tab_bar()
@@ -1967,13 +1994,8 @@ class OrchestratorApp(App):
         self.tabs.open_tab(ws.id, ws.name, "\u00b7")
         self._sync_tab_bar()
         self._detail_screen_active = True
-        screen_name = f"detail:{ws.id}"
-        if ws.id not in self._detail_screen_cache:
-            screen = DetailScreen(ws, self.state.store)
-            self._detail_screen_cache[ws.id] = screen
-            self.install_screen(screen, screen_name)
-        else:
-            screen = self._detail_screen_cache[ws.id]
+        screen_name = self._ensure_detail_screen(ws)
+        screen = self._detail_screen_cache[ws.id]
         if highlight_session_id:
             screen.request_session_highlight(highlight_session_id)
         self.push_screen(screen_name, callback=lambda _: self._on_detail_dismissed())
