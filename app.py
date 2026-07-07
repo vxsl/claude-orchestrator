@@ -38,6 +38,10 @@ from textual.widgets import (
 from textual.widgets.option_list import Option
 from textual._widget_navigation import find_next_enabled_no_wrap
 
+import textual_patches
+
+textual_patches.apply()
+
 # Monkeypatch OptionList to never wrap at top/bottom
 def _option_list_cursor_up(self) -> None:
     result = find_next_enabled_no_wrap(
@@ -462,7 +466,7 @@ class OrchestratorApp(App):
         self.set_timer(15, self._start_session_polling)
         self.set_timer(20, self._start_liveness_backstop)
 
-        self._throbber_timer = self.set_interval(0.15, self._tick_throbber)
+        self._throbber_timer = self.set_interval(0.3, self._tick_throbber)
 
         # Auto-cleanup of idle orch-launched Claude sessions.  Each lingering
         # session pins ~500 MB.  Runs every 10 min; threshold via env var.

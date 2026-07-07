@@ -603,7 +603,7 @@ class WsSessionListWidget(Static):
         # daemon just invalidated. Catches state transitions (e.g. thinking
         # → ready) within ~half a second instead of waiting for the next 2s tick.
         self.set_interval(0.5, self._refresh)
-        self.set_interval(0.1, self._tick_throbber)
+        self.set_interval(0.3, self._tick_throbber)
 
     def on_focus(self) -> None:
         self._repaint()

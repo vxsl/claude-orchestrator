@@ -1241,7 +1241,7 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         # Defers heavy work (session load, OptionList build) to after first frame
         # so the screen appears immediately with its structural elements.
         self._refresh_timer = self.set_interval(30, self._periodic_refresh)
-        self._throbber_timer = self.set_interval(0.15, self._tick_throbber)
+        self._throbber_timer = self.set_interval(0.3, self._tick_throbber)
         self._mounted_once = True
         if self._sessions_loading():
             self._loading_timer = self.set_interval(0.12, self._tick_loading)
@@ -1494,7 +1494,7 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         return hasattr(app, 'state') and not app.state.sessions_loaded
 
     def _tick_throbber(self):
-        """Animate thinking-session icons at ~10fps.
+        """Animate thinking-session icons at ~3fps.
 
         Targets only the rows that have an animating activity instead of
         rebuilding every option. With ~30 sessions and 1-2 animating, this
@@ -3809,7 +3809,7 @@ class CurrentSessionsScreen(_VimOptionListMixin, ModalScreen[None]):
         self._last_seen_cache = load_last_seen()
         self._load_sessions()
         self._refresh_timer = self.set_interval(5.0, self._load_sessions)
-        self._throbber_timer = self.set_interval(0.15, self._tick_throbber)
+        self._throbber_timer = self.set_interval(0.3, self._tick_throbber)
 
     def on_screen_resume(self) -> None:
         self._last_seen_cache = load_last_seen()
