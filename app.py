@@ -1754,38 +1754,47 @@ class OrchestratorApp(App):
     def _render_global_session_results(self, table: OptionList):
         """Populate the workstream table with cross-workstream session results.
 
+        The search itself runs off the event loop (``_do_global_search``): over
+        a 600MB+ transcript corpus, parsing matching JSONL inline would freeze
+        the whole TUI.  This method only *renders* the latest results the worker
+        produced and kicks a fresh worker when the query has changed.
+
         Each option's id is "gs:<session_id>" so on_ws_row_selected can route
         Enter to the owning workstream's DetailScreen.  We stash the
         result→ws map on self so the Enter handler doesn't have to recompute.
         """
-        n_sessions = len(self.state.sessions)
-        try:
-            results = self.state.global_session_search(self.state.search_text)
-        except Exception as e:
-            self.notify(f"Search error: {type(e).__name__}: {e}", severity="error", timeout=10)
-            results = []
+        query = self.state.search_text
+        # Query changed since the cached results were computed → recompute in a
+        # worker. The worker is exclusive, so a newer keystroke supersedes the
+        # in-flight one; stale results are rejected in _apply_global_search.
+        if query != getattr(self, "_global_search_query", None):
+            self._global_search_query = query
+            self._global_search_results = []
+            self._global_search_running = True
+            self._do_global_search(query)
+
+        results = getattr(self, "_global_search_results", [])
         self._global_search_map = {r.session.session_id: ws for r, ws in results}
         table.clear_options()
         if not results:
-            cache = self.state._global_content_cache
-            cached_with_msgs = sum(1 for v in cache.values() if v)
-            cached_empty = sum(1 for v in cache.values() if not v)
-            hint = (
-                f"  [{C_DIM}]No session matches "
-                f"(searched {n_sessions} sessions; cache: {cached_with_msgs} with msgs, "
-                f"{cached_empty} empty)[/{C_DIM}]"
-            )
-            if n_sessions == 0:
+            if getattr(self, "_global_search_running", False):
+                hint = f"  [{C_DIM}]Searching {len(self.state.sessions)} sessions…[/{C_DIM}]"
+            elif len(self.state.sessions) == 0:
                 hint = f"  [{C_DIM}]Sessions still loading… try again in a moment[/{C_DIM}]"
+            else:
+                hint = f"  [{C_DIM}]No session matches[/{C_DIM}]"
             table.add_options([Option(hint, id="__no_results__", disabled=True)])
         else:
+            # Preserve the cursor across streamed batches so results filling in
+            # don't keep yanking the selection back to the top.
+            old_hl = table.highlighted
             options = []
             for r, ws in results:
                 ws_name = ws.name if ws else None
                 prompt = _render_global_search_result(r, ws_name)
                 options.append(Option(prompt, id=f"gs:{r.session.session_id}"))
             table.add_options(options)
-            table.highlighted = 0
+            table.highlighted = min(old_hl or 0, len(options) - 1)
         # Invalidate caches the normal path relies on so a return to ws-mode
         # rebuilds cleanly.
         self._ws_render_cache = {}
@@ -1794,6 +1803,63 @@ class OrchestratorApp(App):
         bar_fp = self._bar_fingerprint()
         if bar_fp != getattr(self, '_last_bar_fp', None):
             self._update_all_bars()
+
+    @work(thread=True, exclusive=True, group="global_search")
+    def _do_global_search(self, query: str):
+        """Run the cross-workstream session search off the event loop.
+
+        ripgrep narrows the corpus (see AppState.global_session_search), then
+        only matching sessions are parsed here — but a single match can still
+        be a multi-MB JSONL, so this must not run on the UI thread.  Results
+        stream in newest-first so recent matches paint within a frame or two
+        even when a broad query has hundreds of candidates left to parse.
+        """
+        from textual.worker import get_current_worker
+
+        worker = get_current_worker()
+        acc: list = []
+        last_post = 0.0
+        try:
+            for pair in self.state.iter_global_session_search(query):
+                # Bail the moment a newer keystroke supersedes us.
+                if worker.is_cancelled or query != self.state.search_text:
+                    return
+                acc.append(pair)
+                now = _time.monotonic()
+                if now - last_post > 0.15:
+                    last_post = now
+                    self.call_from_thread(
+                        self._apply_global_search, query, list(acc), False
+                    )
+        except Exception as e:
+            self.call_from_thread(
+                self.notify,
+                f"Search error: {type(e).__name__}: {e}",
+                severity="error",
+            )
+        self.call_from_thread(self._apply_global_search, query, acc, True)
+
+    def _apply_global_search(self, query: str, results, done: bool):
+        """Store worker results and re-render — main thread only.
+
+        *results* is the running accumulation; we sort by score for display
+        here so streamed batches stay ranked without the worker re-sorting.
+        """
+        # Reject stale results: the user kept typing while this query ran.
+        if query != self.state.search_text:
+            return
+        ranked = sorted(results, key=lambda p: p[0].total_score, reverse=True)
+        self._global_search_results = ranked
+        self._global_search_running = not done
+        self._global_search_query = query
+        # Only repaint if we're still showing cross-workstream search results.
+        if not (self.state.search_mode == "sessions" and self.state.search_text):
+            return
+        try:
+            table = self.query_one("#ws-table", OptionList)
+        except Exception:
+            return
+        self._render_global_session_results(table)
 
     def _selected_ws(self) -> Workstream | None:
         try:

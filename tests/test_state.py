@@ -1426,6 +1426,117 @@ class TestGlobalSessionSearch:
         assert "gone" not in state._global_content_cache
 
 
+def _write_session_jsonl(path, *texts, role="user"):
+    """Write a minimal Claude-format JSONL transcript to *path*."""
+    import json
+    lines = [
+        json.dumps({
+            "type": role,
+            "message": {"content": text},
+            "timestamp": f"2026-03-{i+1:02d}T00:00:00Z",
+        })
+        for i, text in enumerate(texts)
+    ]
+    path.write_text("\n".join(lines) + "\n")
+
+
+class TestGlobalSearchDiscovery:
+    """global_session_search must reach uncached (old) sessions on disk.
+
+    The whole point of the search is unearthing old threads, so a session
+    that has never been parsed must still be found from its JSONL — this is
+    what the ripgrep pre-filter in _global_search_candidates provides.
+    """
+
+    def test_uncached_session_found_via_disk(self, state, tmp_path):
+        """A session not in the content cache is still discovered from its file."""
+        j = tmp_path / "old.jsonl"
+        _write_session_jsonl(j, "the quokka migration happened last winter")
+        s = _make_search_session("old")
+        s.jsonl_path = str(j)
+        state.sessions = [s]
+        assert state._global_content_cache == {}  # cold cache
+
+        pairs = state.global_session_search("quokka migration")
+        assert len(pairs) == 1
+        assert pairs[0][0].session.session_id == "old"
+
+    def test_nonmatching_file_excluded(self, state, tmp_path):
+        j = tmp_path / "other.jsonl"
+        _write_session_jsonl(j, "completely unrelated content")
+        s = _make_search_session("other")
+        s.jsonl_path = str(j)
+        state.sessions = [s]
+        assert state.global_session_search("quokka") == []
+
+    def test_title_only_match_found_without_body_hit(self, state, tmp_path):
+        """A name/title match surfaces even if the transcript body lacks the term."""
+        j = tmp_path / "body.jsonl"
+        _write_session_jsonl(j, "nothing relevant in here")
+        s = _make_search_session("titled")
+        s.jsonl_path = str(j)
+        s.title = "Quokka dashboard redesign"  # feeds display_name
+        state.sessions = [s]
+        pairs = state.global_session_search("quokka")
+        assert len(pairs) == 1
+        assert pairs[0][0].session.session_id == "titled"
+
+    def test_falls_back_to_full_scan_without_ripgrep(self, state, tmp_path, monkeypatch):
+        """With no ripgrep on PATH, every uncached session is still scanned."""
+        import state as state_mod
+        monkeypatch.setattr(state_mod.shutil, "which", lambda _: None)
+        j = tmp_path / "old.jsonl"
+        _write_session_jsonl(j, "the quokka migration happened")
+        s = _make_search_session("old")
+        s.jsonl_path = str(j)
+        state.sessions = [s]
+        pairs = state.global_session_search("quokka")
+        assert len(pairs) == 1
+        assert pairs[0][0].session.session_id == "old"
+
+    def test_streaming_yields_newest_first(self, state, tmp_path):
+        """iter_global_session_search streams matches, most-recent session first."""
+        older = tmp_path / "older.jsonl"
+        newer = tmp_path / "newer.jsonl"
+        _write_session_jsonl(older, "quokka sighting one")
+        _write_session_jsonl(newer, "quokka sighting two")
+        s_old = _make_search_session("old"); s_old.jsonl_path = str(older)
+        s_old.last_activity = "2026-01-01T00:00:00Z"
+        s_new = _make_search_session("new"); s_new.jsonl_path = str(newer)
+        s_new.last_activity = "2026-06-01T00:00:00Z"
+        state.sessions = [s_old, s_new]
+        got = [r.session.session_id for r, _ in state.iter_global_session_search("quokka")]
+        assert got == ["new", "old"]
+
+
+class TestRgFilesMatching:
+    def test_and_semantics_across_terms(self, tmp_path):
+        from state import _rg_files_matching
+        a = tmp_path / "a.jsonl"; a.write_text("alpha and beta together\n")
+        b = tmp_path / "b.jsonl"; b.write_text("only alpha here\n")
+        paths = [str(a), str(b)]
+        # Both terms must appear in the same file.
+        assert _rg_files_matching(["alpha", "beta"], paths) == {str(a)}
+        # Single term matches both.
+        assert _rg_files_matching(["alpha"], paths) == {str(a), str(b)}
+
+    def test_case_insensitive(self, tmp_path):
+        from state import _rg_files_matching
+        f = tmp_path / "c.jsonl"; f.write_text("The Deploy Pipeline\n")
+        assert _rg_files_matching(["deploy"], [str(f)]) == {str(f)}
+
+    def test_no_paths_returns_empty(self):
+        from state import _rg_files_matching
+        assert _rg_files_matching(["x"], []) == set()
+
+    def test_missing_ripgrep_returns_none(self, tmp_path, monkeypatch):
+        import state as state_mod
+        from state import _rg_files_matching
+        monkeypatch.setattr(state_mod.shutil, "which", lambda _: None)
+        f = tmp_path / "d.jsonl"; f.write_text("anything\n")
+        assert _rg_files_matching(["x"], [str(f)]) is None
+
+
 # ─── TabManager ──────────────────────────────────────────────────────
 
 from state import TabManager, TabState

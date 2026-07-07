@@ -8,6 +8,7 @@ renders AppState into widgets and routes key events to state mutations.
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 import time as _time
 from datetime import datetime
@@ -517,24 +518,31 @@ def content_search(
     query: str,
     sessions: list[ClaudeSession],
     content_cache: dict[str, list[SessionMessage]],
+    parse_missing: bool = True,
 ) -> list[SessionSearchResult]:
     """Search across all sessions, returning ranked results.
 
-    Populates *content_cache* for any sessions not yet extracted.
     Results are sorted by total_score descending.
+
+    When *parse_missing* is True (the default), any session not yet in
+    *content_cache* is extracted inline — convenient but O(corpus) file I/O
+    on the calling thread.  Callers on the event loop should pass
+    ``parse_missing=False`` so the search only scans sessions already cached
+    (see ``AppState.warm_global_content_cache`` for background population);
+    sessions not yet warmed are simply skipped this pass.
     """
     if not query.strip():
         return []
 
     results: list[SessionSearchResult] = []
     for s in sessions:
-        if s.session_id not in content_cache:
-            if s.jsonl_path:
-                content_cache[s.session_id] = extract_session_content(s.jsonl_path)
-            else:
-                content_cache[s.session_id] = []
+        messages = content_cache.get(s.session_id)
+        if messages is None:
+            if not parse_missing:
+                continue
+            messages = extract_session_content(s.jsonl_path) if s.jsonl_path else []
+            content_cache[s.session_id] = messages
 
-        messages = content_cache[s.session_id]
         result = search_session_content(query, messages, s)
         if result is not None:
             results.append(result)
@@ -567,6 +575,47 @@ def content_search(
 
     results.sort(key=lambda r: r.total_score, reverse=True)
     return results
+
+
+def _rg_files_matching(terms: list[str], paths: list[str]) -> set[str] | None:
+    """Return the subset of *paths* whose file contains every term in *terms*.
+
+    Uses ripgrep to scan the whole session corpus in a single native, parallel
+    pass (case-insensitive fixed-string, AND across terms) — orders of magnitude
+    faster than parsing every JSONL in Python, so a search still reaches the
+    oldest sessions without any pre-warming.
+
+    Matching a term anywhere in the file is a deliberate over-approximation of
+    the per-message AND that ``search_session_content`` applies afterwards: it
+    never drops a real match, it only narrows what needs parsing.
+
+    Returns None when ripgrep is unavailable so the caller can fall back to a
+    full in-process scan; an empty set means ripgrep ran and nothing matched.
+    """
+    if not terms or not paths:
+        return set()
+    rg = shutil.which("rg")
+    if not rg:
+        return None
+    matched: set[str] | None = None
+    for term in terms:
+        try:
+            proc = subprocess.run(
+                [rg, "-l", "-i", "-F", "-e", term, "--", *paths],
+                capture_output=True, text=True, timeout=15,
+            )
+        except Exception:
+            return None
+        # rg exit codes: 0 = matches found, 1 = no matches, 2 = real error.
+        if proc.returncode not in (0, 1):
+            return None
+        found = {ln for ln in proc.stdout.splitlines() if ln}
+        matched = found if matched is None else (matched & found)
+        if not matched:
+            return set()  # AND can only shrink the set — stop early
+    return matched or set()
+
+
 from threads import Thread, ThreadActivity, session_activity, load_last_seen, mark_thread_seen
 from rendering import _best_activity, _all_sessions_seen, _is_today
 
@@ -1170,11 +1219,100 @@ class AppState:
         by total_score (recency-bonused inside content_search) and each is
         paired with the owning workstream when one can be reverse-resolved.
         Returns an empty list when query is empty.
+
+        ripgrep narrows the full corpus to the handful of sessions worth
+        scoring first (see ``_global_search_candidates``), so only those get
+        parsed here.  Run this off the event loop — the parse of matching
+        sessions can still touch multi-MB JSONL files.
         """
         if not query.strip():
             return []
-        results = content_search(query, self.sessions, self._global_content_cache)
+        candidates = self._global_search_candidates(query)
+        results = content_search(
+            query, candidates, self._global_content_cache, parse_missing=True
+        )
         return [(r, self.find_ws_for_session(r.session)) for r in results]
+
+    def iter_global_session_search(self, query: str):
+        """Stream ``(result, ws)`` pairs, scoring candidates newest-first.
+
+        Same matching as :meth:`global_session_search`, but yielded
+        incrementally so a caller on a worker thread can render partial results
+        without waiting for the entire candidate set (which may total hundreds
+        of MB of JSONL) to parse.  Recent sessions — the likeliest targets —
+        surface first.
+        """
+        if not query.strip():
+            return
+        candidates = self._global_search_candidates(query)
+        candidates.sort(key=lambda s: s.last_activity or "", reverse=True)
+        for s in candidates:
+            messages = self._global_content_cache.get(s.session_id)
+            if messages is None:
+                messages = (
+                    extract_session_content(s.jsonl_path) if s.jsonl_path else []
+                )
+                self._global_content_cache[s.session_id] = messages
+            result = search_session_content(query, messages, s)
+            if result is not None:
+                yield (result, self.find_ws_for_session(result.session))
+
+    def _global_search_candidates(self, query: str) -> list[ClaudeSession]:
+        """Narrow the full session list to those worth scoring for *query*.
+
+        The expensive part of a search is parsing uncached JSONL, so we only
+        parse sessions that could plausibly match:
+
+        1. Sessions already in the content cache — searchable in memory with no
+           I/O, so always worth scoring (content_search skips non-matches).
+        2. Uncached sessions whose JSONL contains every term, per ripgrep's
+           fast whole-corpus scan (or all of them if ripgrep is unavailable).
+        3. Sessions whose title / last message matches in memory — catches
+           name-only hits whose transcript body doesn't contain the term.
+        """
+        phrases, words = _parse_query(query)
+        terms = phrases + words
+        if not terms:
+            return []
+
+        seen: set[str] = set()
+        candidates: list[ClaudeSession] = []
+
+        def add(s: ClaudeSession) -> None:
+            if s.session_id not in seen:
+                seen.add(s.session_id)
+                candidates.append(s)
+
+        # 1. Already-cached content (no file I/O to re-score).
+        uncached_by_path: dict[str, ClaudeSession] = {}
+        for s in self.sessions:
+            if s.session_id in self._global_content_cache:
+                add(s)
+            elif s.jsonl_path:
+                uncached_by_path.setdefault(s.jsonl_path, s)
+
+        # 2. Uncached sessions whose JSONL matches all terms.
+        matched_paths = _rg_files_matching(terms, list(uncached_by_path))
+        if matched_paths is None:
+            for s in uncached_by_path.values():  # no ripgrep → scan them all
+                add(s)
+        else:
+            for p in matched_paths:
+                s = uncached_by_path.get(p)
+                if s:
+                    add(s)
+
+        # 3. Title / metadata matches (cheap, in-memory).
+        for s in self.sessions:
+            if s.session_id in seen:
+                continue
+            title_text = " ".join(
+                filter(None, [s.display_name, s.last_message_text])
+            ).lower()
+            if title_text and all(t in title_text for t in terms):
+                add(s)
+
+        return candidates
 
     def find_ws_for_session(self, session: ClaudeSession) -> Workstream | None:
         """Reverse-lookup: find a workstream that owns this session.
@@ -1412,7 +1550,9 @@ class AppState:
         # Drop global-search content cache entries for sessions that disappeared,
         # but keep the rest so a re-query is fast.
         live_sids = {s.session_id for s in self.sessions}
-        stale = [sid for sid in self._global_content_cache if sid not in live_sids]
+        # Snapshot keys: the global-search worker thread may be inserting into
+        # this dict concurrently, and iterating it live would raise.
+        stale = [sid for sid in list(self._global_content_cache) if sid not in live_sids]
         for sid in stale:
             self._global_content_cache.pop(sid, None)
 
