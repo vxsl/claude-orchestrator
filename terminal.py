@@ -348,8 +348,14 @@ class TerminalWidget(Widget, can_focus=True):
 
     @perf_trace()
     def _render_tick(self) -> None:
-        """Flush pending terminal output to screen, capped at 20fps."""
+        """Flush pending terminal output to screen, capped at 20fps.
+
+        While orch's terminal is off screen, dirty state accumulates and the
+        flush is deferred — the first tick after it becomes visible catches up.
+        """
         if self._has_dirty and not self._sync_output:
+            if not getattr(self.app, "_ui_visible", True):
+                return
             self._has_dirty = False
             self._refresh_dirty()
 

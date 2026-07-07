@@ -1500,6 +1500,8 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         rebuilding every option. With ~30 sessions and 1-2 animating, this
         cuts per-tick markup work from N rows to K rows.
         """
+        if not getattr(self.app, "_ui_visible", True):
+            return
         if not (self._animating_sessions or self._animating_archived):
             return
         self._throbber_frame += 1
@@ -3816,6 +3818,8 @@ class CurrentSessionsScreen(_VimOptionListMixin, ModalScreen[None]):
         self._load_sessions()
 
     def _tick_throbber(self) -> None:
+        if not getattr(self.app, "_ui_visible", True):
+            return
         if self._animating_sessions:
             self._throbber_frame += 1
             self._build_list()

@@ -5,6 +5,7 @@ Every patch here must fall back to stock Textual behavior on any surprise,
 so a future Textual upgrade degrades to "slower but correct".
 """
 
+from textual.geometry import Region
 from textual.widgets import OptionList
 
 _applied = False
@@ -56,7 +57,19 @@ def _patch_option_list_replace_prompt() -> None:
             cache = self._option_render_cache  # keyed by (option, style, padding)
             for key in [k for k in cache.keys() if k[0] is option]:
                 cache.discard(key)
-            self.refresh()
+            # Repaint only the replaced row (refresh() regions are in content
+            # coordinates: gutter is added by _set_dirty, scrolling is applied
+            # in render_line). A row scrolled out of view needs no repaint at
+            # all — its strips are evicted and rebuild on demand.
+            line = self._line_cache.index_to_line.get(index)
+            if line is None:
+                self.refresh()
+                return
+            y = line - self.scroll_offset.y
+            viewport = self.scrollable_content_region
+            if y + old_height <= 0 or y >= viewport.height:
+                return
+            self.refresh(Region(0, y, viewport.width, old_height))
         except Exception:
             stock(self, index, prompt)
 

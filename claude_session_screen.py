@@ -615,6 +615,8 @@ class WsSessionListWidget(Static):
         self._repaint()
 
     def _tick_throbber(self) -> None:
+        if not getattr(self.app, "_ui_visible", True):
+            return
         if any(r[2] == ThreadActivity.THINKING for r in self._rows):
             self._throbber_frame = (self._throbber_frame + 1) % len(THROBBER_FRAMES)
             self._repaint()

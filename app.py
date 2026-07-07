@@ -90,6 +90,7 @@ from actions import (
     do_resume, resume_session_now, open_link,
     refresh_liveness,
     ws_working_dir, generate_tig_tigrc,
+    ui_is_visible,
 )
 from terminal import TerminalWidget
 from screens import (
@@ -166,6 +167,10 @@ class RenameInput(Input):
 
 class OrchestratorApp(App):
     """Claude Orchestrator — workstream & session dashboard."""
+
+    # Class-level default so ticks work on unmounted instances (tests);
+    # on_mount sets the real value and _check_ui_visibility maintains it.
+    _ui_visible = True
 
     CSS = f"""
     Screen {{
@@ -434,6 +439,13 @@ class OrchestratorApp(App):
         # Start tig after layout is computed so terminal size is correct
         self.call_after_refresh(self._init_main_tig)
 
+        # ── Visibility gating ──
+        # When orch's terminal is off screen (inactive VT, detached tmux),
+        # animation ticks across the app early-return so steady-state CPU is
+        # ~0 no matter how many sessions are THINKING.
+        self._ui_visible = ui_is_visible()
+        self.set_interval(3.0, self._check_ui_visibility)
+
         # ── Staggered timers ──
         # Spread 30s polling timers across time to prevent burst every 30s.
         # Each timer fires once immediately at its offset, then every 30s.
@@ -558,9 +570,25 @@ class OrchestratorApp(App):
             self._tig_update_timer.stop()
         self._tig_update_timer = self.set_timer(0.4, lambda: self._update_main_tig(self._selected_ws()))
 
+    def _check_ui_visibility(self):
+        """Track whether orch's terminal is on screen; repaint on return."""
+        visible = ui_is_visible()
+        if visible == self._ui_visible:
+            return
+        self._ui_visible = visible
+        if visible:
+            # Catch up on everything the ticks skipped while hidden.
+            try:
+                self._refresh_preview_sessions()
+                self._sync_tab_bar()
+            except Exception:
+                pass
+
     @perf_trace()
     def _tick_throbber(self):
         """Advance the throbber frame and refresh preview if any sessions are thinking."""
+        if not self._ui_visible:
+            return
         # Hold a single (act, unseen) cache for the whole tick so the bar
         # renderers below don't redundantly walk sessions per tab.
         self._tab_activity_cache = {}

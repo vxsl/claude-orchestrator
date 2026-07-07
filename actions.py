@@ -29,6 +29,65 @@ def has_tmux() -> bool:
     return bool(os.environ.get("TMUX"))
 
 
+def ui_is_visible() -> bool:
+    """Best-effort check that orch's terminal is actually on screen.
+
+    Detects the two ways orch runs 24/7 without being looked at: on a Linux
+    VT the user has switched away from, and in a tmux session that is
+    detached / whose window is inactive / whose only attached clients sit on
+    an inactive VT. Unknown setups (X terminal emulators, ssh pts) count as
+    visible. Override with ORCH_ASSUME_VISIBLE=1 (useful for profiling).
+    """
+    if os.environ.get("ORCH_ASSUME_VISIBLE"):
+        return True
+    try:
+        tty = os.ttyname(1)
+    except OSError:
+        return True
+    name = tty.removeprefix("/dev/")
+    if name.startswith("tty") and name[3:].isdigit():
+        return _vt_is_active(name)
+    if os.environ.get("TMUX"):
+        return _tmux_pane_visible()
+    return True
+
+
+def _vt_is_active(name: str) -> bool:
+    try:
+        return Path("/sys/class/tty/tty0/active").read_text().strip() == name
+    except OSError:
+        return True
+
+
+def _tmux_pane_visible() -> bool:
+    pane = os.environ.get("TMUX_PANE", "")
+    try:
+        out = subprocess.run(
+            ["tmux", "display-message", "-p", "-t", pane,
+             "#{session_attached},#{window_active},#{session_id}"],
+            capture_output=True, text=True, timeout=1,
+        ).stdout.strip()
+        attached, window_active, session_id = out.split(",")
+        if attached == "0" or window_active == "0":
+            return False
+        client_ttys = subprocess.run(
+            ["tmux", "list-clients", "-t", session_id, "-F", "#{client_tty}"],
+            capture_output=True, text=True, timeout=1,
+        ).stdout.split()
+        vt_names = [
+            t.removeprefix("/dev/")
+            for t in client_ttys
+            if t.startswith("/dev/tty") and t.removeprefix("/dev/tty").isdigit()
+        ]
+        if client_ttys and len(vt_names) == len(client_ttys):
+            # Every attached client is itself on a VT — visible only if one
+            # of those VTs is in the foreground.
+            return any(_vt_is_active(n) for n in vt_names)
+        return True
+    except Exception:
+        return True
+
+
 def _ensure_worker_session() -> None:
     """Ensure a persistent tmux session for Claude workers (survives orch restarts)."""
     result = subprocess.run(
