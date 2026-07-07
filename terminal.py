@@ -546,10 +546,18 @@ class TerminalWidget(Widget, can_focus=True):
         tmux_cmd.append(inner_cmd)
         result = subprocess.run(tmux_cmd, env=env, timeout=5, capture_output=True, text=True)
         if result.returncode != 0:
+            err = (result.stderr or "").strip() or "(no stderr)"
+            # The session already exists. The alive-check in app.py (a separate
+            # `has-session` subprocess) raced against us or timed out and returned
+            # a false negative, so we were told to create rather than reattach.
+            # A session named after the UUID is always `claude --resume <uuid>`,
+            # so attaching to the survivor is exactly what the caller wanted.
+            if "duplicate session" in err.lower():
+                self.attach_persistent(session_name)
+                return
             # tmux silently fails here cause "can't find session" downstream when
             # the attach runs against a session that was never created. Common
             # culprit: inner_cmd over tmux's ~16KB command-length limit.
-            err = (result.stderr or "").strip() or "(no stderr)"
             raise RuntimeError(
                 f"tmux new-session failed (rc={result.returncode}): {err} "
                 f"[inner_cmd was {len(inner_cmd)} bytes]"
