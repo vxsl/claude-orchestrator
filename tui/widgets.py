@@ -1,5 +1,5 @@
 """Widget primitives for the tui engine: ListView, BlockList, LineEdit,
-TextEdit, FuzzyList, FocusRing, footer_markup.
+TextEdit, Cycler, FuzzyList, FocusRing, footer_markup.
 
 Plain classes with no View dependency — views compose them, forward
 KeyEvents to `handle_key(ev) -> bool` (True = consumed), and paint the
@@ -400,6 +400,64 @@ class TextEdit:
         if dy < 0:
             return None
         return (self.col % width, dy)
+
+
+# ─── Cycler ────────────────────────────────────────────────────────
+
+
+class Cycler:
+    """Inline option cycler — the engine's Select replacement for forms.
+
+    Holds (value, label) options; left cycles back, right/space cycle
+    forward, rendering "‹ label ›". FocusRing-compatible handle_key;
+    enter fires on_submit so forms can treat it like a LineEdit.
+    """
+
+    def __init__(self, options: list[tuple[Any, str]], value: Any = None) -> None:
+        self.options = list(options)
+        self.index = 0
+        if value is not None:
+            for i, (v, _label) in enumerate(self.options):
+                if v == value:
+                    self.index = i
+                    break
+        self.on_change: Callable[[Any], None] | None = None
+        self.on_submit: Callable[[Any], None] | None = None
+
+    @property
+    def value(self) -> Any | None:
+        return self.options[self.index][0] if self.options else None
+
+    @property
+    def label(self) -> str:
+        return self.options[self.index][1] if self.options else ""
+
+    def handle_key(self, ev: KeyEvent) -> bool:
+        if ev.key == "left":
+            self._cycle(-1)
+            return True
+        if ev.key in ("right", "space"):
+            self._cycle(1)
+            return True
+        if ev.key == "enter":
+            if self.on_submit is not None:
+                self.on_submit(self.value)
+                return True
+            return False
+        return False
+
+    def _cycle(self, step: int) -> None:
+        if not self.options:
+            return
+        self.index = (self.index + step) % len(self.options)
+        if self.on_change is not None:
+            self.on_change(self.value)
+
+    def render(self, width: int) -> str:
+        return f"[dim]‹[/dim] {_escape(self.label)} [dim]›[/dim]"
+
+    def cursor_col(self, width: int) -> int:
+        return min(2, max(0, width - 1))  # on the label, like a field cursor
 
 
 # ─── FuzzyList ─────────────────────────────────────────────────────

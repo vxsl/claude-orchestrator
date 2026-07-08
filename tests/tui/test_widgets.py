@@ -10,7 +10,7 @@ from tui.frame import Frame
 from tui.keys import KeyEvent
 from tui.testing import make_key_event
 from tui.widgets import (
-    HIGHLIGHT_BG, FuzzyList, LineEdit, ListView, TextEdit,
+    HIGHLIGHT_BG, Cycler, FuzzyList, LineEdit, ListView, TextEdit,
     footer_markup, strip_markup,
 )
 
@@ -579,6 +579,60 @@ def test_fuzzylist_set_items_refilters_with_current_query():
     fl.set_items([("b2", "berry"), ("z", "zzz")])
     assert [r[0] for r in fl.list.rows] == ["b2"]
     assert fl.status == "1 of 2"
+
+
+# ─── Cycler ───────────────────────────────────────────────────────
+
+
+class TestCycler:
+    OPTS = [("w", "work"), ("p", "personal"), ("m", "meta")]
+
+    def test_starts_at_given_value(self):
+        assert Cycler(self.OPTS, value="p").value == "p"
+        assert Cycler(self.OPTS).value == "w"  # default: first option
+
+    def test_right_and_space_cycle_forward_with_wrap(self):
+        c = Cycler(self.OPTS)
+        press(c, "right", "space")
+        assert c.value == "m"
+        press(c, "right")
+        assert c.value == "w"  # wrapped
+
+    def test_left_cycles_back_with_wrap(self):
+        c = Cycler(self.OPTS)
+        press(c, "left")
+        assert c.value == "m"
+
+    def test_on_change_fires_with_new_value(self):
+        seen = []
+        c = Cycler(self.OPTS)
+        c.on_change = seen.append
+        press(c, "right", "left")
+        assert seen == ["p", "w"]
+
+    def test_enter_fires_on_submit_else_unconsumed(self):
+        c = Cycler(self.OPTS)
+        assert c.handle_key(make_key_event("enter")) is False
+        got = []
+        c.on_submit = got.append
+        assert c.handle_key(make_key_event("enter")) is True
+        assert got == ["w"]
+
+    def test_other_keys_unconsumed(self):
+        c = Cycler(self.OPTS)
+        for name in ("j", "a", "tab", "backspace"):
+            assert c.handle_key(make_key_event(name)) is False
+        assert c.value == "w"
+
+    def test_render_shows_chevroned_label(self):
+        c = Cycler([("x", "the [label]")])
+        out = c.render(40)
+        assert strip_markup(out) == "‹ the [label] ›"
+
+    def test_empty_options_safe(self):
+        c = Cycler([])
+        press(c, "right", "left", "space")
+        assert c.value is None and c.label == ""
 
 
 # ─── footer_markup ────────────────────────────────────────────────
