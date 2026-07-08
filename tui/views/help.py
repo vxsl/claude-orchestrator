@@ -1,8 +1,8 @@
 """HelpView — port of screens.HelpScreen (P4-B).
 
-Context-sensitive, fuzzy-filterable key reference. Contexts ported so
-far: home, todo, trash; the rest (detail, session, sessions) land with
-their screens in P4-C/P5 and fall back to home until then. Selecting
+Context-sensitive, fuzzy-filterable key reference. Contexts ported:
+home, detail, sessions, todo, trash; "session" (the embedded Claude
+screen) lands with P5 and falls back to home until then. Selecting
 any row just closes the help, as the original.
 """
 
@@ -85,6 +85,68 @@ class HelpView(FuzzyModalView):
         ]
 
     @classmethod
+    def _detail_items(cls) -> list[tuple[str, str]]:
+        H, D, K = cls._hdr, cls._desc, cls._key
+        return [
+            H("What you're looking at"),
+            D("The detail view for a workstream — all its sessions and metadata.", 1),
+            D("Active sessions appear at top, archived below.", 2),
+            D("The “earlier” divider separates today's work from older sessions.", 3),
+            D("", 4),
+            H("Navigate"),
+            K("nav-jk", "j / k", "Move down / up"),
+            K("nav-pg", "Ctrl+D / U", "Half-page down / up"),
+            K("nav-enter", "Enter / l", "Open selected session"),
+            K("nav-back", "h / Ctrl+H", "Go back to workstream list"),
+            K("nav-panel", "Ctrl+J / K", "Cycle between panels"),
+            H("Sessions"),
+            K("sess-spawn", "c", "New Claude session"),
+            K("sess-resume", "r / Ctrl+L", "Resume selected session"),
+            K("sess-peek", "p", "Peek at session messages"),
+            K("sess-archive", "Space", "Archive / restore session"),
+            K("sess-defer", "z", "Shelve session (set aside for later)"),
+            K("sess-yank", "y", "Copy resume command to clipboard"),
+            K("sess-trash", "X", "Move to trash"),
+            H("Workstream"),
+            K("ws-note", "n", "Quick todo"),
+            K("ws-todos", "e", "Full todo list"),
+            K("ws-link", "W", "Add link"),
+            K("ws-open", "o", "Open links"),
+            K("ws-files", "f", "Browse files in workstream directory"),
+            K("ws-tig", "t", "Git status/log (tig, fullscreen)"),
+            K("ws-archive", "u", "Archive workstream"),
+            K("nav-close", "x", "Close tab"),
+            H("Notifications"),
+            K("notif-dismiss", "d", "Dismiss notification"),
+            K("notif-all", "D", "Dismiss all notifications"),
+            H("Find things"),
+            K("flt-search", "/", "Search session content"),
+            K("flt-titles", "\\\\", "Search session titles only"),
+            K("cmd-palette", ":", "Command palette"),
+            K("help", "?", "This help"),
+        ]
+
+    @classmethod
+    def _sessions_items(cls) -> list[tuple[str, str]]:
+        H, D, K = cls._hdr, cls._desc, cls._key
+        return [
+            H("What you're looking at"),
+            D("All active sessions across all your workstreams.", 1),
+            D("A cross-cutting view — see everything that's running.", 2),
+            D("", 3),
+            H("Navigate"),
+            K("nav-jk", "j / k", "Move down / up"),
+            K("nav-enter", "Enter / l", "Open selected session"),
+            K("nav-back", "Ctrl+H", "Go back"),
+            H("Sessions"),
+            K("sess-resume", "r", "Resume selected session"),
+            K("sess-archive", "Space", "Archive session"),
+            H("Other"),
+            K("cmd-palette", ":", "Command palette"),
+            K("help", "?", "This help"),
+        ]
+
+    @classmethod
     def _todo_items(cls) -> list[tuple[str, str]]:
         H, D, K = cls._hdr, cls._desc, cls._key
         return [
@@ -123,13 +185,17 @@ class HelpView(FuzzyModalView):
 
     def __init__(self, context: str = "home") -> None:
         self._help_ctx = context
-        titles = {"home": "Workstreams", "todo": "Todo List", "trash": "Trash"}
+        titles = {"home": "Workstreams", "detail": "Workstream Detail",
+                  "sessions": "All Sessions", "todo": "Todo List",
+                  "trash": "Trash"}
         label = titles.get(context, "Help")
         super().__init__(title=f"{label} — Help", hint=_HINT)
 
     def _get_items(self) -> list[tuple[str, str]]:
         getter = {
             "home": self._home_items,
+            "detail": self._detail_items,
+            "sessions": self._sessions_items,
             "todo": self._todo_items,
             "trash": self._trash_items,
         }.get(self._help_ctx, self._home_items)

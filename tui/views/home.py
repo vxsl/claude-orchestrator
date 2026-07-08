@@ -74,6 +74,65 @@ def _divider_line(width: int = 40) -> str:
     return f"[{C_FAINT}]{'─' * pad} earlier {'─' * pad}[/{C_FAINT}]"
 
 
+def tab_activity(state, ws_id: str | None):
+    """(activity, icon_markup) for a workstream tab; '' markup when idle."""
+    if not ws_id:
+        return ThreadActivity.IDLE, ""
+    ws = state.get_ws(ws_id)
+    if not ws:
+        return ThreadActivity.IDLE, ""
+    sessions = state.sessions_for_ws(ws)
+    if not sessions:
+        return ThreadActivity.IDLE, ""
+    last_seen = state.last_seen_cache
+    act = _best_activity(sessions, last_seen)
+    if act == ThreadActivity.IDLE:
+        return act, ""
+    unseen = any(
+        not _is_session_seen(s, last_seen)
+        for s in sessions
+        if session_activity(s, last_seen) == act
+    )
+    return act, _activity_icon(act, state.throbber_frame, seen=not unseen)
+
+
+def render_tab_bar(state, tabs) -> str:
+    """Tab bar markup line (port of app.py's _render_tab_bar), shared by
+    Home / Detail / CurrentSessions — every tab surface renders it from
+    the same TabManager state."""
+    parts = []
+    for i, tab in enumerate(tabs.tabs):
+        prefix = f"{tab.icon} " if tab.icon else ""
+        is_permanent = tab.ws_id is None
+        is_active = i == tabs.active_idx
+        ws_label = tab.label
+        if not is_permanent and len(ws_label) > 20:
+            ws_label = ws_label[:20] + "…"
+        act_prefix = ""
+        if not is_permanent:
+            _, act_icon = tab_activity(state, tab.ws_id)
+            if act_icon:
+                act_prefix = f"{act_icon} "
+        if is_active and is_permanent:
+            content = f"[bold italic {C_MID} on {BG_BASE}] {prefix}{_rich_escape(ws_label)} [/]"
+        elif is_active:
+            content = (
+                f"[on {BG_BASE}] {act_prefix}[/on {BG_BASE}]"
+                f"[bold {C_BLUE} on {BG_BASE}]{prefix}{_rich_escape(ws_label)} [/]"
+            )
+        elif is_permanent:
+            content = f"[italic {C_FAINT} on {BG_RAISED}] {prefix}{_rich_escape(ws_label)} [/]"
+        else:
+            content = (
+                f"[on {BG_RAISED}] {act_prefix}[/on {BG_RAISED}]"
+                f"[{C_DIM} on {BG_RAISED}]{prefix}{_rich_escape(ws_label)} [/{C_DIM} on {BG_RAISED}]"
+            )
+        parts.append(content)
+        if i < len(tabs.tabs) - 1:
+            parts.append(f"[{C_FAINT}]│[/{C_FAINT}]")
+    return "".join(parts)
+
+
 class HomeView(View):
     def __init__(self, state, tabs) -> None:
         super().__init__()
@@ -721,59 +780,8 @@ class HomeView(View):
 
     # ── bars (ports of app.py's renderers) ────────────────────────
 
-    def _tab_activity(self, ws_id: str | None):
-        """(activity, icon_markup) for a workstream tab; '' markup when idle."""
-        if not ws_id:
-            return ThreadActivity.IDLE, ""
-        ws = self.state.get_ws(ws_id)
-        if not ws:
-            return ThreadActivity.IDLE, ""
-        sessions = self.state.sessions_for_ws(ws)
-        if not sessions:
-            return ThreadActivity.IDLE, ""
-        last_seen = self.state.last_seen_cache
-        act = _best_activity(sessions, last_seen)
-        if act == ThreadActivity.IDLE:
-            return act, ""
-        unseen = any(
-            not _is_session_seen(s, last_seen)
-            for s in sessions
-            if session_activity(s, last_seen) == act
-        )
-        return act, _activity_icon(act, self.state.throbber_frame, seen=not unseen)
-
     def _render_tab_bar(self) -> str:
-        parts = []
-        for i, tab in enumerate(self.tabs.tabs):
-            prefix = f"{tab.icon} " if tab.icon else ""
-            is_permanent = tab.ws_id is None
-            is_active = i == self.tabs.active_idx
-            ws_label = tab.label
-            if not is_permanent and len(ws_label) > 20:
-                ws_label = ws_label[:20] + "…"
-            act_prefix = ""
-            if not is_permanent:
-                _, act_icon = self._tab_activity(tab.ws_id)
-                if act_icon:
-                    act_prefix = f"{act_icon} "
-            if is_active and is_permanent:
-                content = f"[bold italic {C_MID} on {BG_BASE}] {prefix}{_rich_escape(ws_label)} [/]"
-            elif is_active:
-                content = (
-                    f"[on {BG_BASE}] {act_prefix}[/on {BG_BASE}]"
-                    f"[bold {C_BLUE} on {BG_BASE}]{prefix}{_rich_escape(ws_label)} [/]"
-                )
-            elif is_permanent:
-                content = f"[italic {C_FAINT} on {BG_RAISED}] {prefix}{_rich_escape(ws_label)} [/]"
-            else:
-                content = (
-                    f"[on {BG_RAISED}] {act_prefix}[/on {BG_RAISED}]"
-                    f"[{C_DIM} on {BG_RAISED}]{prefix}{_rich_escape(ws_label)} [/{C_DIM} on {BG_RAISED}]"
-                )
-            parts.append(content)
-            if i < len(self.tabs.tabs) - 1:
-                parts.append(f"[{C_FAINT}]│[/{C_FAINT}]")
-        return "".join(parts)
+        return render_tab_bar(self.state, self.tabs)
 
     def _render_status_bar(self) -> tuple[str, str]:
         SEP = f"  [{C_FAINT}]·[/{C_FAINT}]  "
