@@ -11,8 +11,10 @@ confirm, as in the Textual app). P4-B wired the rest of the home
 modals: 'a' add, 'n' quick note, 'e' todos, 'W' add link, 'o' links,
 'b' brain dump chain, '?' help, ':' command palette (trash reachable
 through it), and multi-match 'r' resume now opens SessionPickerView.
-Remaining stubs: detail/tabs (P4-C), rename inline input, dev-workflow
-actions, session content search.
+P4-C wired tabs: enter/l opens the workstream's DetailView tab,
+ctrl+b/ctrl+x cycle Home ↔ Sessions ↔ Detail tabs, 'x' closes; the
+palette moved to OrchApp (detail-aware). Remaining stubs: 'E' rename
+inline input, dev-workflow actions, global session content search.
 
 Not in this phase (see MIGRATION.md): the two embedded tig panes that
 filled the lower half of the Textual home (P5/P6) — the lists own the
@@ -49,15 +51,14 @@ from .brain_preview import BrainPreviewView
 from .confirm import ConfirmView
 from .help import HelpView
 from .links import LinksView
-from .modals import FuzzyModalView
 from .pickers import SENTINEL_NEW, RepoPickerView, WorkstreamPickerView
 from .quick_note import QuickNoteView
 from .session_picker import SessionPickerView
 from .todo import TodoView
 from .trash import TrashView
 
-STUB_DETAIL = "Detail view lands in P4 — ORCH_ENGINE=textual for full UI"
-STUB_TABS = "Tabs land in P4 — ORCH_ENGINE=textual for full UI"
+STUB_RENAME = "Rename lands in P4"
+STUB_DEV_WORKFLOW = "Dev-workflow actions land in P4"
 
 
 def _markup_lines(content: Any) -> list[str]:
@@ -204,10 +205,10 @@ class HomeView(View):
             "cursor_bottom": lambda: self._nav("G"),
             "half_page_down": lambda: self._nav("ctrl+d"),
             "half_page_up": lambda: self._nav("ctrl+u"),
-            "select_item": stub(STUB_DETAIL),
-            "next_tab": stub(STUB_TABS),
-            "prev_tab": stub(STUB_TABS),
-            "close_tab": stub(STUB_TABS),
+            "select_item": self._action_select_item,
+            "next_tab": lambda: self.app.action_next_tab(),
+            "prev_tab": lambda: self.app.action_prev_tab(),
+            "close_tab": lambda: self.app.action_close_tab(),
             "add": self._action_add,
             "brain_dump": self._action_brain_dump,
             "spawn": self._action_spawn,
@@ -216,7 +217,7 @@ class HomeView(View):
             "link_action": self._action_add_link,
             "quick_note": self._action_quick_note,
             "edit_notes": self._action_edit_notes,
-            "rename": stub("Rename lands in P4"),
+            "rename": stub(STUB_RENAME),
             "open_links": self._action_open_links,
             "toggle_archive": self._action_toggle_archive,
             "delete_item": self._action_delete,
@@ -230,10 +231,10 @@ class HomeView(View):
             "sort('created')": lambda: self._set_sort("created"),
             "sort('category')": lambda: self._set_sort("category"),
             "sort('name')": lambda: self._set_sort("name"),
-            "ship": stub("Dev-workflow actions land in P4"),
-            "ticket": stub("Dev-workflow actions land in P4"),
-            "branches": stub("Dev-workflow actions land in P4"),
-            "rr": stub("Dev-workflow actions land in P4"),
+            "ship": stub(STUB_DEV_WORKFLOW),
+            "ticket": stub(STUB_DEV_WORKFLOW),
+            "branches": stub(STUB_DEV_WORKFLOW),
+            "rr": stub(STUB_DEV_WORKFLOW),
             "command_palette": self._action_command_palette,
             "toggle_preview": self._toggle_preview,
             "refresh": self._action_refresh,
@@ -290,6 +291,12 @@ class HomeView(View):
     def _action_quit(self) -> None:
         if self.app is not None:
             self.app.exit()
+
+    def _action_select_item(self) -> None:
+        """Enter/l: open the selected workstream's detail tab."""
+        ws = self._selected_ws()
+        if ws:
+            self.app.open_detail(ws)
 
     def _action_refresh(self) -> None:
         self.state.store.load()
@@ -429,10 +436,10 @@ class HomeView(View):
                 created.append(ws)
             self.refresh_rows()
             if mode == "launch" and created:
-                # app.py opens the Detail view here; Detail is P4-C, so
-                # launch directly (suspend-attach fallback).
+                # Port of app._do_brain: open the first workstream's detail
+                # tab (the original stopped there too — no auto-launch).
                 self._toast(f"Added {len(created)} workstreams — launching session...")
-                self.app.launch_claude_session(created[0])
+                self.app.open_detail(created[0])
             else:
                 self._toast(f"Added {len(created)} workstreams")
 
@@ -477,67 +484,9 @@ class HomeView(View):
     # ── command palette ───────────────────────────────────────────
 
     def _action_command_palette(self) -> None:
-        """Port of app.action_command_palette: a FuzzyModalView over
-        state's command registry with injected items."""
-        from state import get_command_items
-
-        view = FuzzyModalView(title="Command Palette")
-        view._get_items = lambda: get_command_items(
-            self._selected_ws() is not None
-        )
-
-        def on_cmd(cmd_name) -> None:
-            if cmd_name:
-                self._execute_command(cmd_name)
-
-        self.app.push(view, on_result=on_cmd)
-
-    def _execute_command(self, cmd_text: str) -> None:
-        """Port of app._execute_command, home context only (the Detail
-        delegation branches return with Detail in P4-C)."""
-        ws = self._selected_ws()
-        result = self.state.execute_command(cmd_text, ws.id if ws else None)
-        action = result.get("action", "noop")
-        msg = result.get("msg", "")
-
-        if action == "refresh":
-            self.refresh_rows()
-            if msg:
-                self._toast(msg)
-        elif action in ("notify", "error"):
-            self._toast(msg)
-        elif action == "add":
-            self._action_add()
-        elif action == "rename":
-            self._toast("Rename lands in P4")
-        elif action == "open":
-            self._action_open_links()
-        elif action == "spawn":
-            self._action_spawn()
-        elif action == "resume":
-            self._action_resume()
-        elif action == "export":
-            output, count = self.state.do_export(result.get("path", ""))
-            self._toast(f"Exported {count} workstreams to {output}")
-        elif action == "brain":
-            text = result.get("text", "")
-            if text:
-                self._do_brain(text)
-            else:
-                self._action_brain_dump()
-        elif action == "close":
-            self._toast(STUB_TABS)
-        elif action == "help":
-            self._action_help()
-        elif action == "delete":
-            self._action_delete()
-        elif action == "unarchive":
-            self._action_toggle_archive()
-        elif action == "trash":
-            self._action_view_trash()
-        elif action in ("ship", "ticket", "ticket-create", "branches",
-                        "files", "git-action", "solve", "worktree", "rr"):
-            self._toast("Dev-workflow actions land in P4")
+        """':' — the palette itself lives on OrchApp (detail-aware since
+        P4-C: ws commands delegate to an active DetailView)."""
+        self.app.open_command_palette()
 
     def _action_toggle_archive(self) -> None:
         """Port of app.action_toggle_archive (no confirm, same as Textual)."""

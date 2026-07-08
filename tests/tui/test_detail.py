@@ -18,6 +18,7 @@ from sessions import ClaudeSession
 from tui.orch_app import OrchApp
 from tui.testing import Headless
 from tui.views.add_link import AddLinkView
+from tui.views.current_sessions import CurrentSessionsView
 from tui.views.detail import DetailView
 from tui.views.help import HelpView
 from tui.views.links import LinksView
@@ -701,3 +702,165 @@ class TestBackCascade:
             assert isinstance(h.top, DetailView)
             await h.press("ctrl+h")  # 3rd: dismiss
             assert h.top is detail_app.home
+
+
+# ─── tabs (OrchApp machinery) ────────────────────────────────────────
+
+
+@pytest.fixture
+def tabs_app(populated_store):
+    """OrchApp with per-ws fake sessions for the first two workstreams."""
+    app = OrchApp(store_path=populated_store.path, pollers=False)
+    ws1, ws2 = app.state.store.active[:2]
+    s1, s2 = make_session(1), make_session(2)
+    s3, s4 = make_session(3), make_session(4)
+    by_ws = {ws1.id: [s1, s2], ws2.id: [s3, s4]}
+    app.state.sessions = [s1, s2, s3, s4]
+    app.state.sessions_loaded = True
+    app.state.sessions_for_ws = (
+        lambda w, include_archived_sessions=False: list(by_ws.get(w.id, []))
+    )
+    app.state.notifications_for_ws = lambda w: []
+    app._ws1, app._ws2 = ws1, ws2
+    return app
+
+
+@pytest.mark.asyncio
+class TestTabs:
+    async def test_enter_opens_detail_esc_returns_but_tab_stays(self, tabs_app):
+        async with detail_headless(tabs_app) as h:
+            ws_id = h.app.home.ws_list.highlighted_id
+            await h.press("enter")
+            assert isinstance(h.top, DetailView)
+            assert h.app.tabs.active_tab.ws_id == ws_id
+            ws_name = h.app.state.get_ws(ws_id).name
+            assert ws_name[:20] in h.screen_text()  # tab bar label
+            await h.press("escape")
+            assert h.top is h.app.home
+            assert h.app.tabs.active_idx == 0  # back on the home tab
+            assert any(t.ws_id == ws_id for t in h.app.tabs.tabs)  # tab open
+
+    async def test_cycle_preserves_each_details_highlight(self, tabs_app):
+        async with detail_headless(tabs_app) as h:
+            home = h.app.home
+            # open detail for ws at row 0, move its highlight down one block
+            await h.press("enter", "j")
+            d1 = h.top
+            d1_hl = d1.sessions_list.highlighted_id
+            await h.press("escape")
+            # open detail for the second workstream, leave highlight at top
+            await h.press("j", "enter")
+            d2 = h.top
+            assert d2 is not d1
+            d2_hl = d2.sessions_list.highlighted_id
+            await h.press("escape")
+            assert h.top is home
+
+            # cycle: home → sessions → d1 → d2 → home
+            await h.press("ctrl+b")
+            assert isinstance(h.top, CurrentSessionsView)
+            await h.press("ctrl+b")
+            assert h.top is d1  # same cached instance
+            assert d1.sessions_list.highlighted_id == d1_hl
+            await h.press("ctrl+b")
+            assert h.top is d2
+            assert d2.sessions_list.highlighted_id == d2_hl
+            await h.press("ctrl+b")
+            assert h.top is home
+            # and backwards
+            await h.press("ctrl+x")
+            assert h.top is d2
+
+    async def test_close_tab_evicts_cache_and_falls_back(self, tabs_app):
+        async with detail_headless(tabs_app) as h:
+            await h.press("enter", "escape")        # open d1, back home
+            await h.press("j", "enter")             # open d2 (active)
+            d2 = h.top
+            ws2_id = d2.ws.id
+            assert ws2_id in h.app._detail_cache
+            await h.press("x")                      # close d2's tab
+            assert ws2_id not in h.app._detail_cache
+            assert isinstance(h.top, DetailView)    # previous tab: d1
+            assert h.top.ws.id != ws2_id
+            await h.press("x")                      # close d1's tab too
+            assert isinstance(h.top, CurrentSessionsView)  # permanent tab 1
+            await h.press("x")                      # permanent: no-op
+            assert isinstance(h.top, CurrentSessionsView)
+
+    async def test_reopening_closed_tab_builds_fresh_view(self, tabs_app):
+        async with detail_headless(tabs_app) as h:
+            await h.press("enter")
+            first = h.top
+            await h.press("x")
+            # closing the only ws tab falls back to the previous permanent
+            # tab — Sessions (TabManager.close_tab: active = index - 1)
+            assert isinstance(h.top, CurrentSessionsView)
+            await h.press("ctrl+x")  # back to the home tab
+            assert h.top is h.app.home
+            await h.press("enter")
+            assert isinstance(h.top, DetailView)
+            assert h.top is not first  # cache was evicted
+
+    async def test_open_detail_reuses_cached_view(self, tabs_app):
+        async with detail_headless(tabs_app) as h:
+            await h.press("enter")
+            first = h.top
+            await h.press("escape", "enter")
+            assert h.top is first
+
+    async def test_tab_bar_lists_open_tabs_everywhere(self, tabs_app):
+        async with detail_headless(tabs_app) as h:
+            await h.press("enter", "escape")
+            name = next(t.label for t in h.app.tabs.tabs if t.ws_id)
+            assert name[:20] in h.screen_text()  # home renders the open tab
+            await h.press("ctrl+b")  # sessions tab renders it too
+            assert isinstance(h.top, CurrentSessionsView)
+            assert name[:20] in h.screen_text()
+
+
+# ─── command palette (detail-scoped commands) ────────────────────────
+
+
+@pytest.mark.asyncio
+class TestDetailPalette:
+    async def _open_detail_palette(self, h):
+        await h.press("enter")
+        assert isinstance(h.top, DetailView)
+        detail = h.top
+        await h.press("colon")
+        return detail
+
+    async def test_spawn_delegates_to_detail_ws(self, tabs_app):
+        launched = []
+        async with detail_headless(tabs_app) as h:
+            h.app.launch_claude_session = lambda w, **kw: launched.append(w)
+            detail = await self._open_detail_palette(h)
+            await h.feed_bytes(b"spawn")
+            await h.press("enter")
+            assert launched == [detail.ws]
+
+    async def test_resume_delegates_to_detail_highlight(self, tabs_app):
+        launched = []
+        async with detail_headless(tabs_app) as h:
+            h.app.launch_claude_session = \
+                lambda w, **kw: launched.append(kw.get("session_id"))
+            detail = await self._open_detail_palette(h)
+            sid = detail.sessions_list.highlighted_id
+            await h.feed_bytes(b"resume")
+            await h.press("enter")
+            assert launched == [sid]
+
+    async def test_rename_notifies_detail_hint(self, tabs_app):
+        async with detail_headless(tabs_app) as h:
+            await self._open_detail_palette(h)
+            await h.feed_bytes(b"rename")
+            await h.press("enter")
+            assert "Use 'E' to rename" in tabs_app.toast_text
+
+    async def test_close_command_closes_tab(self, tabs_app):
+        async with detail_headless(tabs_app) as h:
+            detail = await self._open_detail_palette(h)
+            await h.feed_bytes(b"close")
+            await h.press("enter")
+            assert not isinstance(h.top, DetailView)  # tab closed
+            assert detail.ws.id not in h.app._detail_cache

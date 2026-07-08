@@ -326,15 +326,18 @@ class TestBrainDumpWiring:
             assert "fix login page" in names and "water plants" in names
             assert h.app.toast_text == "Added 2 workstreams"
 
-    async def test_b_chain_launch_uses_launch_claude_session(self, home_app, monkeypatch):
+    async def test_b_chain_launch_opens_detail_tab(self, home_app, monkeypatch):
+        """The launch branch opens the first created ws's detail tab, as
+        app.py's _do_brain (P4-C replaced the interim direct-launch)."""
+        from tui.views.detail import DetailView
+
         monkeypatch.setattr(brain, "parse_brain_dump", lambda text: _fake_tasks())
-        launched = []
         async with Headless(home_app) as h:
-            h.app.launch_claude_session = lambda ws, **kw: launched.append(ws)
             await h.press("b")
             await h.feed_bytes(b"whatever")
             await h.press("ctrl+s", "l")
-            assert [w.name for w in launched] == ["fix login page"]
+            assert isinstance(h.top, DetailView)
+            assert h.top.ws.name == "fix login page"
             assert "launching session" in h.app.toast_text
 
     async def test_b_chain_no_tasks_toasts(self, home_app, monkeypatch):

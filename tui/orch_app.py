@@ -29,6 +29,8 @@ from state import AppState, TabManager
 
 from .app import App
 from .view import Timer
+from .views.current_sessions import CurrentSessionsView
+from .views.detail import DetailView
 from .views.home import HomeView
 
 TOAST_SECS = 3.0
@@ -46,6 +48,9 @@ class OrchApp(App):
         self._bg_started = False
         self._session_bridge: SessionBridge | None = None
         self._session_watcher = None
+        self._detail_cache: dict[str, DetailView] = {}  # ws_id -> cached view
+        self._current_sessions_view: CurrentSessionsView | None = None
+        self._tab_keymap = self._build_tab_keymap()
 
         # Rate limiters (ports of app.py's rust-update / liveness debounce)
         self._last_rust_update = 0.0
@@ -143,9 +148,194 @@ class OrchApp(App):
             self._session_watcher = None
         super().exit(result)
 
+    # ── tabs (port of app.py's tab machinery) ─────────────────────
+    #
+    # Stack invariant: _stack[0] is always HomeView; _stack[1], when a
+    # ws/sessions tab is active, is its cached DetailView or the
+    # CurrentSessionsView (transient modals stack above). Tab cycling
+    # swaps _stack[1] via replace_top (no on_result fires); dismissing
+    # the surface (esc/^H) pops it, which fires _on_tab_view_dismissed
+    # — the port of app._on_detail_dismissed (back to the home tab,
+    # the ws tab itself stays open in the bar).
+
+    def _build_tab_keymap(self) -> dict:
+        """App-level tab keys (the Textual app intercepted ctrl+b/ctrl+x in
+        App.on_key and bound close_tab app-wide): fire for any key the top
+        view didn't consume, so tab switching works from every tab surface."""
+        import config
+        keymap: dict = {}
+        for action, fn in (("next_tab", self.action_next_tab),
+                           ("prev_tab", self.action_prev_tab),
+                           ("close_tab", self.action_close_tab)):
+            for key in config.get_key(action).split(","):
+                key = key.strip()
+                if key:
+                    keymap.setdefault(key, fn)
+        return keymap
+
+    def on_unhandled_key(self, ev) -> None:
+        fn = self._tab_keymap.get(ev.key)
+        if fn is not None:
+            fn()
+
+    def _tab_surface(self):
+        if len(self._stack) >= 2:
+            view = self._stack[1][0]
+            if isinstance(view, (DetailView, CurrentSessionsView)):
+                return view
+        return None
+
+    def _active_detail_view(self) -> DetailView | None:
+        surface = self._tab_surface()
+        return surface if isinstance(surface, DetailView) else None
+
+    def _ensure_detail_view(self, ws) -> DetailView:
+        view = self._detail_cache.get(ws.id)
+        if view is None:
+            view = DetailView(self.state, self.tabs, ws)
+            self._detail_cache[ws.id] = view
+        return view
+
+    def open_detail(self, ws, highlight_session_id: str | None = None) -> None:
+        """Open a workstream in a tab and show its DetailView (port of
+        app._open_detail_for_ws; home enter/l and the brain-dump launch)."""
+        self.tabs.open_tab(ws.id, ws.name, "·")
+        view = self._ensure_detail_view(ws)
+        if highlight_session_id:
+            view.request_session_highlight(highlight_session_id)
+        self._show_tab_surface(view)
+
+    def _show_tab_surface(self, target) -> None:
+        """Make `target` the view above home (None = back to bare home)."""
+        surface = self._tab_surface()
+        if target is None:
+            while len(self._stack) > 1:
+                self.pop(None)  # surface pop fires _on_tab_view_dismissed
+            return
+        if surface is target:
+            while self.top is not target:  # shed any modals above it
+                self.pop(None)
+            self.request_paint()
+            return
+        if surface is not None:
+            while self.top is not surface:
+                self.pop(None)
+            self.replace_top(target)
+        else:
+            while len(self._stack) > 1:  # shed modals sitting over bare home
+                self.pop(None)
+            self.push(target, on_result=lambda _res: self._on_tab_view_dismissed())
+
+    def _apply_tab_switch(self) -> None:
+        tab = self.tabs.active_tab
+        if tab.ws_id:
+            ws = self.state.get_ws(tab.ws_id)
+            if ws is not None:  # archived/deleted ws: stay put (as app.py)
+                self._show_tab_surface(self._ensure_detail_view(ws))
+        elif tab.id == "current_sessions":
+            if self._current_sessions_view is None:
+                self._current_sessions_view = CurrentSessionsView(self.state, self.tabs)
+            self._show_tab_surface(self._current_sessions_view)
+        else:
+            self._show_tab_surface(None)
+        self.request_paint()
+
+    def action_next_tab(self) -> None:
+        if self.tabs.next_tab():
+            self._apply_tab_switch()
+
+    def action_prev_tab(self) -> None:
+        if self.tabs.prev_tab():
+            self._apply_tab_switch()
+
+    def action_close_tab(self) -> None:
+        """Close the active tab (permanent tabs 0/1 can't close)."""
+        closed = self.tabs.close_active_tab()
+        if closed:
+            evicted = self._detail_cache.pop(closed, None)
+            self._apply_tab_switch()
+            if evicted is not None:
+                evicted.cancel_timers()
+
+    def _on_tab_view_dismissed(self) -> None:
+        """Tab surface dismissed (esc/^H) — back to the home tab (port of
+        app._on_detail_dismissed; the ws tab stays open in the bar)."""
+        self.tabs.switch_to(0)
+        self.home._on_return_from_modal()
+
+    # ── command palette (port of app.action_command_palette) ─────
+
+    def _context_ws(self):
+        """The detail view's ws when one is active, else home's selection."""
+        detail = self._active_detail_view()
+        return detail.ws if detail else self.home._selected_ws()
+
     def open_command_palette(self) -> None:
-        """App-level palette entry (screens like Trash bind ':')."""
-        self.home._action_command_palette()
+        from state import get_command_items
+        from .views.modals import FuzzyModalView
+
+        view = FuzzyModalView(title="Command Palette")
+        view._get_items = lambda: get_command_items(self._context_ws() is not None)
+
+        def on_cmd(cmd_name) -> None:
+            if cmd_name:
+                self._execute_command(cmd_name)
+
+        self.push(view, on_result=on_cmd)
+
+    def _execute_command(self, cmd_text: str) -> None:
+        """Port of app._execute_command: ws-specific commands delegate to
+        the active DetailView when one is open."""
+        ws = self._context_ws()
+        result = self.state.execute_command(cmd_text, ws.id if ws else None)
+        action = result.get("action", "noop")
+        msg = result.get("msg", "")
+        detail = self._active_detail_view()
+        home = self.home
+
+        if action == "refresh":
+            home.refresh_rows()
+            if detail:
+                detail._refresh()
+            if msg:
+                self.notify(msg)
+        elif action in ("notify", "error"):
+            self.notify(msg, severity="error" if action == "error" else "information")
+        elif action == "add":
+            home._action_add()
+        elif action == "rename":
+            if detail:
+                self.notify("Use 'E' to rename from detail view", timeout=2)
+            else:
+                self.notify("Rename lands in P4")
+        elif action == "open":
+            (detail._action_open_links if detail else home._action_open_links)()
+        elif action == "spawn":
+            (detail._action_spawn if detail else home._action_spawn)()
+        elif action == "resume":
+            (detail._action_resume if detail else home._action_resume)()
+        elif action == "export":
+            output, count = self.state.do_export(result.get("path", ""))
+            self.notify(f"Exported {count} workstreams to {output}")
+        elif action == "brain":
+            text = result.get("text", "")
+            if text:
+                home._do_brain(text)
+            else:
+                home._action_brain_dump()
+        elif action == "close":
+            self.action_close_tab()
+        elif action == "help":
+            home._action_help()
+        elif action == "delete":
+            home._action_delete()
+        elif action == "unarchive":
+            home._action_toggle_archive()
+        elif action == "trash":
+            home._action_view_trash()
+        elif action in ("ship", "ticket", "ticket-create", "branches",
+                        "files", "git-action", "solve", "worktree", "rr"):
+            self.notify("Dev-workflow actions land in P4")
 
     def kick_pollers(self) -> None:
         """User-initiated refresh ('R'): re-run the data pollers now."""
@@ -165,6 +355,11 @@ class OrchApp(App):
 
     def _data_changed(self) -> None:
         self.home.on_data_changed()
+        # The active tab surface refreshes too (the engine's SessionsChanged);
+        # hidden cached views catch up in on_show instead.
+        surface = self._tab_surface()
+        if surface is not None and hasattr(surface, "on_data_changed"):
+            surface.on_data_changed()
 
     # ── session discovery ─────────────────────────────────────────
 

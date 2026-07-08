@@ -12,7 +12,8 @@ import pytest
 
 from tui.orch_app import OrchApp
 from tui.testing import Headless
-from tui.views.home import STUB_DETAIL
+from tui.views.current_sessions import CurrentSessionsView
+from tui.views.detail import DetailView
 
 
 @pytest.fixture
@@ -224,22 +225,33 @@ class TestSearch:
             assert h.app.state.search_text == "q3"
 
 
-# ─── stubs & quit ────────────────────────────────────────────────────
+# ─── tabs & quit (full tab semantics live in test_detail.py) ─────────
 
 
 @pytest.mark.asyncio
-class TestStubsAndQuit:
-    async def test_enter_shows_detail_stub_toast(self, home_app):
+class TestTabsAndQuit:
+    async def test_enter_opens_detail_tab(self, home_app):
         async with Headless(home_app) as h:
+            ws_id = h.app.home.ws_list.highlighted_id
             await h.press("enter")
-            assert h.app.toast_text == STUB_DETAIL
-            assert STUB_DETAIL.split(" — ")[0] in h.screen_text()
+            assert isinstance(h.top, DetailView)
+            assert h.top.ws.id == ws_id
+            assert h.app.tabs.active_tab.ws_id == ws_id
 
-    async def test_tab_switch_is_stubbed(self, home_app):
+    async def test_ctrl_b_switches_to_sessions_tab(self, home_app):
         async with Headless(home_app) as h:
             await h.press("ctrl+b")
-            assert "P4" in h.app.toast_text
+            assert isinstance(h.top, CurrentSessionsView)
+            assert h.app.tabs.active_idx == 1
+            await h.press("ctrl+x")  # and back
+            assert h.top is h.app.home
             assert h.app.tabs.active_idx == 0
+
+    async def test_x_on_home_tab_is_noop(self, home_app):
+        async with Headless(home_app) as h:
+            await h.press("x")
+            assert h.top is h.app.home
+            assert len(h.app.tabs.tabs) == 2
 
     async def test_q_quits_cleanly(self, home_app):
         async with Headless(home_app) as h:
