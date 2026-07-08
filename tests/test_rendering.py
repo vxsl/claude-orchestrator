@@ -124,3 +124,51 @@ class TestRenderNotificationOption:
         assert "project" in result  # title in second line
 
 
+
+
+class TestCommitLineMarkup:
+    """A committed session's commit summary can be multi-line (subject +
+    diffstat). Each rendered line must be valid, balanced Rich markup —
+    a raw newline used to split the [color]…[/color] span across physical
+    lines, orphaning the tags and crashing the DetailView painter."""
+
+    def _committed_session(self, summary: str) -> ClaudeSession:
+        old = (datetime.now(timezone.utc) - timedelta(days=19)).isoformat()
+        return ClaudeSession(
+            session_id="0b5eb18d-aaaa", project_dir="d",
+            project_path="/home/kyle/work/repos/x/client/web",
+            message_count=10, model="opus",
+            started_at=old, last_activity=old,
+            last_commit_sha="6b9810babc123",
+            last_commit_summary=summary,
+        )
+
+    @staticmethod
+    def _assert_all_lines_valid_markup(markup: str) -> None:
+        from rich.console import Console
+        console = Console()
+        for lineno, line in enumerate(str(markup).split("\n")):
+            console.render_str(line, emoji=False, highlight=False)  # raises on bad markup
+
+    def test_multiline_commit_summary_renders_balanced(self):
+        from rendering import _render_session_option
+        s = self._committed_session(
+            "right-align HeatmapTable cell values\n 1 file changed, 12 insertions(+)")
+        out = _render_session_option(
+            s, ThreadActivity.AWAITING_INPUT, 0,
+            ws_repo_path=None, seen=True, line_width=60)
+        self._assert_all_lines_valid_markup(out)
+        # the summary stays on one physical line (newline flattened to a
+        # space), so text after the newline merges in rather than spilling
+        # onto a new line with an orphaned closing tag.
+        commit_lines = [ln for ln in str(out).split("\n") if "6b9810b" in ln]
+        assert len(commit_lines) == 1
+        assert "1 file" in commit_lines[0]
+
+    def test_commit_summary_with_brackets_renders_balanced(self):
+        from rendering import _render_session_option
+        s = self._committed_session("fix [P5] bug\n\nbody with [brackets] and stat")
+        out = _render_session_option(
+            s, ThreadActivity.AWAITING_INPUT, 0,
+            ws_repo_path=None, seen=True, line_width=60)
+        self._assert_all_lines_valid_markup(out)

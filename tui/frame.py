@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from rich.cells import cell_len
 from rich.console import Console
+from rich.errors import MarkupError
 from rich.segment import Segment
 from rich.style import Style
 
@@ -39,7 +40,14 @@ def _render_markup(markup: str, width: int) -> list[Segment]:
     cached = _MARKUP_CACHE.get(key)
     if cached is not None:
         return cached
-    text = _CONSOLE.render_str(markup, emoji=False, highlight=False)
+    try:
+        text = _CONSOLE.render_str(markup, emoji=False, highlight=False)
+    except MarkupError:
+        # A single malformed line must never crash the whole app: render it
+        # as literal text (brackets shown, no styling) instead. The real fix
+        # belongs upstream, but this keeps a rendering bug from being fatal.
+        text = _CONSOLE.render_str(
+            markup.replace("[", r"\["), emoji=False, highlight=False)
     if "\n" in text.plain:
         text = text.split("\n")[0]
     segments = list(text.render(_CONSOLE))

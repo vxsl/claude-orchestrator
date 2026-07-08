@@ -919,8 +919,13 @@ def _render_session_option(
     if committed:
         sha_short = s.last_commit_sha[:7]
         max_msg = title_width + 4
-        commit_msg = _rich_escape(s.last_commit_summary[:max_msg])
-        if len(s.last_commit_summary) > max_msg:
+        # Flatten newlines first: a multi-line commit summary (subject +
+        # diffstat/body) would otherwise split this markup span across
+        # physical lines when the caller does str(prompt).split("\n"),
+        # orphaning the [color]…[/color] tags (as the sibling snippets do).
+        summary = s.last_commit_summary.replace("\n", " ")
+        commit_msg = _rich_escape(summary[:max_msg])
+        if len(summary) > max_msg:
             commit_msg += "…"
         lines.append(f"{INDENT}[{C_PURPLE}]{sha_short}[/{C_PURPLE}] [{s_dim}]{commit_msg}[/{s_dim}]")
     else:

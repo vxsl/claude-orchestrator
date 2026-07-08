@@ -190,6 +190,16 @@ def test_markup_shorter_than_width_pads():
     assert f.plain_lines()[0] == "  ab      "
 
 
+def test_malformed_markup_renders_literally_instead_of_crashing():
+    # A single bad markup line (orphaned closing tag) must not raise —
+    # it would otherwise crash the whole app mid-paint. It falls back to
+    # rendering the raw text with brackets shown.
+    f = Frame(40, 1)
+    f.write_markup(0, 0, 40, " 1 file…[/#484f58]")  # no matching open tag
+    assert "1 file" in f.plain_lines()[0]
+    assert "[/#484f58]" in f.plain_lines()[0]  # shown literally, not parsed
+
+
 def test_wide_char_cut_at_crop_boundary_becomes_space():
     f = Frame(10, 1)
     f.write_markup(0, 0, 3, "漢漢")  # second 漢 straddles the crop
