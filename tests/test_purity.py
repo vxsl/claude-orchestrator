@@ -30,6 +30,9 @@ PURE_MODULES = [
     "cleanup",
     "term_host",
     "vterm_backend",
+    "tui.keys",
+    "tui.layout",
+    "tui.frame",
 ]
 
 
