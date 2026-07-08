@@ -38,8 +38,13 @@ from ..layout import Rect, split_cols, split_rows
 from ..view import View
 from ..widgets import SEP_ID as _SEP_ID
 from ..widgets import BlockList, LineEdit, ListView, footer_markup
+from .add import AddView
+from .add_link import AddLinkView
+from .brain_dump import BrainDumpView
+from .brain_preview import BrainPreviewView
 from .confirm import ConfirmView
 from .pickers import SENTINEL_NEW, RepoPickerView, WorkstreamPickerView
+from .quick_note import QuickNoteView
 
 STUB_DETAIL = "Detail view lands in P4 — ORCH_ENGINE=textual for full UI"
 STUB_TABS = "Tabs land in P4 — ORCH_ENGINE=textual for full UI"
@@ -134,13 +139,13 @@ class HomeView(View):
             "next_tab": stub(STUB_TABS),
             "prev_tab": stub(STUB_TABS),
             "close_tab": stub(STUB_TABS),
-            "add": stub("Add workstream lands in P4 — use `orch add` meanwhile"),
-            "brain_dump": stub("Brain dump lands in P4"),
+            "add": self._action_add,
+            "brain_dump": self._action_brain_dump,
             "spawn": self._action_spawn,
             "repo_spawn": self._action_repo_spawn,
             "resume": self._action_resume,
-            "link_action": stub("Link picker lands in P4"),
-            "quick_note": stub("Quick note lands in P4 — use `orch note` meanwhile"),
+            "link_action": self._action_add_link,
+            "quick_note": self._action_quick_note,
             "edit_notes": stub("Todo editor lands in P4"),
             "rename": stub("Rename lands in P4"),
             "open_links": stub("Links land in P4"),
@@ -283,6 +288,84 @@ class HomeView(View):
     def _spawn_in_ws(self, ws) -> None:
         self.refresh_rows()  # a just-created workstream should be listed
         self.app.launch_claude_session(ws)
+
+    def _action_add(self) -> None:
+        """Port of app.action_add: AddView → store.add."""
+        def on_result(ws) -> None:
+            if ws:
+                self.state.store.add(ws)
+                self._toast(f"Created: {ws.name}")
+            self.refresh_rows()
+
+        self.app.push(AddView(), on_result=on_result)
+
+    def _action_quick_note(self) -> None:
+        """Port of app.action_quick_note: QuickNoteView → add_todo."""
+        ws = self._selected_ws()
+        if not ws:
+            return
+
+        def on_note(text) -> None:
+            if not text or not text.strip():
+                return
+            self.state.add_todo(ws.id, text)
+            self.refresh_rows()
+            self._toast("Todo added")
+
+        self.app.push(QuickNoteView(ws), on_result=on_note)
+
+    def _action_add_link(self) -> None:
+        """Port of app._add_link_to_ws: AddLinkView → state.add_link."""
+        ws = self._selected_ws()
+        if not ws:
+            self._toast("No workstream selected")
+            return
+
+        def on_link(link) -> None:
+            if link:
+                self.state.add_link(ws.id, link)
+                self.refresh_rows()
+                self._toast(f"Added {link.kind} link to {ws.name}")
+
+        self.app.push(AddLinkView(ws.name), on_result=on_link)
+
+    def _action_brain_dump(self) -> None:
+        """Port of app.action_brain_dump → _do_brain chain."""
+        def on_text(text) -> None:
+            if text is None:
+                return
+            self._do_brain(text)
+
+        self.app.push(BrainDumpView(), on_result=on_text)
+
+    def _do_brain(self, text: str) -> None:
+        from brain import parse_brain_dump
+        from models import Workstream
+
+        tasks = parse_brain_dump(text)
+        if not tasks:
+            self._toast("No tasks found in input")
+            return
+
+        def on_result(mode: str) -> None:
+            if not mode:
+                return
+            created = []
+            for task in tasks:
+                ws = Workstream(name=task.name, description=task.raw_text,
+                                category=task.category)
+                self.state.store.add(ws)
+                created.append(ws)
+            self.refresh_rows()
+            if mode == "launch" and created:
+                # app.py opens the Detail view here; Detail is P4-C, so
+                # launch directly (suspend-attach fallback).
+                self._toast(f"Added {len(created)} workstreams — launching session...")
+                self.app.launch_claude_session(created[0])
+            else:
+                self._toast(f"Added {len(created)} workstreams")
+
+        self.app.push(BrainPreviewView(tasks), on_result=on_result)
 
     def _action_toggle_archive(self) -> None:
         """Port of app.action_toggle_archive (no confirm, same as Textual)."""

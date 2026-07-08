@@ -22,7 +22,7 @@ from rendering import (
 
 from ..layout import Rect, center
 from ..view import View
-from ..widgets import FocusRing, FuzzyList, LineEdit, ListView, TextEdit, strip_markup
+from ..widgets import Cycler, FocusRing, FuzzyList, LineEdit, ListView, TextEdit, strip_markup
 
 _HINT_SELECT = f"[{C_DIM}]Enter[/{C_DIM}] select  [{C_DIM}]^H[/{C_DIM}] back"
 _HINT_SUBMIT = f"[{C_DIM}]Enter[/{C_DIM}] submit  [{C_DIM}]^H[/{C_DIM}] back"
@@ -245,9 +245,9 @@ class FormModalView(ModalView):
         self.ring = FocusRing()
 
     def add_field(self, label: str, editor):
-        """Register a (label, LineEdit-or-TextEdit) field, in tab order."""
-        if isinstance(editor, LineEdit):
-            editor.on_submit = lambda _text: self._submit()
+        """Register a (label, LineEdit/TextEdit/Cycler) field, in tab order."""
+        if isinstance(editor, (LineEdit, Cycler)):
+            editor.on_submit = lambda _value: self._submit()
         self.fields.append((label, editor))
         self.ring.widgets.append(editor)
         return editor
