@@ -222,11 +222,18 @@ class Painter:
     rows only. One Painter per real screen; `invalidate()` after resize or
     resume forces a full repaint."""
 
-    def __init__(self, console: Console | None = None) -> None:
+    def __init__(self, console: Console | None = None,
+                 base_bg: str | None = "#000000") -> None:
         self._console = console or _CONSOLE
         self._prev: list[str] | None = None
         self._prev_cursor: tuple[int, int] | None = None
         self._ansi_cache: dict[Style, str] = {}
+        # Opaque base background painted under every cell that doesn't set
+        # its own bg. Without it, cells with bgcolor=None emit no background
+        # SGR and the terminal's (possibly transparent) background shows
+        # through. Set to None to keep the old transparent behavior.
+        self._base_style = Style(bgcolor=base_bg) if base_bg else None
+        self._bg_composed: dict[Style, Style] = {}
 
     def invalidate(self) -> None:
         self._prev = None
@@ -257,11 +264,31 @@ class Painter:
         out.append("\x1b[?2026l")
         return "".join(out).encode("utf-8")
 
+    def _base_bg(self, style: Style | None) -> Style | None:
+        """Compose the opaque base background under `style` when it has no
+        bg of its own, so nothing paints transparent. Reverse runs (the
+        cursor) are left alone — reverse already swaps in a solid fg color
+        as the background, so they're never transparent. Memoized."""
+        base = self._base_style
+        if base is None:
+            return style
+        if style is None:
+            return base
+        if style.bgcolor is not None or style.reverse:
+            return style
+        composed = self._bg_composed.get(style)
+        if composed is None:
+            composed = base + style
+            if len(self._bg_composed) >= 4096:
+                self._bg_composed.clear()
+            self._bg_composed[style] = composed
+        return composed
+
     def _row_ansi(self, row: list[Segment]) -> str:
         parts: list[str] = []
         cache = self._ansi_cache
         for segment in row:
-            style = segment.style
+            style = self._base_bg(segment.style)
             if style is None:
                 parts.append(segment.text)
                 continue
