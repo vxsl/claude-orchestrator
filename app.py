@@ -2872,7 +2872,13 @@ class OrchestratorApp(App):
         ws = self._selected_ws()
         if ws:
             do_resume(ws, self, self.state.sessions,
-                      sessions_for_ws_fn=lambda w: self.state.sessions_for_ws(w))
+                      sessions_for_ws_fn=lambda w: self.state.sessions_for_ws(w),
+                      pick_session=self._pick_session)
+
+    def _pick_session(self, ws: Workstream, matching, on_pick):
+        """Textual-side session picker for do_resume's inverted dependency."""
+        from screens import SessionPickerScreen
+        self.push_screen(SessionPickerScreen(ws, matching), callback=on_pick)
 
     def _suspend_claude(self, cmd: list[str], cwd: str | None = None):
         with self.suspend():

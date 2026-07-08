@@ -147,11 +147,27 @@ class TestDoResume:
         sessions = [self._make_session(f"s{i}") for i in range(3)]
         ws = Workstream(name="test")
         app = MagicMock()
+        pick_session = MagicMock()
+        do_resume(ws, app, sessions,
+                  sessions_for_ws_fn=lambda w: sessions,
+                  pick_session=pick_session)
+        pick_session.assert_called_once()
+        picked_ws, picked_matching, on_pick = pick_session.call_args[0]
+        assert picked_ws is ws
+        assert picked_matching == sessions
+        app.launch_claude_session.assert_not_called()
+        # completing the pick resumes the chosen session
+        on_pick(sessions[1])
+        app.launch_claude_session.assert_called_once()
+
+    def test_multiple_sessions_without_picker_resumes_most_recent(self):
+        sessions = [self._make_session(f"s{i}") for i in range(3)]
+        ws = Workstream(name="test")
+        app = MagicMock()
         do_resume(ws, app, sessions,
                   sessions_for_ws_fn=lambda w: sessions)
-        app.push_screen.assert_called_once()
-        screen_arg = app.push_screen.call_args[0][0]
-        assert isinstance(screen_arg, SessionPickerScreen)
+        app.launch_claude_session.assert_called_once()
+        assert app.launch_claude_session.call_args.kwargs["session_id"] == "s0"
 
     def test_no_sessions_no_dirs_notifies(self):
         ws = Workstream(name="test")

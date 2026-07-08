@@ -566,17 +566,18 @@ class TestDoResume:
 
     @patch("actions.find_sessions_for_ws")
     def test_multiple_sessions_shows_picker(self, mock_find):
-        """With 2+ matching sessions, show SessionPickerScreen."""
+        """With 2+ matching sessions, invoke the injected pick_session."""
         sessions = [self._make_session(f"s{i}") for i in range(3)]
         mock_find.return_value = sessions
         ws = Workstream(name="test", category=Category.WORK)
         app = MagicMock()
+        pick_session = MagicMock()
 
-        _do_resume(ws, app, sessions)
+        _do_resume(ws, app, sessions, pick_session=pick_session)
 
-        app.push_screen.assert_called_once()
-        screen_arg = app.push_screen.call_args[0][0]
-        assert isinstance(screen_arg, SessionPickerScreen)
+        pick_session.assert_called_once()
+        assert pick_session.call_args[0][1] == sessions
+        app.launch_claude_session.assert_not_called()
 
     def test_no_sessions_no_dirs_notifies(self):
         """With no sessions or directories, show notification."""

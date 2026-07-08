@@ -385,11 +385,13 @@ def resume_session_now(ws: Workstream, session: ClaudeSession, dirs: list[str], 
 
 
 def do_resume(ws: Workstream, app, sessions: list[ClaudeSession] | None = None,
-              sessions_for_ws_fn=None):
+              sessions_for_ws_fn=None, pick_session=None):
     """Smart resume: auto-discover sessions, fall back to directory.
 
     With 1 matching session: resumes immediately.
-    With 2+: opens a thread picker so the user can choose.
+    With 2+: calls pick_session(ws, matching, on_pick) so the UI can show a
+    picker (keeps this module free of any screen/engine dependency); without
+    a picker the most recent session is resumed directly.
     """
     if sessions_for_ws_fn:
         matching = sessions_for_ws_fn(ws)
@@ -398,15 +400,13 @@ def do_resume(ws: Workstream, app, sessions: list[ClaudeSession] | None = None,
     dirs = ws_directories(ws)
 
     if matching:
-        if len(matching) == 1:
+        if len(matching) == 1 or pick_session is None:
             resume_session_now(ws, matching[0], dirs, app)
         else:
-            from screens import SessionPickerScreen
-
             def on_pick(session: ClaudeSession | None):
                 if session:
                     resume_session_now(ws, session, dirs, app)
-            app.push_screen(SessionPickerScreen(ws, matching), callback=on_pick)
+            pick_session(ws, matching, on_pick)
         return
 
     if dirs:
