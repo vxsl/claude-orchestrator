@@ -29,6 +29,17 @@ Multiple Claude agents frequently work in this repo at the same time. Follow the
 - Run `python -m pytest tests/ -x -q` to run the test suite.
 - `tests/test_app.py` may have flaky tests due to async Textual testing — if a test fails in batch but passes alone, note it but don't block on it.
 
+## ⚠ Engine migration in progress (see MIGRATION.md)
+
+The TUI is migrating from Textual to a hand-rolled immediate-mode engine
+(`tui/` package). Until cutover:
+
+- **Do not add features to `app.py`, `screens.py`, `claude_session_screen.py`,
+  or `widgets.py`** — they're frozen and will be deleted. Put new behavior in
+  shared modules (`state.py`, `actions.py`, `rendering.py`, `term_host.py`).
+- If you must touch a frozen file, log it in MIGRATION.md's drift log.
+- Shared modules must import without Textual (`tests/test_purity.py` enforces).
+
 ## Project Structure
 
 The TUI is split into focused modules to keep blast radius small:
@@ -40,6 +51,7 @@ The TUI is split into focused modules to keep blast radius small:
 - `app.py` — Thin Textual shell: compose, bindings, event handlers. Delegates all logic to `state.py`.
 
 Supporting modules:
+- `term_host.py` — Engine-neutral terminal host: PTY lifecycle, tmux-persistent sessions (orch-sessions socket), libvterm/pyte byte pipeline. No Textual dependency.
 - `models.py` — Workstream data model and persistence (Store).
 - `sessions.py` — Claude session discovery and JSONL parsing.
 - `threads.py` — Thread clustering and activity detection.
