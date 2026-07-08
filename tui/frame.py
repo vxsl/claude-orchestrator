@@ -87,6 +87,13 @@ def _style_from_key(key: tuple) -> Style:
     return style
 
 
+def runs_to_segments(runs: list[tuple[str, tuple]]) -> tuple[list[Segment], int]:
+    """Convert vterm (text, style_key) runs to (segments, cell_width) once,
+    for callers that cache rendered rows across paints (Frame.write_cells)."""
+    segments = [Segment(text, _style_from_key(key)) for text, key in runs if text]
+    return segments, Segment.get_line_length(segments)
+
+
 class Frame:
     """A width x height grid of Segment rows. Row lists are never mutated in
     place — writes replace the row — so cached segment lists stay safe."""
@@ -115,6 +122,21 @@ class Frame:
         if not segments:
             return
         w = Segment.get_line_length(segments)
+        avail = self.width - x
+        if w > avail:
+            segments = Segment.adjust_line_length(segments, avail)
+            w = avail
+        self._splice(y, x, w, segments)
+
+    def write_cells(self, x: int, y: int, w: int, segments: list[Segment]) -> None:
+        """Splice pre-built segments the caller measured at exactly `w`
+        cells (see runs_to_segments). Terminal panes cache measured rows
+        and re-paint them through here — Segment construction and
+        cell-width measurement happen once per row *change*, not once per
+        row per paint. Overflow is still cropped, so a bad width can't
+        escape the frame."""
+        if y < 0 or y >= self.height or x < 0 or x >= self.width or w <= 0:
+            return
         avail = self.width - x
         if w > avail:
             segments = Segment.adjust_line_length(segments, avail)

@@ -149,6 +149,74 @@ class TestPaneRender:
         assert calls == [3]
         assert "abcx" in frame.plain_lines()[3]
 
+    def test_scroll_shifts_cache_instead_of_rerendering(self):
+        """A one-line scroll must not re-render the whole grid: moved rows
+        come from the run cache; only the new line + cursor rows re-render."""
+        pane = make_pane()
+        feed = "".join(f"row-{i:02d}\r\n" for i in range(ROWS - 1)).encode()
+        pane._process_output_vterm(feed + b"bottom")  # full screen, no scroll
+        render_frame(pane)  # warm cache
+        backend = pane._backend
+        calls: list[int] = []
+        orig = backend.render_row_segments
+
+        def counting(row, cols, cursor_x=-1):
+            calls.append(row)
+            return orig(row, cols, cursor_x)
+
+        backend.render_row_segments = counting
+        pane._process_output_vterm(b"\r\nnew-line")  # scrolls one line
+        frame = render_frame(pane)
+        assert len(set(calls)) <= 3, f"re-rendered rows: {sorted(set(calls))}"
+        lines = frame.plain_lines()
+        assert "row-01" in lines[0]  # shifted content came from the cache
+        assert "new-line" in lines[ROWS - 1]
+
+    def test_cached_render_matches_fresh_render_after_scrolls(self):
+        """Oracle: the cache+moves pipeline must be invisible — a cached
+        render equals a cold re-render at every step of a scrolling feed."""
+        pane = make_pane()
+        chunks = [
+            "".join(f"line {i}\r\n" for i in range(8)).encode(),
+            b"middle \x1b[1mBOLD\x1b[0m text\r\n" * 5,
+            "宽字符 wide 中文\r\n".encode() * 4,
+            b"\x1b[5;1H\x1b[Koverwrite row 4",
+            b"\x1b[30;1H" + b"tail\r\n" * 3,
+        ]
+        for chunk in chunks:
+            pane._process_output_vterm(chunk)
+            cached = render_frame(pane).plain_lines()
+            pane._invalidate_cache()
+            fresh = render_frame(pane).plain_lines()
+            assert cached == fresh
+
+    def test_move_overflow_burst_still_renders_correctly(self):
+        """A between-paints burst larger than the backend's MOVES_CAP trips
+        the overflow latch; the pane must drop its cache and still match a
+        fresh render, and tracking must resume afterwards."""
+        pane = make_pane()
+        render_frame(pane)  # warm
+        burst = "".join(f"burst-{i:04d}\r\n" for i in range(400)).encode()
+        pane._process_output_vterm(burst)
+        assert pane._backend.moves_overflow
+        cached = render_frame(pane).plain_lines()
+        pane._invalidate_cache()
+        fresh = render_frame(pane).plain_lines()
+        assert cached == fresh
+        assert not pane._backend.moves_overflow  # latch reset
+        pane._process_output_vterm(b"after\r\n")
+        assert pane._backend.pending_moves  # tracking resumed
+
+    def test_backend_default_keeps_damage_behavior(self):
+        """track_moves=False (the Textual widget): scrolls damage every
+        moved row and pending_moves stays empty."""
+        b = VTermBackend(20, 5)
+        b.feed(b"1\r\n2\r\n3\r\n4\r\nfull")
+        b.dirty_rows.clear()
+        b.feed(b"\r\nscroll")
+        assert b.pending_moves == []
+        assert len(b.dirty_rows) == 5  # whole screen damaged, as before
+
     def test_render_clears_has_dirty_and_dirty_rows(self):
         pane = make_pane()
         pane._process_output_vterm(b"data")

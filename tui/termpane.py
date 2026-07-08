@@ -32,7 +32,14 @@ paint. render() consumes backend.dirty_rows and clears has_dirty.
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
+import os
+import select
+
 from term_host import TMUX_NAV_KEYS, TerminalHost, _KEY_MAP, _pyte_color
+
+from .frame import runs_to_segments
 
 # Scrollbar overlay style keys (vterm run-key form: (fg, bg, attrs)).
 _SB_THUMB = ("#888888", None, 0)
@@ -57,12 +64,42 @@ class TerminalPane(TerminalHost):
         # an app reference — no tui imports, trivially testable).
         self.request_paint = None
         self.copy_to_clipboard = None
-        # Per-row run cache for the live vterm path: cache[y] is the last
-        # render_row_segments result for row y, or None. Rows are refreshed
-        # when backend.dirty_rows says so; everything else is a list reuse.
-        self._row_cache: list[list | None] = [None] * self._nrow
+        # Per-row cache for the live vterm path: cache[y] is the last
+        # rendered row as (segments, cell_width) — Segments prebuilt and
+        # measured once (both dominate the paint profile otherwise) — or
+        # None. Rows re-render when backend.dirty_rows says so; scrolls
+        # arrive as backend pending_moves and shift the cache instead of
+        # re-rendering (30 rows of ctypes cell reads per scrolled line);
+        # everything else re-paints as a plain list splice.
+        self._row_cache: list[tuple | None] = [None] * self._nrow
         self._focused = False       # focus state at last render
         self._was_scrolled = False  # scrollback mode at last render
+        if self._backend is not None:
+            self._backend.track_moves = True
+
+    def _invalidate_cache(self) -> None:
+        self._row_cache = [None] * self._nrow
+        if self._backend is not None:
+            self._backend.pending_moves.clear()
+            self._backend.moves_overflow = False
+
+    # ── Detach/attach: move tracking follows the pane ─────────────
+
+    def detach(self) -> dict | None:
+        # Hand the backend back in widget-compatible form: whoever attaches
+        # next may not know about pending_moves.
+        state = super().detach()
+        if state is not None and "backend" in state:
+            state["backend"].track_moves = False
+            state["backend"].pending_moves.clear()
+        return state
+
+    def attach(self, state: dict) -> None:
+        super().attach(state)
+        if self._backend is not None:
+            self._backend.track_moves = True
+            self._backend.pending_moves.clear()
+        self._row_cache = [None] * self._nrow
 
     # ── App pane-ticker contract ──────────────────────────────────
 
@@ -95,6 +132,56 @@ class TerminalPane(TerminalHost):
 
     # _handle_pty_eof: host default fires self.on_finished — sufficient.
 
+    # ── PTY read loop ─────────────────────────────────────────────
+
+    async def _read_loop(self) -> None:
+        """add_reader-driven replacement for the host's executor-based
+        loop: a thread-pool round trip per PTY chunk costs ~10x an epoll
+        wakeup, and a streaming child produces dozens of chunks a second.
+
+        The read happens inside the readiness callback — the same loop
+        pass epoll reported data in — never deferred to a task wake (a
+        stale wake would block the whole loop on the blocking fd; seen in
+        practice). A zero-timeout select re-check guards the same way.
+
+        Same contract as the host loop: feed the backend, set _has_dirty,
+        EOF fires _handle_pty_eof. The task exists so the host lifecycle
+        methods (start/attach/stop/detach) can cancel it as usual; it just
+        parks on an EOF event while the callback does the work."""
+        loop = asyncio.get_running_loop()
+        fd = self._fd
+        eof = asyncio.Event()
+
+        def on_readable() -> None:
+            try:
+                if not select.select([fd], [], [], 0)[0]:
+                    return  # stale readiness: never risk a blocking read
+                data = os.read(fd, 65536)
+            except OSError:  # EIO: child side closed
+                data = b""
+            if not data:
+                with contextlib.suppress(Exception):
+                    loop.remove_reader(fd)  # stop HUP readiness re-firing
+                eof.set()
+                return
+            if self._backend:
+                self._process_output_vterm(data)
+            else:
+                self._process_output(data.decode(errors="replace"))
+            self._has_dirty = True
+
+        try:
+            loop.add_reader(fd, on_readable)
+        except (NotImplementedError, PermissionError, OSError):
+            await TerminalHost._read_loop(self)  # loop lacks add_reader
+            return
+        try:
+            await eof.wait()
+            self._handle_pty_eof()
+        finally:
+            with contextlib.suppress(Exception):
+                loop.remove_reader(fd)
+
     # ── Geometry ──────────────────────────────────────────────────
 
     def resize(self, rows: int, cols: int) -> None:
@@ -108,7 +195,7 @@ class TerminalPane(TerminalHost):
         else:
             self._screen.resize(rows, cols)
         self._set_pty_size(rows, cols)
-        self._row_cache = [None] * rows
+        self._invalidate_cache()
 
     # ── Rendering ─────────────────────────────────────────────────
 
@@ -126,7 +213,7 @@ class TerminalPane(TerminalHost):
             self.resize(rect.h, rect.w)  # keep pane in lockstep with rect
         if focused != self._focused:
             self._focused = focused
-            self._row_cache = [None] * self._nrow  # cursor row is stale
+            self._invalidate_cache()  # cursor row is stale
         self._has_dirty = False  # this paint reflects all fed output
         if not self._backend:
             self._render_pyte(frame, rect, focused)
@@ -134,26 +221,55 @@ class TerminalPane(TerminalHost):
         scrolled = self._scroll_offset > 0
         if scrolled != self._was_scrolled:
             self._was_scrolled = scrolled
-            self._row_cache = [None] * self._nrow
+            self._invalidate_cache()
         if scrolled:
             self._render_scrolled(frame, rect)
         else:
             self._render_live(frame, rect, focused)
 
+    def _apply_pending_moves(self) -> None:
+        """Shift cached rows along backend row moves (scrolls) so a scroll
+        costs list moves, not a full-grid ctypes re-render."""
+        backend = self._backend
+        moves = backend.pending_moves
+        if not moves:
+            return
+        cache = self._row_cache
+        nrows = len(cache)
+        if backend.moves_overflow or len(moves) >= nrows * 4:
+            # Runaway backlog (firehose stream or parked in scrollback):
+            # cheaper to drop the cache than replay history. Also resets
+            # the backend's overflow latch so tracking resumes.
+            self._invalidate_cache()
+            return
+        for dest_start, dest_end, delta in moves:
+            if delta < 0:  # content moved up: fill top-down
+                rng = range(dest_start, dest_end)
+            else:          # content moved down: fill bottom-up
+                rng = range(dest_end - 1, dest_start - 1, -1)
+            for d in rng:
+                if 0 <= d < nrows:
+                    s = d - delta
+                    cache[d] = cache[s] if 0 <= s < nrows else None
+        moves.clear()
+
     def _render_live(self, frame, rect, focused: bool) -> None:
         backend = self._backend
+        self._apply_pending_moves()
         dirty = backend.dirty_rows
         cache = self._row_cache
         cols = backend.columns
         cursor_y = backend.cursor_y if focused else -1
         rows = min(rect.h, backend.lines, len(cache))
         for y in range(rows):
-            runs = cache[y]
-            if runs is None or y in dirty:
+            row = cache[y]
+            if row is None or y in dirty:
                 cursor_x = backend.cursor_x if y == cursor_y else -1
                 runs = backend.render_row_segments(y, cols, cursor_x)
-                cache[y] = runs
-            frame.write_runs(rect.x, rect.y + y, runs)
+                row = runs_to_segments(runs)
+                cache[y] = row
+            segments, width = row
+            frame.write_cells(rect.x, rect.y + y, width, segments)
         if dirty:
             dirty.clear()
 

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import ctypes
 import ctypes.util
+import struct
 from ctypes import (
     CFUNCTYPE, POINTER, Structure,
     c_char_p, c_int, c_size_t, c_uint8, c_uint32, c_void_p,
@@ -128,6 +129,14 @@ _PROP_CURSORSHAPE = 7   # VTERM_PROP_CURSORSHAPE: 1=block, 2=underline, 3=bar
 _PROP_MOUSE = 8
 _CELL_SIZE = ctypes.sizeof(VTermScreenCell)
 
+# Cache-miss sentinel (None is a legitimate cached value: default color)
+_MISS = object()
+
+# One-shot VTermScreenCell parse for the render hot loop, reading the ctypes
+# struct's buffer directly: chars[0], width, attrs, fg bytes, bg bytes.
+_CELL_PARSE = struct.Struct("<I20xB3xI4s4s").unpack_from
+assert struct.calcsize("<I20xB3xI4s4s") == _CELL_SIZE
+
 
 # ── Backend class ─────────────────────────────────────────────────
 
@@ -139,12 +148,29 @@ class VTermBackend:
     """
 
     MAX_SCROLLBACK = 10000  # ~32MB max at 80 cols
+    MOVES_CAP = 256  # unconsumed row-moves before overflow (see __init__)
 
     def __init__(self, cols: int, rows: int) -> None:
         # Init tracking state before callbacks can fire
         self.dirty_rows: set[int] = set()
         self.scrollback: list[tuple[int, bytes]] = []
         self.new_scrollback_lines = 0  # lines pushed since last check
+
+        # Row-move tracking (opt-in, used by the tui engine's TerminalPane
+        # run cache). When False — the default, and always for the Textual
+        # widget — the moverect callback declines the event and libvterm
+        # damages the destination rows exactly as before. When True,
+        # full-width moves are recorded in `pending_moves` as
+        # (dest_start, dest_end, delta) with delta = dest - src row, and
+        # already-dirty rows inside the source span are renumbered, so a
+        # scroll costs a cache shift instead of a full-grid re-render.
+        # Past MOVES_CAP unconsumed moves (a firehose stream between
+        # paints), moves_overflow is raised and tracking falls back to
+        # damage until the consumer clears the backlog — per-scroll
+        # bookkeeping for a cache that will be dropped anyway is waste.
+        self.track_moves = False
+        self.moves_overflow = False
+        self.pending_moves: list[tuple[int, int, int]] = []
 
         self._vt = _vterm_new(rows, cols)
         self._screen = _vterm_obtain_screen(self._vt)
@@ -158,12 +184,14 @@ class VTermBackend:
 
         # Prevent GC of callback pointers
         self._cb_damage = _damage_cb(self._on_damage)
+        self._cb_moverect = _moverect_cb(self._on_moverect)
         self._cb_movecursor = _movecursor_cb(self._on_movecursor)
         self._cb_settermprop = _settermprop_cb(self._on_settermprop)
         self._cb_pushline = _sb_pushline_cb(self._on_sb_pushline)
         self._cb_popline = _sb_popline_cb(self._on_sb_popline)
         self._callbacks = VTermScreenCallbacks(
             damage=self._cb_damage,
+            moverect=self._cb_moverect,
             movecursor=self._cb_movecursor,
             settermprop=self._cb_settermprop,
             sb_pushline=self._cb_pushline,
@@ -186,6 +214,12 @@ class VTermBackend:
         self._ctmp = VTermColor()
         self._output_buf = ctypes.create_string_buffer(4096)
 
+        # (type, r, g, b) color bytes -> Rich color string | None. Keyed on
+        # the raw 4-byte VTermColor so the render hot loop never touches
+        # ctypes struct fields. (An OSC 4 palette redefinition mid-stream
+        # would go stale here — nothing we run does that.)
+        self._color_cache: dict[bytes, str | None] = {}
+
     def __del__(self) -> None:
         vt = getattr(self, "_vt", None)
         if vt:
@@ -198,6 +232,33 @@ class VTermBackend:
         for row in range(rect.start_row, rect.end_row):
             self.dirty_rows.add(row)
         return 0
+
+    def _on_moverect(self, dest, src, user):
+        """Screen content moved (scroll). Returning 0 declines the event and
+        libvterm damages the destination rows (the pre-tracking behavior);
+        returning 1 means the embedder took responsibility for the move."""
+        if not self.track_moves or self.moves_overflow:
+            return 0
+        if len(self.pending_moves) >= self.MOVES_CAP:
+            self.moves_overflow = True
+            return 0
+        cols = self.columns
+        if (src.start_col != 0 or src.end_col < cols
+                or dest.start_col != 0 or dest.end_col < cols):
+            return 0  # partial-width move (side margins): damage handles it
+        delta = dest.start_row - src.start_row
+        if delta == 0:
+            return 1
+        # Renumber pending dirty rows that live in the moved source span so
+        # they refer to the rows' new positions.
+        if self.dirty_rows:
+            start, end = src.start_row, src.end_row
+            moved = {r + delta for r in self.dirty_rows if start <= r < end}
+            kept = {r for r in self.dirty_rows if not (start <= r < end)}
+            lines = self.lines
+            self.dirty_rows = kept | {r for r in moved if 0 <= r < lines}
+        self.pending_moves.append((dest.start_row, dest.end_row, delta))
+        return 1
 
     def _on_movecursor(self, pos, oldpos, visible, user):
         # Cursor moves don't trigger damage events, so mark the old and
@@ -295,44 +356,59 @@ class VTermBackend:
         `cols`. (Emitting a spacer for the continuation cell — the old
         behavior — shifted everything after a wide char right by one
         column per wide char.)
+
+        Hot-path note: each cell is read via one vterm_screen_get_cell
+        call plus a single struct.unpack_from over the ctypes struct's
+        buffer — per-field ctypes attribute access is ~5x slower.
         """
         pos = self._pos
         cell = self._cell
         cell_ref = ctypes.byref(cell)
         screen = self._screen
-        ctmp = self._ctmp
+        get_cell = _vterm_screen_get_cell
+        parse = _CELL_PARSE
+        color_cache = self._color_cache
+        convert = self._convert_color_bytes
         continuation = self.CONTINUATION
+        miss = _MISS
 
         segments: list[tuple[str, tuple]] = []
         run_chars: list[str] = []
         run_key: tuple = ()  # (fg, bg, attrs) or ("cursor",)
 
+        pos.row = row
         x = 0
         while x < cols:
-            pos.row = row
             pos.col = x
-            _vterm_screen_get_cell(screen, pos, cell_ref)
+            get_cell(screen, pos, cell_ref)
+            cp, width, attrs, fg_bytes, bg_bytes = parse(cell)
 
-            cp = cell.chars[0]
             if cp == continuation:
                 # Second column of a wide char: the glyph emitted for the
                 # previous cell already covers this column.
                 x += 1
                 continue
-            wide = cell.width == 2 and x + 1 < cols
+            # No codepoint below U+1100 is double-width; skipping the
+            # width check for ASCII/Latin keeps the hot path lean.
+            wide = cp >= 0x1100 and width == 2 and x + 1 < cols
 
-            # Inline color conversion needed for both cursor and normal cells
-            fg_color = self._color_to_str(cell.fg, ctmp, screen)
-            bg_color = self._color_to_str(cell.bg, ctmp, screen)
+            fg_color = color_cache.get(fg_bytes, miss)
+            if fg_color is miss:
+                fg_color = convert(fg_bytes)
+            bg_color = color_cache.get(bg_bytes, miss)
+            if bg_color is miss:
+                bg_color = convert(bg_bytes)
+            attrs &= 0xFF  # style bits (bold/underline/italic/…) live here
+
             # A cursor reported on the continuation column highlights the
             # wide char that owns it.
             if x == cursor_x or (wide and x + 1 == cursor_x):
                 if self.cursor_shape == 1:
                     key = ("cursor", 1)  # block: reverse video
                 else:
-                    key = ("cursor_bar", fg_color, bg_color, cell.attrs)  # bar: underline
+                    key = ("cursor_bar", fg_color, bg_color, attrs)  # bar: underline
             else:
-                key = (fg_color, bg_color, cell.attrs)
+                key = (fg_color, bg_color, attrs)
 
             # Get character
             ch = chr(cp) if 0 < cp <= 0x10FFFF else " "
@@ -350,6 +426,27 @@ class VTermBackend:
         if run_chars:
             segments.append(("".join(run_chars), run_key))
         return segments
+
+    def _convert_color_bytes(self, b: bytes) -> str | None:
+        """Convert raw (type, r, g, b) VTermColor bytes to a Rich color
+        string (None = default fg/bg) and memoize in _color_cache."""
+        t = b[0]
+        if t & 0x06:  # DEFAULT_FG / DEFAULT_BG
+            result = None
+        elif t & 0x01:  # indexed: palette lookup via libvterm
+            ctmp = self._ctmp
+            ctmp.type = t
+            ctmp.red = b[1]
+            ctmp.green = b[2]
+            ctmp.blue = b[3]
+            _vterm_screen_convert_color_to_rgb(self._screen, ctypes.byref(ctmp))
+            result = f"#{ctmp.red:02x}{ctmp.green:02x}{ctmp.blue:02x}"
+        else:  # direct RGB
+            result = f"#{b[1]:02x}{b[2]:02x}{b[3]:02x}"
+        if len(self._color_cache) >= 4096:
+            self._color_cache.clear()
+        self._color_cache[b] = result
+        return result
 
     @staticmethod
     def _color_to_str(color: VTermColor, ctmp: VTermColor,
