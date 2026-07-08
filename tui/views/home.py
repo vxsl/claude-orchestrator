@@ -4,8 +4,11 @@ Ports app.py's home surface: tab/status/filter/summary bars as markup
 lines, the workstream list + preview-sessions list (rows built with the
 same rendering.py builders), '/' search, 1/2/3 filters, f1–f5 sorts,
 'p' preview toggle, the self-pausing 0.3s throbber, and the working
-'c' spawn / 'r' resume actions. Everything modal (detail, add, notes,
-palette, help, tabs) is a stub toast until P4.
+'c' spawn / 'r' resume actions. P4-A wired the first modals: 'C'
+repo-spawn (RepoPickerView → WorkstreamPickerView → launch), 'd'
+delete + 't' trust-toggle via ConfirmView, and 'u' archive (no
+confirm, as in the Textual app). The remaining modals (detail, add,
+notes, palette, help, tabs) are stub toasts until P4-B/C.
 
 Not in this phase (see MIGRATION.md): the two embedded tig panes that
 filled the lower half of the Textual home (P5/P6) — the lists own the
@@ -22,7 +25,7 @@ from rich.text import Text
 import config
 from actions import launch_orch_claude, do_resume
 from rendering import (
-    C_BLUE, C_DIM, C_FAINT, C_GREEN, C_MID, C_YELLOW,
+    C_BLUE, C_DIM, C_FAINT, C_GREEN, C_MID, C_RED, C_YELLOW,
     BG_BASE, BG_RAISED,
     _activity_icon, _any_session_today, _best_activity, _category_markup,
     _is_session_seen, _is_today, _render_session_option, _render_ws_option,
@@ -35,6 +38,8 @@ from ..layout import Rect, split_cols, split_rows
 from ..view import View
 from ..widgets import SEP_ID as _SEP_ID
 from ..widgets import BlockList, LineEdit, ListView, footer_markup
+from .confirm import ConfirmView
+from .pickers import SENTINEL_NEW, RepoPickerView, WorkstreamPickerView
 
 STUB_DETAIL = "Detail view lands in P4 — ORCH_ENGINE=textual for full UI"
 STUB_TABS = "Tabs land in P4 — ORCH_ENGINE=textual for full UI"
@@ -132,16 +137,16 @@ class HomeView(View):
             "add": stub("Add workstream lands in P4 — use `orch add` meanwhile"),
             "brain_dump": stub("Brain dump lands in P4"),
             "spawn": self._action_spawn,
-            "repo_spawn": stub("Repo picker lands in P4"),
+            "repo_spawn": self._action_repo_spawn,
             "resume": self._action_resume,
             "link_action": stub("Link picker lands in P4"),
             "quick_note": stub("Quick note lands in P4 — use `orch note` meanwhile"),
             "edit_notes": stub("Todo editor lands in P4"),
             "rename": stub("Rename lands in P4"),
             "open_links": stub("Links land in P4"),
-            "toggle_archive": stub("Archive lands in P4"),
-            "delete_item": stub("Delete lands in P4"),
-            "toggle_trust": stub("Trust toggle lands in P4"),
+            "toggle_archive": self._action_toggle_archive,
+            "delete_item": self._action_delete,
+            "toggle_trust": self._action_toggle_trust,
             "filter('all')": lambda: self._set_filter("all"),
             "filter('stale')": lambda: self._set_filter("stale"),
             "filter('archived')": lambda: self._set_filter("archived"),
@@ -242,6 +247,119 @@ class HomeView(View):
             sessions_for_ws_fn=self.state.sessions_for_ws,
             pick_session=None,
         )
+
+    def _action_repo_spawn(self) -> None:
+        """Port of app.action_repo_spawn: repo picker → (workstream
+        picker) → launch, auto-creating a workstream when none exists."""
+        repos = self.state.discover_all_repos()
+        ws_counts: dict[str, int] = {}
+        for repo in repos:
+            n = len(self.state.workstreams_for_repo(repo))
+            if n > 0:
+                ws_counts[repo] = n
+
+        def on_repo_picked(repo_path: str | None) -> None:
+            if not repo_path:
+                return
+            matches = self.state.workstreams_for_repo(repo_path)
+            if len(matches) == 0:
+                self._spawn_in_ws(self.state.create_ws_for_repo(repo_path))
+            elif len(matches) == 1:
+                self._spawn_in_ws(matches[0])
+            else:
+                def on_ws_picked(result) -> None:
+                    if result is None:
+                        return
+                    if result == SENTINEL_NEW:
+                        self._spawn_in_ws(self.state.create_ws_for_repo(repo_path))
+                    else:
+                        self._spawn_in_ws(result)
+
+                self.app.push(WorkstreamPickerView(matches, repo_path),
+                              on_result=on_ws_picked)
+
+        self.app.push(RepoPickerView(repos, ws_counts), on_result=on_repo_picked)
+
+    def _spawn_in_ws(self, ws) -> None:
+        self.refresh_rows()  # a just-created workstream should be listed
+        self.app.launch_claude_session(ws)
+
+    def _action_toggle_archive(self) -> None:
+        """Port of app.action_toggle_archive (no confirm, same as Textual)."""
+        ws = self._selected_ws()
+        if not ws:
+            return
+        if self.state.filter_mode == "archived":
+            name = self.state.unarchive(ws.id)
+            if name:
+                self._toast(f"Restored: {name}")
+                self.refresh_rows()
+        else:
+            name = self.state.archive(ws.id)
+            if name:
+                self._toast(f"Archived: {name}")
+                self.refresh_rows()
+
+    def _action_delete(self) -> None:
+        ws = self._selected_ws()
+        if not ws:
+            return
+
+        def on_confirm(confirmed: bool) -> None:
+            if confirmed:
+                self.state.delete(ws.id)
+                self._toast(f"Deleted: {ws.name}")
+                self.refresh_rows()
+
+        self.app.push(
+            ConfirmView(
+                f"[bold {C_RED}]Delete[/bold {C_RED}] "
+                f"[bold]{_rich_escape(ws.name)}[/bold]?"
+            ),
+            on_result=on_confirm,
+        )
+
+    def _action_toggle_trust(self) -> None:
+        """Port of app.action_toggle_trust: confirm, then toggle the
+        trusted-projects entry for the workstream's cwd."""
+        import trust
+        from pathlib import Path
+
+        ws = self._selected_ws()
+        if not ws:
+            return
+        cwd = ws.repo_path
+        if not cwd:
+            self._toast(f"No cwd set for {ws.name} — link a worktree or repo first")
+            return
+        try:
+            norm = str(Path(cwd).expanduser().resolve())
+        except Exception:
+            self._toast(f"Invalid cwd: {cwd}")
+            return
+
+        if trust.is_trusted(norm):
+            msg = (
+                f"[bold]Untrust[/bold] [bold {C_YELLOW}]{_rich_escape(norm)}[/bold {C_YELLOW}]?\n"
+                f"[{C_DIM}]New sessions will require permission prompts.[/{C_DIM}]"
+            )
+        else:
+            msg = (
+                f"[bold {C_YELLOW}]⚠ Trust[/bold {C_YELLOW}] [bold]{_rich_escape(norm)}[/bold]?\n"
+                f"[{C_DIM}]All sessions launched in this tree will skip[/{C_DIM}]\n"
+                f"[{C_DIM}]all permission prompts (--dangerously-skip-permissions).[/{C_DIM}]"
+            )
+
+        def on_confirm(confirmed: bool) -> None:
+            if not confirmed:
+                return
+            if trust.toggle(norm):
+                self._toast(f"Trusted: {norm}")
+            else:
+                self._toast(f"Untrusted: {norm}")
+            self.refresh_rows()
+
+        self.app.push(ConfirmView(msg), on_result=on_confirm)
 
     # ── search ────────────────────────────────────────────────────
 

@@ -1,15 +1,27 @@
 """Modal base + wave-A view tests (P4): dismiss semantics, focus ring
-cycling, fuzzy filter/cancel paths, and result delivery through
-App.push(on_result), all via the Headless harness.
+cycling, fuzzy filter/cancel paths, result delivery through
+App.push(on_result), and the home-wired flows ('C' repo-spawn, 'd'
+delete, 'u' archive, 't' trust) on a Headless OrchApp with a temp store.
 """
+
+from types import SimpleNamespace
 
 import pytest
 
+from brain import ParsedTask
+from models import Category
 from tui.app import App
 from tui.layout import Rect
+from tui.orch_app import OrchApp
 from tui.testing import Headless
 from tui.view import View
+from tui.views.brain_preview import BrainPreviewView
+from tui.views.confirm import ConfirmView
 from tui.views.modals import FormModalView, FuzzyModalView, ListModalView, ModalView
+from tui.views.pickers import (
+    SENTINEL_NEW, LinkSessionView, RepoPickerView, WorkstreamPickerView,
+)
+from tui.views.todo_edit import TodoEditView
 from tui.widgets import LineEdit, TextEdit
 
 
@@ -329,3 +341,310 @@ class TestFormModalView:
             await push_modal(h, TwoFieldForm())
             text = h.screen_text()
             assert "alpha" in text and "beta" in text
+
+
+# ─── ConfirmView (ConfirmScreen key walk: y / n / escape / ^H) ───────
+
+
+@pytest.mark.asyncio
+class TestConfirmView:
+    async def test_y_confirms_true(self, app):
+        async with Headless(app) as h:
+            results = await push_modal(h, ConfirmView("Delete thing?"))
+            assert "Delete thing?" in h.screen_text()
+            await h.press("y")
+            assert results == [True]
+
+    async def test_n_denies_false(self, app):
+        async with Headless(app) as h:
+            results = await push_modal(h, ConfirmView("Sure?"))
+            await h.press("n")
+            assert results == [False]
+
+    async def test_escape_denies_false(self, app):
+        async with Headless(app) as h:
+            results = await push_modal(h, ConfirmView("Sure?"))
+            await h.press("escape")
+            assert results == [False]
+
+    async def test_backspace_goes_back_false(self, app):
+        async with Headless(app) as h:
+            results = await push_modal(h, ConfirmView("Sure?"))
+            await h.press("backspace")
+            assert results == [False]
+
+    async def test_multiline_message_renders(self, app):
+        async with Headless(app) as h:
+            await push_modal(h, ConfirmView("line one\nline two"))
+            text = h.screen_text()
+            assert "line one" in text and "line two" in text
+
+
+# ─── TodoEditView (_TodoEditScreen key walk) ─────────────────────────
+
+
+@pytest.mark.asyncio
+class TestTodoEditView:
+    async def test_prefilled_and_enter_saves_edited_text(self, app):
+        async with Headless(app) as h:
+            view = TodoEditView("fix the bug")
+            results = await push_modal(h, view)
+            assert view.input.text == "fix the bug"
+            assert "fix the bug" in h.screen_text()
+            await h.feed_bytes(b" now")
+            await h.press("enter")
+            assert results == ["fix the bug now"]
+
+    async def test_emptied_text_saves_none(self, app):
+        async with Headless(app) as h:
+            view = TodoEditView("ab")
+            results = await push_modal(h, view)
+            await h.press("backspace", "backspace", "enter")
+            assert results == [None]
+
+    async def test_escape_cancels_none(self, app):
+        async with Headless(app) as h:
+            results = await push_modal(h, TodoEditView("keep me"))
+            await h.press("escape")
+            assert results == [None]
+
+    async def test_ctrl_h_goes_back_none(self, app):
+        async with Headless(app) as h:
+            results = await push_modal(h, TodoEditView("keep me"))
+            await h.press("ctrl+h")
+            assert results == [None]
+
+
+# ─── BrainPreviewView (BrainPreviewScreen key walk) ──────────────────
+
+
+def _tasks():
+    return [
+        ParsedTask(raw_text="fix the login page today", name="fix the login page",
+                   category=Category.WORK),
+        ParsedTask(raw_text="water plants", name="water plants",
+                   category=Category.PERSONAL),
+    ]
+
+
+@pytest.mark.asyncio
+class TestBrainPreviewView:
+    async def test_renders_task_names_and_count(self, app):
+        async with Headless(app) as h:
+            await push_modal(h, BrainPreviewView(_tasks()))
+            text = h.screen_text()
+            assert "Parsed 2 tasks" in text
+            assert "fix the login page" in text
+            assert "water plants" in text
+
+    @pytest.mark.parametrize("key,expected", [
+        ("enter", "add"), ("y", "add"), ("l", "launch"),
+        ("escape", ""), ("n", ""), ("backspace", ""), ("ctrl+h", ""),
+    ])
+    async def test_key_walk(self, app, key, expected):
+        async with Headless(app) as h:
+            results = await push_modal(h, BrainPreviewView(_tasks()))
+            await h.press(key)
+            assert results == [expected]
+
+
+# ─── Picker views (LinkSession / RepoPicker / WorkstreamPicker) ──────
+
+
+@pytest.mark.asyncio
+class TestLinkSessionView:
+    async def test_pick_dismisses_with_workstream(self, populated_store, app):
+        session = SimpleNamespace(display_name="my session")
+        async with Headless(app) as h:
+            view = LinkSessionView(populated_store, session)
+            results = await push_modal(h, view)
+            assert "Link session: my session" in h.screen_text()
+            await h.feed_bytes(b"personal")
+            await h.press("enter")
+            assert len(results) == 1
+            assert results[0].name == "Personal project"
+
+    async def test_escape_cancels_none(self, populated_store, app):
+        session = SimpleNamespace(display_name="s")
+        async with Headless(app) as h:
+            results = await push_modal(h, LinkSessionView(populated_store, session))
+            await h.press("escape")
+            assert results == [None]
+
+
+@pytest.mark.asyncio
+class TestRepoPickerView:
+    REPOS = ["/home/u/dev/zeta", "/home/u/dev/alpha", "/home/u/dev/mid"]
+
+    async def test_ws_repos_sort_first_and_enter_picks_path(self, app):
+        async with Headless(app) as h:
+            view = RepoPickerView(self.REPOS, {"/home/u/dev/zeta": 2})
+            results = await push_modal(h, view)
+            ids = [rid for rid, _, _ in view.picker.list.rows]
+            assert ids == ["/home/u/dev/zeta", "/home/u/dev/alpha", "/home/u/dev/mid"]
+            assert "(2 ws)" in h.screen_text()
+            await h.press("j", "enter")
+            assert results == ["/home/u/dev/alpha"]
+
+    async def test_filter_then_pick(self, app):
+        async with Headless(app) as h:
+            view = RepoPickerView(self.REPOS, {})
+            results = await push_modal(h, view)
+            await h.feed_bytes(b"mid")
+            await h.press("enter")
+            assert results == ["/home/u/dev/mid"]
+
+
+@pytest.mark.asyncio
+class TestWorkstreamPickerView:
+    async def test_pick_existing_dismisses_with_workstream(self, populated_store, app):
+        streams = populated_store.active[:2]
+        async with Headless(app) as h:
+            view = WorkstreamPickerView(streams, "/home/u/dev/repo")
+            results = await push_modal(h, view)
+            assert "Workstreams in repo" in h.screen_text()
+            await h.press("enter")
+            assert results == [streams[0]]
+
+    async def test_sentinel_row_dismisses_with_new_marker(self, populated_store, app):
+        streams = populated_store.active[:2]
+        async with Headless(app) as h:
+            view = WorkstreamPickerView(streams, "/home/u/dev/repo")
+            results = await push_modal(h, view)
+            assert "+ Create new workstream" in h.screen_text()
+            # sentinel is the last row ("G" would type into the query)
+            await h.press("j", "j", "enter")
+            assert results == [SENTINEL_NEW]
+
+    async def test_escape_cancels_none(self, populated_store, app):
+        async with Headless(app) as h:
+            results = await push_modal(
+                h, WorkstreamPickerView(populated_store.active[:2], "/r")
+            )
+            await h.press("escape")
+            assert results == [None]
+
+
+# ─── Home wiring (OrchApp, temp store, pollers off) ──────────────────
+
+
+@pytest.fixture
+def home_app(populated_store):
+    return OrchApp(store_path=populated_store.path, pollers=False)
+
+
+@pytest.mark.asyncio
+class TestRepoSpawnWiring:
+    async def test_C_opens_repo_picker_and_escape_backs_out(self, home_app):
+        async with Headless(home_app) as h:
+            h.app.state._all_repos = ["/home/u/dev/repoA"]  # skip the ~ scan
+            await h.press("C")
+            assert isinstance(h.top, RepoPickerView)
+            text = h.screen_text()
+            assert "Select Repository" in text
+            assert "repoA" in text
+            await h.press("escape")
+            assert h.top is h.app.home  # clean back-out, nothing launched
+
+    async def test_full_flow_multi_match_create_new(self, home_app):
+        async with Headless(home_app) as h:
+            repo = "/home/u/dev/shared"
+            ws1, ws2 = h.app.state.store.active[:2]
+            ws1.repo_path = repo
+            ws2.repo_path = repo
+            h.app.state._all_repos = [repo]
+            launched = []
+            h.app.launch_claude_session = lambda ws, **kw: launched.append(ws)
+            before = len(h.app.state.store.active)
+
+            await h.press("C", "enter")  # pick the repo → 2 matches
+            assert isinstance(h.top, WorkstreamPickerView)
+            await h.press("j", "j", "enter")  # "+ Create new workstream"
+            assert h.top is h.app.home
+            assert len(launched) == 1
+            assert launched[0].repo_path == repo
+            assert len(h.app.state.store.active) == before + 1
+
+    async def test_full_flow_single_match_launches_directly(self, home_app):
+        async with Headless(home_app) as h:
+            repo = "/home/u/dev/solo"
+            ws1 = h.app.state.store.active[0]
+            ws1.repo_path = repo
+            h.app.state._all_repos = [repo]
+            launched = []
+            h.app.launch_claude_session = lambda ws, **kw: launched.append(ws)
+
+            await h.press("C", "enter")
+            assert h.top is h.app.home
+            assert launched == [ws1]
+
+
+@pytest.mark.asyncio
+class TestDeleteWiring:
+    async def test_d_confirm_y_deletes(self, home_app):
+        async with Headless(home_app) as h:
+            ws_id = h.app.home.ws_list.highlighted_id
+            name = h.app.state.get_ws(ws_id).name
+            await h.press("d")
+            assert isinstance(h.top, ConfirmView)
+            assert name in h.screen_text()
+            await h.press("y")
+            assert h.top is h.app.home
+            assert h.app.state.get_ws(ws_id) is None
+            assert f"Deleted: {name}" == h.app.toast_text
+
+    async def test_d_confirm_n_keeps(self, home_app):
+        async with Headless(home_app) as h:
+            ws_id = h.app.home.ws_list.highlighted_id
+            await h.press("d", "n")
+            assert h.top is h.app.home
+            assert h.app.state.get_ws(ws_id) is not None
+
+
+@pytest.mark.asyncio
+class TestArchiveWiring:
+    async def test_u_archives_without_confirm(self, home_app):
+        async with Headless(home_app) as h:
+            ws_id = h.app.home.ws_list.highlighted_id
+            name = h.app.state.get_ws(ws_id).name
+            await h.press("u")
+            assert h.top is h.app.home  # no confirm modal, as in app.py
+            assert ws_id not in [w.id for w in h.app.state.store.active]
+            assert ws_id in [w.id for w in h.app.state.store.archived]
+            assert f"Archived: {name}" == h.app.toast_text
+
+    async def test_u_in_archived_filter_restores(self, home_app):
+        async with Headless(home_app) as h:
+            ws_id = h.app.home.ws_list.highlighted_id
+            await h.press("u", "3")  # archive it, switch to archived filter
+            assert h.app.home.ws_list.highlighted_id == ws_id
+            await h.press("u")
+            assert ws_id in [w.id for w in h.app.state.store.active]
+            assert h.app.toast_text.startswith("Restored:")
+
+
+@pytest.mark.asyncio
+class TestTrustWiring:
+    async def test_t_confirms_then_toggles(self, home_app, monkeypatch, tmp_path):
+        import trust
+
+        calls = []
+        monkeypatch.setattr(trust, "is_trusted", lambda p: False)
+        monkeypatch.setattr(trust, "toggle", lambda p: calls.append(p) or True)
+        async with Headless(home_app) as h:
+            ws = h.app.state.get_ws(h.app.home.ws_list.highlighted_id)
+            ws.repo_path = str(tmp_path)
+            await h.press("t")
+            assert isinstance(h.top, ConfirmView)
+            assert "Trust" in h.screen_text()
+            await h.press("y")
+            assert calls == [str(tmp_path)]
+            assert h.app.toast_text.startswith("Trusted:")
+
+    async def test_t_without_cwd_toasts(self, home_app):
+        async with Headless(home_app) as h:
+            ws = h.app.state.get_ws(h.app.home.ws_list.highlighted_id)
+            ws.repo_path = ""
+            await h.press("t")
+            assert h.top is h.app.home
+            assert "No cwd set" in h.app.toast_text
