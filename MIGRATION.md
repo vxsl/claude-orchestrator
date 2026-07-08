@@ -18,14 +18,17 @@ the plan lives with the session notes.
   enforces this; don't add engine conditionals to shared code.
 - Keys come from `config.py DEFAULT_KEYS`; visuals from `rendering.py`.
   Both engines consume the same sources.
-- Entry gate: `ORCH_ENGINE=tui` env var selects the new engine once P3
-  lands; default stays `textual` until cutover.
+- Entry gate (live since P3): `ORCH_ENGINE=tui` env var selects the new
+  engine in `cli.cmd_tui`; default stays `textual` until cutover.
+- Data isolation for new-engine testing: `OrchApp(store_path=...)` or the
+  `ORCH_STORE_PATH` env var points the store at a copy instead of the real
+  `data.json` (models.py has no env override; this lives in OrchApp only).
 
 ## Screen port ledger
 
 | Screen | Ported | Parity-verified | Notes |
 |---|---|---|---|
-| Home (app.py) | — | — | P3 |
+| Home (app.py) | 2026-07-08 | — | P3: tui/views/home.py + tui/orch_app.py. No embedded tig panes yet (P5/P6 — lists own the whole body). Detail/tabs/add/notes/rename/palette/help/pickers = stub toasts. `c` spawn + `r` resume work; resume = suspend-attach fallback (multi-match resumes most recent; SessionPicker is P4). `/` filters ws names only (session content search P4). Pollers ported: tmux, git-status, worktrees, sessions, liveness (+bridge/watcher, rate limiters), idle cleanup. Deferred: AI naming/titling/description refresh in the session poller, global search worker, `C` repo-spawn. |
 | ConfirmScreen | — | — | P4-A |
 | _TodoEditScreen | — | — | P4-A |
 | BrainPreviewScreen | — | — | P4-A |

@@ -186,9 +186,15 @@ def cmd_archive_id(args):
 
 def cmd_tui(args):
     import traceback, os
-    from app import OrchestratorApp
     try:
-        OrchestratorApp().run()
+        # ORCH_ENGINE=tui selects the new hand-rolled engine (see MIGRATION.md);
+        # the Textual engine stays the default until cutover.
+        if os.environ.get("ORCH_ENGINE", "textual") == "tui":
+            from tui.orch_app import OrchApp
+            OrchApp().run()
+        else:
+            from app import OrchestratorApp
+            OrchestratorApp().run()
     except Exception:
         crash_log = os.environ.get("ORCH_CRASH_LOG", "")
         if crash_log:
