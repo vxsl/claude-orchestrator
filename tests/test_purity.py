@@ -33,6 +33,8 @@ PURE_MODULES = [
     "tui.keys",
     "tui.layout",
     "tui.frame",
+    "tui.term",
+    "tui.view",
 ]
 
 
