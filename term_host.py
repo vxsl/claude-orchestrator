@@ -11,6 +11,7 @@ Override hooks for the UI layer (all safe no-ops by default):
 - ``_clipboard_write(text)``— OSC 52 payload extracted from the PTY stream
 - ``_on_frame_complete()``  — synchronized-output end (2026l): render now
 - ``_request_render()``     — scrollback offset changed: repaint
+- ``_release_fd_reader()``  — fd about to close/hand off: drop its loop reader
 """
 
 from __future__ import annotations
@@ -367,6 +368,16 @@ class TerminalHost:
     def _request_render(self) -> None:
         """Scrollback offset changed — repaint the pane."""
 
+    def _release_fd_reader(self) -> None:
+        """Called immediately before the master fd is closed or handed off
+        (stop/detach), while it is still open. A UI layer that registered an
+        event-loop reader on the fd MUST deregister it here: closing an fd
+        out from under asyncio leaves a stale selector key that silently
+        defeats the next ``add_reader`` on the reused fd number (epoll drops
+        the closed fd, but asyncio's map keeps it, so the reuse is treated as
+        a no-op ``modify`` and the new reader never fires). No-op for the
+        base executor read loop, which owns no such reader."""
+
     # ── Lifecycle ──────────────────────────────────────────────────
 
     def start(self) -> None:
@@ -406,7 +417,9 @@ class TerminalHost:
             os.waitpid(self._pid, 0)
         except (OSError, ChildProcessError):
             pass
-        # Close the PTY master fd to avoid leaking file descriptors.
+        # Deregister any event-loop reader while the fd is still open, then
+        # close the PTY master fd to avoid leaking file descriptors.
+        self._release_fd_reader()
         if self._p_out is not None:
             try:
                 self._p_out.close()
@@ -424,6 +437,7 @@ class TerminalHost:
         if self._read_task:
             self._read_task.cancel()
             self._read_task = None
+        self._release_fd_reader()  # fd is handed off, not closed — see hook
         state: dict = {
             "pid": self._pid,
             "fd": self._fd,
@@ -679,7 +693,9 @@ class TerminalHost:
                 os.waitpid(self._pid, 0)
             except (OSError, ChildProcessError):
                 pass
-        # Close the PTY master fd to avoid leaking file descriptors.
+        # Deregister any event-loop reader while the fd is still open, then
+        # close the PTY master fd to avoid leaking file descriptors.
+        self._release_fd_reader()
         if self._p_out is not None:
             try:
                 self._p_out.close()

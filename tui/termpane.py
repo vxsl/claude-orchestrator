@@ -130,6 +130,23 @@ class TerminalPane(TerminalHost):
         if self.copy_to_clipboard is not None:
             self.copy_to_clipboard(text)
 
+    def _release_fd_reader(self) -> None:
+        # stop()/detach() call this while self._fd is still open, before the
+        # fd is closed or handed off. Removing the reader now tears down the
+        # epoll registration and the selector-map entry together; otherwise a
+        # pane that reuses this fd number would add_reader onto the stale key
+        # (a no-op modify) and never receive output. The read task's own
+        # finally can't do this — it unwinds after the fd is already gone.
+        fd = self._fd
+        if fd is None:
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return  # no loop (unit test / already torn down)
+        with contextlib.suppress(Exception):
+            loop.remove_reader(fd)
+
     # _handle_pty_eof: host default fires self.on_finished — sufficient.
 
     # ── PTY read loop ─────────────────────────────────────────────

@@ -452,6 +452,55 @@ class TestRealPty:
         finally:
             pane.stop()
 
+    async def _type_and_wait(self, pane, text, timeout=3.0):
+        for ch in text:
+            pane.handle_key(key(ch, ch, ch.encode()))
+        pane.handle_key(key("enter", "\r", b"\r"))
+        for _ in range(int(timeout / 0.02)):
+            await asyncio.sleep(0.02)
+            if text in "\n".join(render_frame(pane, 40, 6).plain_lines()):
+                return True
+        return False
+
+    async def test_new_pane_reads_after_reusing_a_stopped_panes_fd(self):
+        """Regression: stopping a pane closed its fd but left the asyncio
+        reader registered; a new pane reusing that fd number then added its
+        reader onto the stale selector key (a no-op modify that never
+        re-registered with epoll), so it rendered no output. _release_fd_reader
+        must deregister while the fd is still open. See term_host hook."""
+        a = TerminalPane("cat")
+        a.resize(6, 40)
+        a.start()
+        fd_a = a._fd
+        assert await self._type_and_wait(a, "AAA")
+        a.stop()  # closes fd_a; a new pane may now grab that fd number
+        b = TerminalPane("cat")
+        b.resize(6, 40)
+        b.start()
+        try:
+            # Let a's cancelled read task fully unwind before exercising b.
+            await asyncio.sleep(0.1)
+            if b._fd == fd_a:  # only a real regression when the fd is reused
+                assert await self._type_and_wait(b, "BBB"), (
+                    "reused-fd pane never echoed — stale reader defeated "
+                    "add_reader")
+        finally:
+            b.stop()
+
+    async def test_churn_of_stop_start_keeps_output_flowing(self):
+        """Rapid stop/start churn (panes repeatedly reusing the same freed
+        fd) must never wedge a live pane's output reader."""
+        for i in range(6):
+            p = TerminalPane("cat")
+            p.resize(6, 40)
+            p.start()
+            try:
+                tag = f"C{i}{i}{i}"
+                assert await self._type_and_wait(p, tag), (
+                    f"churn pane {i} (fd={p._fd}) never echoed")
+            finally:
+                p.stop()
+
 
 def test_termpane_import_purity():
     """tui.termpane must import without Textual or any tui.views module."""
