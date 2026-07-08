@@ -57,4 +57,4 @@ Changes made to old-UI files after 2026-07-08 that the port must pick up:
 
 | Date | File | Change | Picked up in port? |
 |---|---|---|---|
-| (none yet) | | | |
+| 2026-07-08 | claude_session_screen.py | Sanctioned import-redirect (P5): the pure spawn helpers (`_git_status_snapshot`, `auto_link_session`, `log_session_exit`, `build_session_context`, `build_claude_command`, `build_session_env`, `claude_jsonl_path`, `spawn_implementer_session`, `ORCH_DIR`) moved verbatim to the new shared `session_launch.py`; the frozen module re-imports them for back-compat. Only behavior delta: `spawn_implementer_session` now reaches tmux via `term_host.TerminalHost` instead of `terminal.TerminalWidget` (same inherited classmethods — argv unchanged). | yes — session_launch.py is the port |
