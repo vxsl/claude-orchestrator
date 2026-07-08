@@ -62,6 +62,41 @@ class TestNotification:
         assert n.dt.month == 6
 
 
+class TestParseCache:
+    def test_unchanged_file_not_reparsed(self, tmp_path):
+        f = tmp_path / "notifications.jsonl"
+        f.write_text(_make_notif_line() + "\n")
+        with patch("notifications.NOTIFICATIONS_FILE", f), \
+             patch("notifications.DISMISSED_FILE", tmp_path / "dismissed.json"):
+            first = load_notifications()
+            with patch("notifications._parse_notifications_file",
+                       side_effect=AssertionError("cache miss")) as reparse:
+                second = load_notifications()
+            reparse.assert_not_called()
+        assert [n.id for n in second] == [n.id for n in first]
+
+    def test_appended_file_invalidates(self, tmp_path):
+        f = tmp_path / "notifications.jsonl"
+        f.write_text(_make_notif_line(message="one") + "\n")
+        with patch("notifications.NOTIFICATIONS_FILE", f), \
+             patch("notifications.DISMISSED_FILE", tmp_path / "dismissed.json"):
+            assert len(load_notifications()) == 1
+            with f.open("a") as fh:
+                fh.write(_make_notif_line(message="two") + "\n")
+            assert len(load_notifications()) == 2
+
+    def test_dismiss_visible_through_cache(self, tmp_path):
+        f = tmp_path / "notifications.jsonl"
+        f.write_text(_make_notif_line() + "\n")
+        with patch("notifications.NOTIFICATIONS_FILE", f), \
+             patch("notifications.DISMISSED_FILE", tmp_path / "dismissed.json"):
+            (n,) = load_notifications()
+            assert not n.dismissed
+            dismiss_notification(n.id)
+            (n2,) = load_notifications()
+            assert n2.dismissed
+
+
 class TestLoadNotifications:
     def test_empty_file(self, tmp_path):
         f = tmp_path / "notifications.jsonl"

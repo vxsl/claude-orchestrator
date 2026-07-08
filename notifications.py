@@ -70,30 +70,58 @@ def _notif_id(timestamp: str, cwd: str, message: str) -> str:
     return hashlib.md5(raw.encode()).hexdigest()[:10]
 
 
+_dismissed_cache: tuple[tuple, set[str]] | None = None
+
+
 def _load_dismissed() -> set[str]:
-    """Load set of dismissed notification IDs."""
+    """Load set of dismissed notification IDs (stat-keyed cache)."""
+    global _dismissed_cache
+
+    key = _file_key(DISMISSED_FILE)
+    if key is None:
+        return set()
+    cached = _dismissed_cache
+    if cached is not None and cached[0] == key:
+        return cached[1]
+
     try:
         data = json.loads(DISMISSED_FILE.read_text())
-        return set(data) if isinstance(data, list) else set()
+        dismissed = set(data) if isinstance(data, list) else set()
     except (OSError, json.JSONDecodeError):
         return set()
+    _dismissed_cache = (key, dismissed)
+    return dismissed
 
 
 def _save_dismissed(dismissed: set[str]) -> None:
     """Persist dismissed notification IDs."""
+    global _dismissed_cache
+
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
     DISMISSED_FILE.write_text(json.dumps(sorted(dismissed)))
+    key = _file_key(DISMISSED_FILE)
+    _dismissed_cache = (key, set(dismissed)) if key else None
 
 
-def load_notifications(max_age: timedelta = MAX_AGE) -> list[Notification]:
-    """Read notifications from JSONL, filtering by age and marking dismissed ones."""
-    if not NOTIFICATIONS_FILE.exists():
-        return []
+# Parse cache: the TUI calls load_notifications on every refresh tick, but the
+# JSONL only changes when the stop hook fires. Key on (path, mtime_ns, size);
+# age filtering and dismissed marking stay per-call so behavior is unchanged.
+# Single-tuple global so concurrent thread-worker calls can't observe a torn
+# key/entries pair (worst case both re-parse).
+_parse_cache: tuple[tuple, list[tuple[datetime, Notification]]] | None = None
 
-    cutoff = datetime.now(timezone.utc) - max_age
-    dismissed = _load_dismissed()
-    notifications: list[Notification] = []
 
+def _file_key(path: Path) -> tuple | None:
+    try:
+        st = path.stat()
+    except OSError:
+        return None
+    return (str(path), st.st_mtime_ns, st.st_size)
+
+
+def _parse_notifications_file() -> list[tuple[datetime, Notification]]:
+    """Parse the whole JSONL into (dt, Notification) pairs, newest first."""
+    entries: list[tuple[datetime, Notification]] = []
     for line in NOTIFICATIONS_FILE.read_text().splitlines():
         line = line.strip()
         if not line:
@@ -106,23 +134,40 @@ def load_notifications(max_age: timedelta = MAX_AGE) -> list[Notification]:
         ts = data.get("timestamp", "")
         cwd = data.get("cwd", "")
         message = data.get("message", "")
-        nid = _notif_id(ts, cwd, message)
-
         notif = Notification(
-            id=nid,
+            id=_notif_id(ts, cwd, message),
             timestamp=ts,
             cwd=cwd.rstrip("/"),
             title=data.get("title", ""),
             message=message,
             session_id=data.get("session_id", ""),
-            dismissed=nid in dismissed,
         )
+        entries.append((notif.dt, notif))
 
-        if notif.dt >= cutoff:
+    entries.sort(key=lambda e: e[1].timestamp, reverse=True)
+    return entries
+
+
+def load_notifications(max_age: timedelta = MAX_AGE) -> list[Notification]:
+    """Read notifications from JSONL, filtering by age and marking dismissed ones."""
+    global _parse_cache
+
+    key = _file_key(NOTIFICATIONS_FILE)
+    if key is None:
+        return []
+
+    cached = _parse_cache
+    if cached is None or cached[0] != key:
+        cached = (key, _parse_notifications_file())
+        _parse_cache = cached
+
+    cutoff = datetime.now(timezone.utc) - max_age
+    dismissed = _load_dismissed()
+    notifications: list[Notification] = []
+    for dt, notif in cached[1]:
+        if dt >= cutoff:
+            notif.dismissed = notif.id in dismissed
             notifications.append(notif)
-
-    # Newest first
-    notifications.sort(key=lambda n: n.timestamp, reverse=True)
     return notifications
 
 
