@@ -17,7 +17,6 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
-# cleanup and term_host join this list when the terminal.py split (P0.2) lands.
 PURE_MODULES = [
     "state",
     "rendering",
@@ -28,6 +27,8 @@ PURE_MODULES = [
     "config",
     "auto_mode",
     "notifications",
+    "cleanup",
+    "term_host",
     "vterm_backend",
 ]
 

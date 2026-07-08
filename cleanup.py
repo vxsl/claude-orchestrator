@@ -19,7 +19,7 @@ import time
 from pathlib import Path
 
 from sessions import CLAUDE_PROJECTS_DIR
-from terminal import TerminalWidget
+from term_host import TerminalHost
 
 
 DEFAULT_IDLE_HOURS = 6.0
@@ -39,7 +39,7 @@ def attached_orch_sessions() -> set[str]:
     """Return tmux session names on the orch-sessions socket with attached clients."""
     try:
         result = subprocess.run(
-            ["tmux", "-L", TerminalWidget.TMUX_SOCKET,
+            ["tmux", "-L", TerminalHost.TMUX_SOCKET,
              "list-clients", "-F", "#{client_session}"],
             capture_output=True, text=True, timeout=5,
         )
@@ -84,7 +84,7 @@ def find_idle_orch_sessions(
     *,
     now: float | None = None,
     projects_dir: Path | None = None,
-    list_sessions=TerminalWidget.list_tmux_sessions,
+    list_sessions=TerminalHost.list_tmux_sessions,
     attached_fn=attached_orch_sessions,
 ) -> list[tuple[str, float]]:
     """Return [(session_name, age_hours)] for non-attached sessions older than threshold.
@@ -119,7 +119,7 @@ def kill_orch_session(session_name: str) -> bool:
     """Kill a tmux session on the orch-sessions socket.  Returns True on success."""
     try:
         result = subprocess.run(
-            ["tmux", "-L", TerminalWidget.TMUX_SOCKET,
+            ["tmux", "-L", TerminalHost.TMUX_SOCKET,
              "kill-session", "-t", session_name],
             capture_output=True, timeout=5,
         )
@@ -134,7 +134,7 @@ def cleanup_idle_orch_sessions(
     dry_run: bool = False,
     now: float | None = None,
     projects_dir: Path | None = None,
-    list_sessions=TerminalWidget.list_tmux_sessions,
+    list_sessions=TerminalHost.list_tmux_sessions,
     attached_fn=attached_orch_sessions,
     kill_fn=kill_orch_session,
 ) -> list[tuple[str, float]]:
