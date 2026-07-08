@@ -43,12 +43,41 @@ def test_single_row_change_emits_single_cup():
     assert cups(out) == [(3, 1)]
 
 
-def test_no_change_emits_no_rows():
+def test_no_change_no_cursor_move_returns_empty_bytes():
     painter = Painter()
     painter.paint(make_frame(["one", "two"]))
-    out = painter.paint(make_frame(["one", "two"]))
-    assert cups(out) == []
-    assert out.startswith(b"\x1b[?2026h") and out.endswith(b"\x1b[?2026l")
+    assert painter.paint(make_frame(["one", "two"])) == b""
+
+
+def test_change_after_empty_paint_still_diffs():
+    painter = Painter()
+    painter.paint(make_frame(["one", "two"]))
+    assert painter.paint(make_frame(["one", "two"])) == b""
+    out = painter.paint(make_frame(["one", "CHANGED"]))
+    assert cups(out) == [(2, 1)]
+
+
+def test_cursor_move_alone_emits_paint():
+    painter = Painter()
+    f1 = make_frame(["hello"])
+    f1.cursor = (1, 0)
+    painter.paint(f1)
+    f2 = make_frame(["hello"])
+    f2.cursor = (2, 0)
+    out = painter.paint(f2)
+    assert cups(out) == [(1, 3)]  # only the cursor reposition
+    assert b"\x1b[?25h" in out
+
+
+def test_cursor_hide_alone_emits_paint():
+    painter = Painter()
+    f1 = make_frame(["hello"])
+    f1.cursor = (1, 0)
+    painter.paint(f1)
+    f2 = make_frame(["hello"])
+    out = painter.paint(f2)
+    assert out != b"" and b"\x1b[?25l" in out
+    assert painter.paint(make_frame(["hello"])) == b""  # now steady state
 
 
 def test_style_only_change_repaints_row():

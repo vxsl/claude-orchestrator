@@ -348,7 +348,8 @@ async def test_resize_repaints_at_new_size():
 @pytest.mark.asyncio
 async def test_pane_ticker_coalesces_dirty_flags_into_paint():
     async with Headless(App(), size=(30, 6)) as h:
-        h.app.push(RowsView())
+        view = RowsView()
+        h.app.push(view)
         await h.pause()
 
         class Pane:
@@ -357,6 +358,7 @@ async def test_pane_ticker_coalesces_dirty_flags_into_paint():
         pane = Pane()
         h.app.register_pane(pane)
         mark = len(h.io.written)
+        view.counter += 1  # make the requested paint actually change a row
         pane.has_dirty = True
         await h.pause(0.1)  # > PANE_TICK_SECS
         assert pane.has_dirty is False  # ticker cleared the flag
@@ -364,6 +366,16 @@ async def test_pane_ticker_coalesces_dirty_flags_into_paint():
         h.app.unregister_pane(pane)
         await h.pause(0.1)  # ticker stops itself once empty
         assert h.app._pane_ticker.done()
+
+
+@pytest.mark.asyncio
+async def test_noop_repaint_writes_no_bytes():
+    async with Headless(App(), size=(30, 6)) as h:
+        h.app.push(RowsView())
+        await h.pause()
+        mark = len(h.io.written)
+        h.app.paint_now()  # identical frame: painter returns b"", io skipped
+        assert len(h.io.written) == mark
 
 
 # ── suspend ───────────────────────────────────────────────────────

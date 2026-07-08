@@ -276,7 +276,9 @@ class App:
         for view, _ in self._stack[start:]:
             view.render(frame, rect)
         self.current_frame = frame
-        self.io.write(self._painter.paint(frame))
+        data = self._painter.paint(frame)
+        if data:  # empty when nothing changed (painter skipped the paint)
+            self.io.write(data)
 
     def _on_resize(self) -> None:
         try:

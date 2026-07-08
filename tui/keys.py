@@ -115,7 +115,7 @@ _PASTE_END = b"\x1b[201~"
 _MAX_CSI_PARAMS = 64  # parameter bytes before a sequence is called garbage
 
 
-def _char_key_name(ch: str) -> str:
+def key_name_for_char(ch: str) -> str:
     """Textual-compatible key name for a single character."""
     if ch.isalnum():
         return ch
@@ -185,7 +185,7 @@ def _decode_csi_u(params: str, raw: bytes) -> KeyEvent | None:
             ch = chr(codepoint)
         except ValueError:
             return None
-        name = _char_key_name(ch).lower()
+        name = key_name_for_char(ch).lower()
         if mods == 1 and codepoint >= 0x20 and codepoint != 0x7F:
             char = ch
     return KeyEvent(_with_mods(name, mods), char, raw)
@@ -321,7 +321,7 @@ class InputDecoder:
             ch = raw.decode("utf-8")
         except UnicodeDecodeError:
             return 1
-        events.append(KeyEvent(_char_key_name(ch), ch, raw))
+        events.append(KeyEvent(key_name_for_char(ch), ch, raw))
         return n
 
     def _decode_escape(self, events: list[Event]) -> int:
@@ -359,7 +359,7 @@ class InputDecoder:
             ch = raw[1:].decode("utf-8")
         except UnicodeDecodeError:
             return 2
-        name = _char_key_name(ch)
+        name = key_name_for_char(ch)
         if len(name) == 1 and name.isupper():
             name = f"shift+{name.lower()}"  # mirrors Textual's alt+uppercase naming
         events.append(KeyEvent(f"alt+{name}", ch, raw))

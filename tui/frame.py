@@ -158,6 +158,7 @@ class Painter:
     def __init__(self, console: Console | None = None) -> None:
         self._console = console or _CONSOLE
         self._prev: list[str] | None = None
+        self._prev_cursor: tuple[int, int] | None = None
         self._ansi_cache: dict[Style, str] = {}
 
     def invalidate(self) -> None:
@@ -166,10 +167,16 @@ class Painter:
     def paint(self, frame: Frame) -> bytes:
         lines = [self._row_ansi(row) for row in frame.rows]
         prev = self._prev
-        if prev is None or len(prev) != len(lines):
+        full = prev is None or len(prev) != len(lines)
+        if full:
             changed = range(len(lines))
         else:
             changed = [y for y in range(len(lines)) if lines[y] != prev[y]]
+        cursor_changed = full or frame.cursor != self._prev_cursor
+        self._prev = lines
+        self._prev_cursor = frame.cursor
+        if not changed and not cursor_changed:
+            return b""  # nothing to do: skip even the 2026 wrapper
         out = ["\x1b[?2026h"]
         for y in changed:
             out.append(f"\x1b[{y + 1};1H")
@@ -181,7 +188,6 @@ class Painter:
         else:
             out.append("\x1b[?25l")
         out.append("\x1b[?2026l")
-        self._prev = lines
         return "".join(out).encode("utf-8")
 
     def _row_ansi(self, row: list[Segment]) -> str:

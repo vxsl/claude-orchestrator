@@ -11,7 +11,7 @@ from __future__ import annotations
 import asyncio
 
 from .app import App
-from .keys import KeyEvent, _char_key_name
+from .keys import KeyEvent, key_name_for_char
 
 
 class FakeTermIO:
@@ -55,7 +55,7 @@ def make_key_event(name: str) -> KeyEvent:
     """Synthetic KeyEvent from a Textual-style key name ('j', 'up',
     'ctrl+d'). raw is b'' — synthetic events aren't PTY passthrough."""
     if len(name) == 1:
-        return KeyEvent(_char_key_name(name), name, b"")
+        return KeyEvent(key_name_for_char(name), name, b"")
     return KeyEvent(name, _NAMED_CHARS.get(name), b"")
 
 

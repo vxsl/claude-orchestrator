@@ -372,3 +372,19 @@ def test_byte_at_a_time_feeding():
     for i in range(len(data)):
         events.extend(dec.feed(data[i : i + 1]))
     assert keys_of(events) == ["ctrl+shift+up", "j", "ctrl+shift+j"]
+
+
+# ── key_name_for_char (public helper) ─────────────────────────────
+
+
+def test_key_name_for_char_matches_decoder_names():
+    from tui.keys import key_name_for_char
+
+    assert key_name_for_char("j") == "j"
+    assert key_name_for_char("G") == "G"
+    assert key_name_for_char("?") == "question_mark"
+    assert key_name_for_char("/") == "slash"
+    assert key_name_for_char(" ") == "space"
+    # agrees with what the decoder emits for the same char
+    (ev,) = InputDecoder().feed(b"?")
+    assert ev.key == key_name_for_char("?")
