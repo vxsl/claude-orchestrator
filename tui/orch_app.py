@@ -16,19 +16,21 @@ from __future__ import annotations
 
 import asyncio
 import os
-import shlex
 import subprocess
 import time
-import uuid
 from pathlib import Path
 
 from actions import ui_is_visible, ws_working_dir
 from models import Store
 from session_bridge import SessionBridge
+from session_launch import auto_link_session, claude_jsonl_path
+from sessions import ClaudeSession, parse_session
 from state import AppState, TabManager
+from term_host import TerminalHost
 
 from .app import App
 from .view import Timer
+from .views.claude_session import ClaudeSessionView
 from .views.current_sessions import CurrentSessionsView
 from .views.detail import DetailView
 from .views.home import HomeView
@@ -51,6 +53,16 @@ class OrchApp(App):
         self._detail_cache: dict[str, DetailView] = {}  # ws_id -> cached view
         self._current_sessions_view: CurrentSessionsView | None = None
         self._tab_keymap = self._build_tab_keymap()
+
+        # Claude-session bookkeeping (ports of app.py's on_mount dicts)
+        self._detached_sessions: dict[str, dict] = {}  # sid -> {ws, start_time, jsonl}
+        self._tab_active_session: dict[str, str] = {}  # ws_id -> sid (tab-switch resume)
+        self._ws_pending_session: dict[str, str] = {}  # ws_id -> sid for reuse on "c"
+
+        # Auto mode (coordinator/implementer loop)
+        self._auto_modes: dict[str, object] = {}       # ws_id -> AutoMode
+        self._auto_coord_sid: dict[str, str] = {}      # ws_id -> coordinator sid
+        self._auto_impl_sids: dict[str, set] = {}      # ws_id -> implementer sids
 
         # Rate limiters (ports of app.py's rust-update / liveness debounce)
         self._last_rust_update = 0.0
@@ -140,6 +152,12 @@ class OrchApp(App):
             self._session_watcher.start()
 
     def exit(self, result=None) -> None:
+        # Detach/stop embedded PTY children while the loop still runs — a
+        # live child deadlocks asyncio's executor shutdown. detach keeps
+        # claude alive in tmux; tig children die with the app.
+        for view, _ in self._stack:
+            if isinstance(view, ClaudeSessionView):
+                view.emergency_close()
         if self._session_bridge is not None:
             self._session_bridge.stop()
             self._session_bridge = None
@@ -227,11 +245,20 @@ class OrchApp(App):
             self.push(target, on_result=lambda _res: self._on_tab_view_dismissed())
 
     def _apply_tab_switch(self) -> None:
+        # Leaving an embedded claude session: detach it (keeps running in
+        # tmux) and remember the sid so returning to that tab auto-resumes
+        # (port of app._push_detail_for_tab's ClaudeSessionScreen branch).
+        top = self.top
+        if isinstance(top, ClaudeSessionView):
+            if top.ws is not None and top.ws.id:
+                self._tab_active_session[top.ws.id] = top.session_id
+            top.go_back()  # pops + fires _on_session_dismissed
         tab = self.tabs.active_tab
         if tab.ws_id:
             ws = self.state.get_ws(tab.ws_id)
             if ws is not None:  # archived/deleted ws: stay put (as app.py)
                 self._show_tab_surface(self._ensure_detail_view(ws))
+                self._maybe_resume_tab_session(ws)
         elif tab.id == "current_sessions":
             if self._current_sessions_view is None:
                 self._current_sessions_view = CurrentSessionsView(self.state, self.tabs)
@@ -239,6 +266,21 @@ class OrchApp(App):
         else:
             self._show_tab_surface(None)
         self.request_paint()
+
+    def _maybe_resume_tab_session(self, ws) -> None:
+        """Auto-resume the session that was open when this tab was last
+        left (port of app._finish_tab_switch's _tab_active_session pop)."""
+        sid = self._tab_active_session.pop(ws.id, None)
+        if sid:
+            self._spawn(self._auto_resume_tab_session(ws, sid))
+
+    async def _auto_resume_tab_session(self, ws, session_id: str) -> None:
+        """Check the tmux session is still alive, then resume it. The
+        ws-ID guard prevents a stale callback from pushing a session onto
+        the wrong tab if the user switched again before this ran."""
+        alive = await asyncio.to_thread(TerminalHost.tmux_session_alive, session_id)
+        if alive and self.tabs.active_tab.ws_id == ws.id:
+            self.launch_claude_session(ws, session_id=session_id)
 
     def action_next_tab(self) -> None:
         if self.tabs.next_tab():
@@ -252,6 +294,7 @@ class OrchApp(App):
         """Close the active tab (permanent tabs 0/1 can't close)."""
         closed = self.tabs.close_active_tab()
         if closed:
+            self._tab_active_session.pop(closed, None)
             evicted = self._detail_cache.pop(closed, None)
             self._apply_tab_switch()
             if evicted is not None:
@@ -523,68 +566,503 @@ class OrchApp(App):
                 f"(>{self._idle_cleanup_hours:g}h)",
             )
 
-    # ── claude session launch (suspend-attach fallback) ──────────
+    # ── claude session launch (embedded ClaudeSessionView, P5) ───
+
+    @staticmethod
+    def _trace_spawn(msg: str) -> None:
+        """Spawn diagnostics (port of app.launch_claude_session's _trace)."""
+        try:
+            import datetime
+            log = Path.home() / ".cache" / "claude-orchestrator" / "spawn-debug.log"
+            log.parent.mkdir(parents=True, exist_ok=True)
+            with log.open("a") as fh:
+                fh.write(f"{datetime.datetime.now().isoformat()} {msg}\n")
+        except Exception:
+            pass
 
     def launch_claude_session(self, ws, session_id: str | None = None,
                               prompt: str | None = None, cwd: str | None = None,
-                              callback=None, **_kwargs) -> None:
-        """Full-fidelity fallback until the embedded pane lands in P5:
-        run/attach the session on the orch-sessions tmux socket and
-        suspend the UI over a foreground ``tmux attach``.
+                              callback=None, reuse_pending: bool = True,
+                              auto_role: str | None = None) -> None:
+        """Push a ClaudeSessionView for the given workstream (port of
+        app.launch_claude_session).
+
+        reuse_pending: when True (default), a session_id=None call may be
+        upgraded to a resume of a still-pending session for this ws (so
+        pressing "c" twice returns to the same thread). Task-dispatch
+        callers set this False — a todo is a new task, never a
+        continuation of whatever fresh session happens to be cached.
+
+        auto_role: when set ("coordinator" or "implementer"), tag the
+        resulting session id under that role for this workstream so the
+        detail view can style it.
         """
-        from term_host import TerminalHost
+        self._spawn(self._launch_claude_session(
+            ws, session_id=session_id, prompt=prompt, cwd=cwd,
+            callback=callback, reuse_pending=reuse_pending, auto_role=auto_role))
 
-        is_new = session_id is None
-        sid = session_id or str(uuid.uuid4())
-        cwd = cwd or ws_working_dir(ws)
+    async def _launch_claude_session(self, ws, *, session_id, prompt, cwd,
+                                     callback, reuse_pending, auto_role) -> None:
+        reattach = False
+        effective_sid = session_id
 
-        if not TerminalHost.tmux_session_alive(sid):
-            # Create the persistent session (same command/env construction as
-            # ClaudeSessionScreen; the tmux server owns the PTY).
-            from claude_session_screen import (
-                build_claude_command, build_session_context, build_session_env,
-            )
-            cmd = build_claude_command(
-                session_id=sid, cwd=cwd,
-                sys_prompt=build_session_context(ws),
-                prompt=prompt, ws_name=ws.name, is_new=is_new,
-            )
-            env_vars = build_session_env(ws.id or "", sid)
-            env_prefix = " ".join(f"{k}={shlex.quote(v)}" for k, v in env_vars.items())
-            inner_cmd = f"env TERM=xterm-256color COLORTERM=truecolor {env_prefix} {cmd}"
-            env = os.environ.copy()
-            env.update(TERM="xterm-256color", COLORTERM="truecolor")
-            env.pop("TMUX", None)
-            w, h = self._size if self._size != (0, 0) else (200, 50)
-            result = subprocess.run(
-                ["tmux", "-L", TerminalHost.TMUX_SOCKET,
-                 "-f", TerminalHost._tmux_conf_path(),
-                 "new-session", "-d", "-s", sid,
-                 "-x", str(max(80, w)), "-y", str(max(24, h)),
-                 "-c", cwd, inner_cmd],
-                env=env, capture_output=True, text=True, timeout=10,
-            )
-            err = (result.stderr or "").strip()
-            if result.returncode != 0 and "duplicate session" not in err.lower():
-                self.notify(f"Session launch failed: {err or '(no stderr)'}")
-                if callback:
-                    callback(None)
-                return
-            TerminalHost._reload_tmux_config(env)
+        self._trace_spawn(
+            f"launch_claude_session ws={ws.id}/{ws.name!r} session_id={session_id!r} "
+            f"reuse_pending={reuse_pending} prompt_len={len(prompt) if prompt else 0}"
+        )
 
-        attach_env = os.environ.copy()
-        attach_env.pop("TMUX", None)
-        with self.suspend():
-            subprocess.run(
-                ["tmux", "-L", TerminalHost.TMUX_SOCKET, "attach", "-t", sid],
-                env=attach_env,
-            )
+        # If no explicit session_id, reuse any pending new session for this
+        # ws so pressing "c", going back, then "c" returns to the same
+        # thread. Pending IDs whose JSONL never appeared are dropped —
+        # resuming them would make claude print "can't find session".
+        if reuse_pending and session_id is None and ws.id:
+            pending = self._ws_pending_session.get(ws.id)
+            if pending:
+                cwd_for_check = cwd or ws_working_dir(ws)
+                if claude_jsonl_path(cwd_for_check, pending).exists():
+                    effective_sid = pending
+                    self._trace_spawn(f"  reuse_pending hit: adopting pending={pending} (jsonl exists)")
+                else:
+                    del self._ws_pending_session[ws.id]
+                    self._trace_spawn(f"  reuse_pending hit but pending={pending} had no jsonl — dropped")
 
-        # Back from the session: pick up whatever it changed.
-        self.state.store.load()
-        self.state._last_seen_valid = False
+        if effective_sid:
+            self._detached_sessions.pop(effective_sid, None)
+            # Off-loop: tmux has-session can hang for seconds.
+            reattach = await asyncio.to_thread(
+                TerminalHost.tmux_session_alive, effective_sid)
+            self._trace_spawn(f"  effective_sid={effective_sid} tmux_alive={reattach}")
+
+        view = ClaudeSessionView(self.state, self.tabs, ws,
+                                 session_id=effective_sid, prompt=prompt,
+                                 cwd=cwd, reattach_tmux=reattach)
+        self._trace_spawn(
+            f"  view created: is_new={view._is_new} session_id={view.session_id} "
+            f"reattach_tmux={reattach} cmd_flag={'--session-id' if view._is_new else '--resume'}"
+        )
+
+        # Remember the session ID so "c" returns to the same thread next
+        # time. Skipped for task-dispatch spawns (reuse_pending=False).
+        if reuse_pending and session_id is None and ws.id:
+            self._ws_pending_session[ws.id] = view.session_id
+
+        if auto_role and ws.id:
+            sid = view.session_id
+            if auto_role == "coordinator":
+                self._auto_coord_sid[ws.id] = sid
+            elif auto_role == "implementer":
+                self._auto_impl_sids.setdefault(ws.id, set()).add(sid)
+
+        self.push(view, on_result=lambda result: self._on_session_dismissed(
+            view, ws, result, callback))
+
+    def _on_session_dismissed(self, view, ws, result, callback=None) -> None:
+        """Port of app.py:2437's dismiss branches."""
+        if isinstance(result, dict) and result.get("detached"):
+            sid = result["session_id"]
+            self._detached_sessions[sid] = {
+                "ws": result["ws"],
+                "start_time": result["start_time"],
+                "jsonl": result["jsonl"],
+            }
+            # Parse the JSONL so we can inject the session immediately.
+            # Mark is_live=True since the process is still running
+            # (detached, not killed) — parse_session doesn't check PIDs.
+            jsonl = result.get("jsonl")
+            if jsonl:
+                try:
+                    s = parse_session(Path(jsonl))
+                    if s:
+                        s.is_live = True
+                        self._inject_session(s)
+                        if s.message_count and ws.id:
+                            # Persist the session→ws link so directory-less
+                            # workstreams can rediscover it after detach.
+                            auto_link_session(self.state.store, ws.id, view.session_id)
+                            # A real thread now — next "c" should be fresh
+                            if self._ws_pending_session.get(ws.id) == view.session_id:
+                                del self._ws_pending_session[ws.id]
+                except Exception:
+                    pass
+            # Highlight the session we just left in its detail view.
+            detail = self._detail_cache.get(ws.id) if ws.id else None
+            if detail is not None:
+                detail.request_session_highlight(sid)
+        elif isinstance(result, ClaudeSession):
+            self.notify(
+                f"{result.model_short} | {result.message_count} msgs | "
+                f"{result.tokens_display}",
+                timeout=5,
+            )
+            self._inject_session(result)
+            # Completed naturally — clear the pending slot, next "c" is fresh
+            if ws.id and self._ws_pending_session.get(ws.id) == view.session_id:
+                del self._ws_pending_session[ws.id]
         self._data_changed()
-        if self._bg_started:
-            self._run_in_thread("poll_sessions", self._do_poll_sessions)
+        self.request_paint()
         if callback:
-            callback(None)
+            callback(result)
+
+    def _inject_session(self, session: ClaudeSession) -> None:
+        """Inject a session into state immediately so the detail view
+        updates without polling (port of app._inject_session)."""
+        existing = {s.session_id for s in self.state.sessions}
+        if session.session_id in existing:
+            for i, s in enumerate(self.state.sessions):
+                if s.session_id == session.session_id:
+                    self.state.sessions[i] = session
+                    break
+        else:
+            self.state.sessions.insert(0, session)
+
+        # Inject into the matching thread (sessions_for_ws uses threads)
+        sp = session.project_path.rstrip("/")
+        injected = False
+        for t in self.state.threads:
+            if t.project_path.rstrip("/") == sp:
+                t_sids = {s.session_id for s in t.sessions}
+                if session.session_id not in t_sids:
+                    t.sessions.insert(0, session)
+                else:
+                    for i, s in enumerate(t.sessions):
+                        if s.session_id == session.session_id:
+                            t.sessions[i] = session
+                            break
+                injected = True
+                break
+
+        # No matching thread: create a minimal one so it's discoverable
+        if not injected and sp:
+            from threads import Thread
+            self.state.threads.append(Thread(
+                thread_id=session.session_id,
+                name=sp.rsplit("/", 1)[-1],
+                project_path=sp,
+                sessions=[session],
+            ))
+
+        self.state.invalidate_caches()
+
+    # ── auto mode (coordinator/implementer loop, port of app.py) ──
+
+    def auto_role_for(self, ws_id: str, sid: str) -> str | None:
+        """Return 'coordinator', 'implementer', or None for a session.
+
+        Used by the detail view to badge sessions spawned by an auto-mode
+        loop. Checks the in-memory dicts first (fast, authoritative for
+        this process), then the persisted state on the workstream so
+        sessions spawned by another orch instance are still badged.
+        """
+        if not ws_id or not sid:
+            return None
+        if self._auto_coord_sid.get(ws_id) == sid:
+            return "coordinator"
+        if sid in self._auto_impl_sids.get(ws_id, ()):
+            return "implementer"
+        ws = self.state.store.get(ws_id)
+        if ws is None:
+            return None
+        if ws.auto_coord_sid == sid:
+            return "coordinator"
+        if sid in ws.auto_impl_sids:
+            return "implementer"
+        return None
+
+    def toggle_auto_mode(self, ws_id: str, screen_session_id: str) -> None:
+        """Cancel an existing auto-mode loop for this ws, or start a new
+        one (port of app.toggle_auto_mode; reached via ctrl+y on a
+        ClaudeSessionView).
+
+        On start: a non-empty crystallized-undone backlog prompts the user
+        (AutoModeStartView) to pick which todos to run; with no backlog
+        the loop starts immediately.
+        """
+        if not ws_id:
+            self.notify("[auto] workstream has no id", timeout=3)
+            return
+
+        running = self._auto_modes.get(ws_id)
+        if running is not None:
+            running.cancel()
+            self.notify("[auto] canceling — exiting now (in-flight implementers keep running)", timeout=3)
+            return
+
+        ws = self.state.store.get(ws_id)
+        if ws is None:
+            self.notify("[auto] workstream not found", timeout=3)
+            return
+
+        # A loop owned by a DIFFERENT orch process? Set the cross-process
+        # cancel flag instead of starting a duplicate; clear stale state
+        # from a dead owner and proceed.
+        if ws.auto_running and ws.auto_pid:
+            if ws.auto_pid_alive:
+                ws.auto_cancel_requested = True
+                self.state.store.update(ws)
+                self.notify(
+                    f"[auto] cancel signal sent to pid {ws.auto_pid} (another orch owns this loop)",
+                    timeout=4,
+                )
+                return
+            else:
+                dead_pid = ws.auto_pid
+                ws.auto_running = False
+                ws.auto_pid = 0
+                ws.auto_cancel_requested = False
+                self.state.store.update(ws)
+                self.notify(
+                    f"[auto] cleared stale state from pid {dead_pid} (process dead)",
+                    timeout=3,
+                )
+
+        backlog = [t for t in ws.todos if not t.done and not t.archived]
+        backlog_ids = {t.id for t in backlog}
+
+        if not backlog_ids:
+            self._start_auto_mode(ws_id, screen_session_id, skip_ids=set())
+            return
+
+        from .views.auto_mode_start import AutoModeStartView
+
+        def on_choice(selected) -> None:
+            # selected: set[str] of todo IDs to RUN, or None on cancel
+            if selected is None:
+                return
+            skip_ids = backlog_ids - selected
+            self._start_auto_mode(ws_id, screen_session_id, skip_ids=skip_ids)
+
+        self.push(AutoModeStartView(ws.name, backlog), on_result=on_choice)
+
+    def _start_auto_mode(self, ws_id: str, screen_session_id: str, skip_ids: set) -> None:
+        coord_sid = screen_session_id
+        prior = self._auto_coord_sid.get(ws_id)
+        if prior and prior != screen_session_id:
+            try:
+                if TerminalHost.tmux_session_alive(prior):
+                    coord_sid = prior
+            except Exception:
+                pass
+        self._auto_coord_sid[ws_id] = coord_sid
+        self.exclusive("auto_mode", self._run_auto_mode(ws_id, coord_sid, skip_ids))
+
+    async def _run_auto_mode(self, ws_id: str, coord_sid: str,
+                             skip_ids: set | None = None) -> None:
+        from auto_mode import AutoMode
+        from session_launch import log_session_exit, spawn_implementer_session
+
+        def inject(text: str) -> None:
+            # Write to the coordinator's tmux session directly so we don't
+            # depend on its pane still being attached. Bracketed-paste
+            # markers keep embedded newlines as paste content; Enter is
+            # sent separately to submit.
+            paste = f"\x1b[200~{text}\x1b[201~"
+            try:
+                subprocess.run(
+                    ["tmux", "-L", TerminalHost.TMUX_SOCKET,
+                     "send-keys", "-t", coord_sid, "-l", paste],
+                    timeout=5, capture_output=True, check=True,
+                )
+                subprocess.run(
+                    ["tmux", "-L", TerminalHost.TMUX_SOCKET,
+                     "send-keys", "-t", coord_sid, "Enter"],
+                    timeout=5, capture_output=True, check=True,
+                )
+            except Exception as e:
+                self.notify(f"[auto] inject failed: {e}", timeout=4)
+
+        async def spawn_implementer(todo, brief: str) -> None:
+            """Spawn an implementer headlessly (tmux session, no UI view).
+
+            Resolves when ANY of: the todo's report field is written, the
+            tmux session dies, or auto-mode is canceled. Transient
+            store-read failures don't count as a resolution.
+            """
+            ws = self.state.store.get(ws_id)
+            if ws is None:
+                return
+
+            start_time = time.time()
+            try:
+                sid, _jsonl_path = await asyncio.to_thread(
+                    spawn_implementer_session, ws, self.state.store, brief)
+            except Exception as e:
+                self.notify(f"[auto] implementer spawn failed: {e}", timeout=6)
+                return
+
+            # Tag for badging: in-memory (fast UI read) and persisted (so
+            # other orch instances / CLI see who's running what). Persist
+            # best-effort — never fail the spawn on a store hiccup.
+            if ws_id:
+                self._auto_impl_sids.setdefault(ws_id, set()).add(sid)
+                try:
+                    self.state.store.load(force=True)
+                    cur_ws = self.state.store.get(ws_id)
+                    if cur_ws is not None and sid not in cur_ws.auto_impl_sids:
+                        cur_ws.auto_impl_sids.append(sid)
+                        self.state.store.update(cur_ws)
+                except Exception:
+                    pass
+
+            async def wait_for_report():
+                while True:
+                    try:
+                        self.state.store.load(force=True)
+                    except Exception:
+                        await asyncio.sleep(2)
+                        continue
+                    cur_ws = self.state.store.get(ws_id)
+                    if cur_ws is None:
+                        await asyncio.sleep(2)
+                        continue
+                    cur = next((t for t in cur_ws.todos if t.id == todo.id), None)
+                    if cur is None:
+                        await asyncio.sleep(2)
+                        continue
+                    if cur.report:
+                        return
+                    await asyncio.sleep(2)
+
+            async def wait_for_tmux_exit():
+                while True:
+                    alive = await asyncio.to_thread(
+                        TerminalHost.tmux_session_alive, sid)
+                    if not alive:
+                        return
+                    await asyncio.sleep(3)
+
+            report_task = asyncio.create_task(wait_for_report())
+            exit_task = asyncio.create_task(wait_for_tmux_exit())
+            cancel_task = asyncio.create_task(mode.cancel_event.wait())
+            try:
+                await asyncio.wait(
+                    [report_task, exit_task, cancel_task],
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                if cancel_task.done():
+                    return
+                if exit_task.done() and not report_task.done():
+                    # Claude exited without writing a report — do the same
+                    # post-exit bookkeeping the session view does.
+                    auto_link_session(self.state.store, ws_id, sid)
+                    log_session_exit(sid, ws.name, start_time, exit_type="headless")
+                if report_task.done() and not exit_task.done():
+                    self.notify(
+                        "[auto] report received — advancing while implementer wraps up",
+                        timeout=4,
+                    )
+            finally:
+                report_task.cancel()
+                exit_task.cancel()
+                cancel_task.cancel()
+
+        def notify(msg: str) -> None:
+            self.notify(f"[auto] {msg}", timeout=4)
+
+        mode = AutoMode(
+            store=self.state.store,
+            ws_id=ws_id,
+            spawn_implementer=spawn_implementer,
+            inject_coordinator=inject,
+            notify=notify,
+            skip_todo_ids=skip_ids or set(),
+            coord_sid=coord_sid,
+        )
+        self._auto_modes[ws_id] = mode
+        if skip_ids:
+            self.notify(
+                f"[auto] auto mode started (skipping {len(skip_ids)} backlog todos)",
+                timeout=4,
+            )
+        else:
+            self.notify("[auto] auto mode started", timeout=3)
+
+        # Watchdog: detect & auto-respond to claude usage-quota prompts.
+        watchdog_cancel = asyncio.Event()
+        watchdog_task = asyncio.create_task(
+            self._watch_quota_stalls(ws_id, watchdog_cancel))
+
+        try:
+            result = await mode.run()
+            self.notify(f"[auto] loop ended: {result}", timeout=6)
+        except Exception as e:
+            self.notify(f"[auto] loop error: {e}", timeout=6)
+        finally:
+            watchdog_cancel.set()
+            try:
+                await asyncio.wait_for(watchdog_task, timeout=2)
+            except (asyncio.TimeoutError, asyncio.CancelledError):
+                watchdog_task.cancel()
+            self._auto_modes.pop(ws_id, None)
+
+    async def _watch_quota_stalls(self, ws_id: str, cancel) -> None:
+        """Detect & auto-respond to quota stalls in any live session for
+        this workstream while auto-mode runs (port of app.py). Requires
+        two consecutive observations before injecting Enter; won't
+        re-fire on the same session until the stall clears.
+        """
+        from auto_mode import detect_quota_stall
+
+        INTERVAL = 15.0
+        OBSERVATIONS_BEFORE_RESPOND = 2
+
+        observed: dict[str, int] = {}   # sid → consecutive stall observations
+        responded: set[str] = set()     # sids we've already injected for
+
+        while not cancel.is_set():
+            try:
+                await asyncio.wait_for(cancel.wait(), timeout=INTERVAL)
+                return  # canceled
+            except asyncio.TimeoutError:
+                pass  # interval elapsed; do a poll
+
+            try:
+                ws = self.state.store.get(ws_id)
+                if ws is None:
+                    continue
+                sessions = self.state.sessions_for_ws(ws)
+                live_sids = {s.session_id for s in sessions if s.is_live}
+
+                for sid in list(observed):
+                    if sid not in live_sids:
+                        observed.pop(sid, None)
+                        responded.discard(sid)
+
+                for s in sessions:
+                    if not s.is_live:
+                        continue
+                    sid = s.session_id
+                    r = await asyncio.to_thread(
+                        subprocess.run,
+                        ["tmux", "-L", TerminalHost.TMUX_SOCKET,
+                         "capture-pane", "-t", sid, "-p", "-S", "-100"],
+                        timeout=3, capture_output=True, text=True,
+                    )
+                    if r.returncode != 0:
+                        continue
+                    if detect_quota_stall(r.stdout):
+                        observed[sid] = observed.get(sid, 0) + 1
+                        if (observed[sid] >= OBSERVATIONS_BEFORE_RESPOND
+                                and sid not in responded):
+                            self.notify(
+                                f"[auto] quota stall in {sid[:8]} — sending Enter to wait",
+                                timeout=8,
+                            )
+                            try:
+                                subprocess.run(
+                                    ["tmux", "-L", TerminalHost.TMUX_SOCKET,
+                                     "send-keys", "-t", sid, "Enter"],
+                                    timeout=5, capture_output=True, check=True,
+                                )
+                                responded.add(sid)
+                            except Exception as e:
+                                self.notify(f"[auto] watchdog inject failed: {e}", timeout=4)
+                    else:
+                        if sid in responded:
+                            self.notify(f"[auto] {sid[:8]} resumed", timeout=4)
+                        observed.pop(sid, None)
+                        responded.discard(sid)
+            except asyncio.CancelledError:
+                return
+            except Exception:
+                # Best-effort detection — never nuke the loop.
+                pass

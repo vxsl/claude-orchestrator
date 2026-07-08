@@ -14,9 +14,9 @@ update_row — id-keyed, so a structure change under the tick is detected
 the engine equivalent of the original's ids-match check before
 replace_option_prompt_at_index (screens.py:3922).
 
-enter/l/r resume via app.launch_claude_session (suspend-attach until
-P5); space archives; ctrl+space archives and goes back; ':' palette;
-'?' the sessions help; esc/^H back.
+enter/l/r resume via app.launch_claude_session (the embedded
+ClaudeSessionView since P5); space archives; ctrl+space archives and
+goes back; ':' palette; '?' the sessions help; esc/^H back.
 """
 
 from __future__ import annotations

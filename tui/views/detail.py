@@ -10,8 +10,8 @@ Detail-lite deviations from the Textual original (see MIGRATION.md):
   shown instead, plus a hint line; 't' runs tig fullscreen over
   App.suspend() — a new key (the original had no 't'; app-level 't'
   was toggle_trust).
-- Session select/resume = suspend-attach via app.launch_claude_session
-  (the embedded ClaudeSession screen is P5).
+- Session select/resume = the embedded ClaudeSessionView via
+  app.launch_claude_session (suspend-attach until P5).
 - Peek reads the focused pane's highlighted session (the original
   always peeked the sessions list even from the archived pane).
 

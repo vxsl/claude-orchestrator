@@ -1,9 +1,8 @@
-"""HelpView — port of screens.HelpScreen (P4-B).
+"""HelpView — port of screens.HelpScreen (P4-B; "session" added in P5).
 
 Context-sensitive, fuzzy-filterable key reference. Contexts ported:
-home, detail, sessions, todo, trash; "session" (the embedded Claude
-screen) lands with P5 and falls back to home until then. Selecting
-any row just closes the help, as the original.
+home, detail, sessions, session (the embedded Claude screen), todo,
+trash. Selecting any row just closes the help, as the original.
 """
 
 from __future__ import annotations
@@ -147,6 +146,36 @@ class HelpView(FuzzyModalView):
         ]
 
     @classmethod
+    def _session_items(cls) -> list[tuple[str, str]]:
+        H, D, K = cls._hdr, cls._desc, cls._key
+        return [
+            H("What you're looking at"),
+            D("A live Claude session in an embedded terminal.", 1),
+            D("This session is persistent — leave and it keeps running in the background.", 2),
+            D("The sidebar shows git status and log (tig) for context.", 3),
+            D("", 4),
+            H("Navigate"),
+            K("sess-back", "Ctrl+H", "Detach and go back (session keeps running)"),
+            K("sess-back2", "Ctrl+\\\\", "Detach and go back (alternate)"),
+            K("sess-panel", "Ctrl+J / K", "Cycle between terminal and tig panels"),
+            K("sess-zoom", "Ctrl+Z", "Zoom current panel full-screen"),
+            K("sess-archive", "Ctrl+Space", "Archive session and go back"),
+            H("Session"),
+            K("sess-extract", "Ctrl+E", "Extract a todo from the conversation"),
+            K("sess-jump", "Ctrl+R", "Jump to a previous message"),
+            K("sess-switch", "Ctrl+Shift+J / K", "Switch to next / prev session"),
+            H("Terminal"),
+            K("term-scroll", "Ctrl+U / D", "Scroll up / down (half-page)"),
+            K("term-type", "", "Type normally to interact with Claude"),
+            D("", 10),
+            H("Session lifecycle"),
+            D("∙ thinking — Claude is actively working (animated indicator)", 20),
+            D("∙ your turn — Claude is waiting for your input", 21),
+            D("∙ committed — session ended with a git commit (work landed)", 22),
+            D("∙ archived — filed away, always recoverable", 23),
+        ]
+
+    @classmethod
     def _todo_items(cls) -> list[tuple[str, str]]:
         H, D, K = cls._hdr, cls._desc, cls._key
         return [
@@ -186,8 +215,8 @@ class HelpView(FuzzyModalView):
     def __init__(self, context: str = "home") -> None:
         self._help_ctx = context
         titles = {"home": "Workstreams", "detail": "Workstream Detail",
-                  "sessions": "All Sessions", "todo": "Todo List",
-                  "trash": "Trash"}
+                  "sessions": "All Sessions", "session": "Claude Session",
+                  "todo": "Todo List", "trash": "Trash"}
         label = titles.get(context, "Help")
         super().__init__(title=f"{label} — Help", hint=_HINT)
 
@@ -196,6 +225,7 @@ class HelpView(FuzzyModalView):
             "home": self._home_items,
             "detail": self._detail_items,
             "sessions": self._sessions_items,
+            "session": self._session_items,
             "todo": self._todo_items,
             "trash": self._trash_items,
         }.get(self._help_ctx, self._home_items)

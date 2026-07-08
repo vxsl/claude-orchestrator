@@ -1,20 +1,26 @@
 """ClaudeSessionView tests (P5): layout, key routing (action keys vs raw
 PTY passthrough), the ctrl+r jump overlay, detach/finish dismissal
-contracts, session switching order, zoom, and the header worker's
-generation staleness. Panes are FakePane (TerminalPane with the PTY
-lifecycle stubbed) — no real claude, no tmux, no orch-sessions socket.
-HOME is redirected so spawn-args / slash-command syncing / diag logs
-never touch real user state; thread_namer AI calls are mocked (autouse).
+contracts, session switching order, zoom, the header worker's
+generation staleness, and OrchApp's launch/dismiss/tab-resume wiring.
+Panes are FakePane (TerminalPane with the PTY lifecycle stubbed) — no
+real claude, no tmux, no orch-sessions socket (tmux_session_alive is
+patched in the wired fixture). HOME is redirected so spawn-args /
+slash-command syncing / diag logs never touch real user state;
+thread_namer AI calls are mocked (autouse).
 """
 
+import asyncio
 import json
+import time
 from datetime import datetime, timedelta, timezone
 
 import pytest
 
 import thread_namer
 import threads
+from session_launch import claude_jsonl_path
 from sessions import ClaudeSession
+from term_host import TerminalHost
 from tui.orch_app import OrchApp
 from tui.termpane import TerminalPane
 from tui.testing import Headless, make_key_event
@@ -587,3 +593,244 @@ class TestWsSessionList:
         lst.refresh(cs_app.state)
         joined = "\n".join(lst.render_lines(32, focused=False))
         assert "you" in joined
+
+
+# ─── OrchApp wiring (launch / dismiss / tabs / exit) ─────────────────
+
+
+@pytest.fixture
+def wired_app(populated_store, monkeypatch, tmp_path):
+    """OrchApp with the REAL launch/dismiss machinery: fake panes, and
+    tmux_session_alive patched to a controllable flag (app.alive)."""
+    app = OrchApp(store_path=populated_store.path, pollers=False)
+    ws = app.state.store.active[0]
+    current = awaiting_session(SID)
+    sessions = [current]
+    app.state.sessions = sessions
+    app.state.sessions_loaded = True
+    app.state.sessions_for_ws = (
+        lambda w, include_archived_sessions=False: list(sessions))
+    app.state.notifications_for_ws = lambda w: []
+    lifecycle: list = []
+    monkeypatch.setattr(
+        ClaudeSessionView, "_make_pane",
+        staticmethod(lambda command, *, env, cwd: FakePane(
+            command, env=env, cwd=cwd, passthrough_keys=_PASSTHROUGH_KEYS,
+            log=lifecycle)),
+    )
+    alive = {"value": False}
+    monkeypatch.setattr(TerminalHost, "tmux_session_alive",
+                        classmethod(lambda cls, name: alive["value"]))
+    app.alive = alive
+    app.lifecycle = lifecycle
+    app._ws = ws
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    app._cwd = str(proj)
+    return app
+
+
+async def wait_for_session_view(h, timeout: float = 2.0) -> ClaudeSessionView:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if isinstance(h.app.top, ClaudeSessionView):
+            await h.pause()
+            return h.app.top
+        await asyncio.sleep(0.01)
+    raise AssertionError("ClaudeSessionView never appeared")
+
+
+@pytest.mark.asyncio
+class TestOrchAppLaunch:
+    async def test_launch_resume_reattaches_when_tmux_alive(self, wired_app):
+        wired_app.alive["value"] = True
+        async with Headless(wired_app, size=(140, 40)) as h:
+            wired_app.launch_claude_session(wired_app._ws, session_id=SID,
+                                            cwd=wired_app._cwd)
+            view = await wait_for_session_view(h)
+            assert view.session_id == SID and not view._is_new
+            assert (view._claude_command, "attach_persistent", SID) in wired_app.lifecycle
+
+    async def test_launch_dead_session_resumes_fresh_tmux(self, wired_app):
+        async with Headless(wired_app, size=(140, 40)) as h:
+            wired_app.launch_claude_session(wired_app._ws, session_id=SID,
+                                            cwd=wired_app._cwd)
+            view = await wait_for_session_view(h)
+            assert (view._claude_command, "start_persistent", SID) in wired_app.lifecycle
+            assert "--resume" in view._claude_command
+
+    async def test_reuse_pending_only_when_jsonl_exists(self, wired_app):
+        ws = wired_app._ws
+        async with Headless(wired_app, size=(140, 40)) as h:
+            wired_app.launch_claude_session(ws, cwd=wired_app._cwd)
+            view1 = await wait_for_session_view(h)
+            sid1 = view1.session_id
+            assert view1._is_new
+            assert wired_app._ws_pending_session[ws.id] == sid1
+            await h.press("ctrl+h")
+            # pending has no JSONL → dropped; a fresh id is spawned
+            wired_app.launch_claude_session(ws, cwd=wired_app._cwd)
+            view2 = await wait_for_session_view(h)
+            assert view2.session_id != sid1 and view2._is_new
+            await h.press("ctrl+h")
+            # JSONL exists now → pending adopted as a resume
+            jp = claude_jsonl_path(wired_app._cwd, view2.session_id)
+            jp.parent.mkdir(parents=True, exist_ok=True)
+            jp.write_text("{}\n")
+            wired_app.launch_claude_session(ws, cwd=wired_app._cwd)
+            view3 = await wait_for_session_view(h)
+            assert view3.session_id == view2.session_id
+            assert not view3._is_new
+
+    async def test_detach_stashes_and_injects_live_session(
+            self, wired_app, monkeypatch):
+        ws = wired_app._ws
+        injected = make_session(SID, message_count=3)
+        import tui.orch_app as oa
+        monkeypatch.setattr(oa, "parse_session", lambda p: injected)
+        async with Headless(wired_app, size=(140, 40)) as h:
+            wired_app.launch_claude_session(ws, session_id=SID, cwd=wired_app._cwd)
+            view = await wait_for_session_view(h)
+            highlights = []
+            wired_app._detail_cache[ws.id] = type(
+                "Spy", (), {"request_session_highlight":
+                            lambda self, sid: highlights.append(sid),
+                            "cancel_timers": lambda self: None})()
+            await h.press("ctrl+h")
+            stash = wired_app._detached_sessions[SID]
+            assert stash["ws"] is ws and stash["jsonl"] == view._jsonl
+            assert injected.is_live is True          # marked live on inject
+            assert injected in wired_app.state.sessions
+            assert highlights == [SID]               # detail view highlight
+            wsx = wired_app.state.store.get(ws.id)   # auto-linked
+            assert any(l.kind == "claude-session" and l.value == SID
+                       for l in wsx.links)
+
+    async def test_natural_finish_notifies_and_injects(self, wired_app, monkeypatch):
+        parsed = make_session(SID)
+        import tui.views.claude_session as mod
+        monkeypatch.setattr(mod, "parse_session", lambda p: parsed)
+        async with Headless(wired_app, size=(140, 40)) as h:
+            wired_app.launch_claude_session(wired_app._ws, session_id=SID,
+                                            cwd=wired_app._cwd)
+            view = await wait_for_session_view(h)
+            jp = claude_jsonl_path(wired_app._cwd, SID)
+            jp.parent.mkdir(parents=True, exist_ok=True)
+            jp.write_text("{}\n")
+            view._jsonl = str(jp)
+            view.claude_pane.on_finished()
+            await h.pause()
+            assert "msgs" in wired_app.toast_text
+            assert parsed in wired_app.state.sessions
+
+    async def test_exit_with_live_session_detaches_no_deadlock(self, wired_app):
+        async with Headless(wired_app, size=(140, 40)) as h:
+            wired_app.launch_claude_session(wired_app._ws, session_id=SID,
+                                            cwd=wired_app._cwd)
+            view = await wait_for_session_view(h)
+        # Headless __aexit__ ran app.exit() + awaited _main under a timeout:
+        # returning at all proves no deadlock; the children were shut down.
+        assert (view._claude_command, "detach_persistent") in wired_app.lifecycle
+        assert ("tig", "stop") in wired_app.lifecycle
+        assert ("tig status", "stop") in wired_app.lifecycle
+
+
+@pytest.mark.asyncio
+class TestTabSwitchResume:
+    async def test_tab_switch_detaches_and_auto_resumes(self, wired_app):
+        ws = wired_app._ws
+        async with Headless(wired_app, size=(140, 40)) as h:
+            wired_app.open_detail(ws)
+            await h.pause()
+            wired_app.launch_claude_session(ws, session_id=SID, cwd=wired_app._cwd)
+            first = await wait_for_session_view(h)
+            # ws tab is last → next wraps to home; the session detaches and
+            # is remembered for this tab
+            wired_app.action_next_tab()
+            await h.pause()
+            assert wired_app._tab_active_session[ws.id] == SID
+            assert (first._claude_command, "detach_persistent") in wired_app.lifecycle
+            assert h.app.top is wired_app.home
+            # back to the ws tab: still alive in tmux → auto-resume
+            wired_app.alive["value"] = True
+            wired_app.action_prev_tab()
+            resumed = await wait_for_session_view(h)
+            assert resumed.session_id == SID
+            assert (resumed._claude_command, "attach_persistent", SID) in wired_app.lifecycle
+            assert ws.id not in wired_app._tab_active_session
+
+    async def test_dead_session_not_resumed_on_tab_return(self, wired_app):
+        ws = wired_app._ws
+        async with Headless(wired_app, size=(140, 40)) as h:
+            wired_app.open_detail(ws)
+            await h.pause()
+            wired_app.launch_claude_session(ws, session_id=SID, cwd=wired_app._cwd)
+            await wait_for_session_view(h)
+            wired_app.action_next_tab()
+            await h.pause()
+            wired_app.alive["value"] = False  # session died while away
+            wired_app.action_prev_tab()
+            await h.pause(0.1)
+            from tui.views.detail import DetailView
+            assert isinstance(h.app.top, DetailView)  # no session pushed
+            assert ws.id not in wired_app._tab_active_session
+
+    async def test_close_tab_forgets_tab_session(self, wired_app):
+        ws = wired_app._ws
+        async with Headless(wired_app, size=(140, 40)) as h:
+            wired_app.open_detail(ws)
+            await h.pause()
+            wired_app._tab_active_session[ws.id] = SID
+            wired_app.action_close_tab()
+            await h.pause()
+            assert ws.id not in wired_app._tab_active_session
+
+
+@pytest.mark.asyncio
+class TestAutoModeWiring:
+    async def test_ctrl_y_with_backlog_opens_start_view(self, wired_app):
+        ws = wired_app._ws
+        wired_app.state.add_todo(ws.id, "task one")
+        started = []
+        wired_app._start_auto_mode = lambda *a, **k: started.append((a, k))
+        async with Headless(wired_app, size=(140, 40)) as h:
+            wired_app.launch_claude_session(ws, session_id=SID, cwd=wired_app._cwd)
+            await wait_for_session_view(h)
+            await h.press("ctrl+y")
+            from tui.views.auto_mode_start import AutoModeStartView
+            assert isinstance(h.app.top, AutoModeStartView)
+            await h.press("escape")  # cancel → nothing started
+            assert not started
+
+    async def test_ctrl_y_no_backlog_starts_immediately(self, wired_app):
+        ws = wired_app._ws
+        started = []
+        wired_app._start_auto_mode = (
+            lambda ws_id, sid, skip_ids: started.append((ws_id, sid, skip_ids)))
+        async with Headless(wired_app, size=(140, 40)) as h:
+            wired_app.launch_claude_session(ws, session_id=SID, cwd=wired_app._cwd)
+            await wait_for_session_view(h)
+            await h.press("ctrl+y")
+            assert started == [(ws.id, SID, set())]
+
+    async def test_ctrl_y_cancels_running_loop(self, wired_app):
+        ws = wired_app._ws
+        cancelled = []
+        wired_app._auto_modes[ws.id] = type(
+            "Mode", (), {"cancel": lambda self: cancelled.append(True)})()
+        async with Headless(wired_app, size=(140, 40)) as h:
+            wired_app.launch_claude_session(ws, session_id=SID, cwd=wired_app._cwd)
+            await wait_for_session_view(h)
+            await h.press("ctrl+y")
+            assert cancelled == [True]
+            assert "[auto] canceling" in wired_app.toast_text
+
+
+class TestHelpSessionContext:
+    def test_session_context_items(self):
+        from tui.views.help import HelpView
+        view = HelpView(context="session")
+        assert view.title.startswith("Claude Session")
+        joined = " ".join(m for _, m in view._get_items())
+        assert "Detach and go back" in joined
+        assert "Extract a todo" in joined
