@@ -7,8 +7,12 @@ same rendering.py builders), '/' search, 1/2/3 filters, f1–f5 sorts,
 'c' spawn / 'r' resume actions. P4-A wired the first modals: 'C'
 repo-spawn (RepoPickerView → WorkstreamPickerView → launch), 'd'
 delete + 't' trust-toggle via ConfirmView, and 'u' archive (no
-confirm, as in the Textual app). The remaining modals (detail, add,
-notes, palette, help, tabs) are stub toasts until P4-B/C.
+confirm, as in the Textual app). P4-B wired the rest of the home
+modals: 'a' add, 'n' quick note, 'e' todos, 'W' add link, 'o' links,
+'b' brain dump chain, '?' help, ':' command palette (trash reachable
+through it), and multi-match 'r' resume now opens SessionPickerView.
+Remaining stubs: detail/tabs (P4-C), rename inline input, dev-workflow
+actions, session content search.
 
 Not in this phase (see MIGRATION.md): the two embedded tig panes that
 filled the lower half of the Textual home (P5/P6) — the lists own the
@@ -23,7 +27,7 @@ from typing import Any
 from rich.text import Text
 
 import config
-from actions import launch_orch_claude, do_resume
+from actions import launch_orch_claude, do_resume, open_link
 from rendering import (
     C_BLUE, C_DIM, C_FAINT, C_GREEN, C_MID, C_RED, C_YELLOW,
     BG_BASE, BG_RAISED,
@@ -43,8 +47,14 @@ from .add_link import AddLinkView
 from .brain_dump import BrainDumpView
 from .brain_preview import BrainPreviewView
 from .confirm import ConfirmView
+from .help import HelpView
+from .links import LinksView
+from .modals import FuzzyModalView
 from .pickers import SENTINEL_NEW, RepoPickerView, WorkstreamPickerView
 from .quick_note import QuickNoteView
+from .session_picker import SessionPickerView
+from .todo import TodoView
+from .trash import TrashView
 
 STUB_DETAIL = "Detail view lands in P4 — ORCH_ENGINE=textual for full UI"
 STUB_TABS = "Tabs land in P4 — ORCH_ENGINE=textual for full UI"
@@ -146,9 +156,9 @@ class HomeView(View):
             "resume": self._action_resume,
             "link_action": self._action_add_link,
             "quick_note": self._action_quick_note,
-            "edit_notes": stub("Todo editor lands in P4"),
+            "edit_notes": self._action_edit_notes,
             "rename": stub("Rename lands in P4"),
-            "open_links": stub("Links land in P4"),
+            "open_links": self._action_open_links,
             "toggle_archive": self._action_toggle_archive,
             "delete_item": self._action_delete,
             "toggle_trust": self._action_toggle_trust,
@@ -165,10 +175,10 @@ class HomeView(View):
             "ticket": stub("Dev-workflow actions land in P4"),
             "branches": stub("Dev-workflow actions land in P4"),
             "rr": stub("Dev-workflow actions land in P4"),
-            "command_palette": stub("Command palette lands in P4"),
+            "command_palette": self._action_command_palette,
             "toggle_preview": self._toggle_preview,
             "refresh": self._action_refresh,
-            "help": stub("Help screen lands in P4 — keys match the Textual engine"),
+            "help": self._action_help,
             "quit": self._action_quit,
         }
 
@@ -245,13 +255,15 @@ class HomeView(View):
         if not ws:
             self._toast("No workstream selected")
             return
-        # pick_session=None → multi-match resumes the most recent session
-        # (SessionPickerScreen port lands in P4).
         do_resume(
             ws, self.app, self.state.sessions,
             sessions_for_ws_fn=self.state.sessions_for_ws,
-            pick_session=None,
+            pick_session=self._pick_session,
         )
+
+    def _pick_session(self, ws, matching, on_pick) -> None:
+        """do_resume's inverted picker dependency (app._pick_session)."""
+        self.app.push(SessionPickerView(ws, matching), on_result=on_pick)
 
     def _action_repo_spawn(self) -> None:
         """Port of app.action_repo_spawn: repo picker → (workstream
@@ -366,6 +378,107 @@ class HomeView(View):
                 self._toast(f"Added {len(created)} workstreams")
 
         self.app.push(BrainPreviewView(tasks), on_result=on_result)
+
+    def _action_edit_notes(self) -> None:
+        """Port of app.action_edit_notes: fullscreen TodoView."""
+        ws = self._selected_ws()
+        if not ws:
+            return
+        self.app.push(TodoView(ws, self.state.store),
+                      on_result=lambda _res: self._on_return_from_modal())
+
+    def _on_return_from_modal(self) -> None:
+        """Port of app._on_return_from_modal."""
+        self.state.store.load()
+        self.state._last_seen_valid = False
+        self._preview_ws_id = None  # force preview rebuild
+        self.refresh_rows()
+
+    def _action_open_links(self) -> None:
+        """Port of app.action_open_links: one link opens directly,
+        several open LinksView, none toasts."""
+        ws = self._selected_ws()
+        if not ws:
+            return
+        if not ws.links:
+            self._toast("No links")
+        elif len(ws.links) == 1:
+            open_link(ws.links[0], ws=ws, app=self.app)
+            self._toast(f"Opening {ws.links[0].label}...")
+        else:
+            self.app.push(LinksView(ws, self.state.store))
+
+    def _action_help(self) -> None:
+        self.app.push(HelpView(context="home"))
+
+    def _action_view_trash(self) -> None:
+        """Port of app.action_view_trash (palette 'trash' command)."""
+        self.app.push(TrashView(self.state))
+
+    # ── command palette ───────────────────────────────────────────
+
+    def _action_command_palette(self) -> None:
+        """Port of app.action_command_palette: a FuzzyModalView over
+        state's command registry with injected items."""
+        from state import get_command_items
+
+        view = FuzzyModalView(title="Command Palette")
+        view._get_items = lambda: get_command_items(
+            self._selected_ws() is not None
+        )
+
+        def on_cmd(cmd_name) -> None:
+            if cmd_name:
+                self._execute_command(cmd_name)
+
+        self.app.push(view, on_result=on_cmd)
+
+    def _execute_command(self, cmd_text: str) -> None:
+        """Port of app._execute_command, home context only (the Detail
+        delegation branches return with Detail in P4-C)."""
+        ws = self._selected_ws()
+        result = self.state.execute_command(cmd_text, ws.id if ws else None)
+        action = result.get("action", "noop")
+        msg = result.get("msg", "")
+
+        if action == "refresh":
+            self.refresh_rows()
+            if msg:
+                self._toast(msg)
+        elif action in ("notify", "error"):
+            self._toast(msg)
+        elif action == "add":
+            self._action_add()
+        elif action == "rename":
+            self._toast("Rename lands in P4")
+        elif action == "open":
+            self._action_open_links()
+        elif action == "spawn":
+            self._action_spawn()
+        elif action == "resume":
+            self._action_resume()
+        elif action == "export":
+            output, count = self.state.do_export(result.get("path", ""))
+            self._toast(f"Exported {count} workstreams to {output}")
+        elif action == "brain":
+            text = result.get("text", "")
+            if text:
+                self._do_brain(text)
+            else:
+                self._action_brain_dump()
+        elif action == "close":
+            self._toast(STUB_TABS)
+        elif action == "help":
+            self._action_help()
+        elif action == "delete":
+            self._action_delete()
+        elif action == "unarchive":
+            self._action_toggle_archive()
+        elif action == "trash":
+            self._action_view_trash()
+        elif action in ("ship", "ticket", "ticket-create", "branches",
+                        "files", "git-action", "solve", "worktree", "rr"):
+            self._toast("Dev-workflow actions land in P4")
 
     def _action_toggle_archive(self) -> None:
         """Port of app.action_toggle_archive (no confirm, same as Textual)."""

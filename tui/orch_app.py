@@ -143,6 +143,10 @@ class OrchApp(App):
             self._session_watcher = None
         super().exit(result)
 
+    def open_command_palette(self) -> None:
+        """App-level palette entry (screens like Trash bind ':')."""
+        self.home._action_command_palette()
+
     def kick_pollers(self) -> None:
         """User-initiated refresh ('R'): re-run the data pollers now."""
         if not self._bg_started:
