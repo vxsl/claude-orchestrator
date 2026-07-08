@@ -109,6 +109,17 @@ async def test_run_when_hidden_timer_survives_on_hide():
 
 
 @pytest.mark.asyncio
+async def test_fired_one_shot_prunes_itself_from_view_registry():
+    view = View()
+    tick = Counter()
+    view.set_timer(0.01, tick)
+    assert len(view._timers) == 1
+    await asyncio.sleep(0.05)
+    assert tick.n == 1
+    assert view._timers == []  # no leak on long-lived views
+
+
+@pytest.mark.asyncio
 async def test_cancel_timers_stops_everything_and_clears():
     view = View()
     tick = Counter()

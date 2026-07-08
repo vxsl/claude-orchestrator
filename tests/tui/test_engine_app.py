@@ -307,6 +307,28 @@ async def test_every_worker_survives_exceptions(capsys):
 
 
 @pytest.mark.asyncio
+async def test_set_timer_prunes_registry_after_firing():
+    async with Headless(App()) as h:
+        fired = []
+        for _ in range(3):
+            h.app.set_timer(0.01, lambda: fired.append(1))
+        assert len(h.app._app_timers) == 3
+        await h.pause(0.05)
+        assert len(fired) == 3
+        assert h.app._app_timers == []  # no leak: entries removed on fire
+
+
+@pytest.mark.asyncio
+async def test_cancelled_app_timer_prunes_registry():
+    async with Headless(App()) as h:
+        timer = h.app.set_interval(60, lambda: None)
+        assert h.app._app_timers == [timer]
+        timer.cancel()
+        await h.pause(0.02)
+        assert h.app._app_timers == []
+
+
+@pytest.mark.asyncio
 async def test_call_from_thread_runs_on_loop():
     async with Headless(App()) as h:
         import threading

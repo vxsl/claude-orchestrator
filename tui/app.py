@@ -339,14 +339,11 @@ class App:
     # ── timers & workers ──────────────────────────────────────────
 
     def set_interval(self, secs: float, fn) -> Timer:
-        timer = Timer(secs, fn, repeat=True)  # app timers never auto-pause
-        self._app_timers.append(timer)
-        return timer
+        # App timers never auto-pause; fired/cancelled ones prune themselves.
+        return Timer(secs, fn, repeat=True, registry=self._app_timers)
 
     def set_timer(self, secs: float, fn) -> Timer:
-        timer = Timer(secs, fn, repeat=False)
-        self._app_timers.append(timer)
-        return timer
+        return Timer(secs, fn, repeat=False, registry=self._app_timers)
 
     def every(self, secs: float, fn, *, thread: bool = False,
               jitter_start: float = 0.0) -> asyncio.Task:

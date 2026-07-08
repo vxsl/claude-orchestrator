@@ -1,5 +1,5 @@
-"""Widget primitives for the tui engine: ListView, LineEdit, TextEdit,
-FuzzyList, footer_markup.
+"""Widget primitives for the tui engine: ListView, BlockList, LineEdit,
+TextEdit, FuzzyList, FocusRing, footer_markup.
 
 Plain classes with no View dependency — views compose them, forward
 KeyEvents to `handle_key(ev) -> bool` (True = consumed), and paint the
@@ -154,6 +154,53 @@ class ListView:
     def _fire_highlight(self) -> None:
         if self.on_highlight is not None:
             self.on_highlight(self.highlighted_id)
+
+
+# ─── BlockList ─────────────────────────────────────────────────────
+
+SEP_ID = "__sep__"  # decorative separator row id (disabled, never a block)
+
+
+class BlockList(ListView):
+    """ListView where a logical item spans several rows (a block).
+
+    Main rows carry the item id (str); continuation rows carry
+    ``(item_id, n)`` and are disabled so navigation skips them. The
+    highlight covers the whole block, padded to the render width."""
+
+    @staticmethod
+    def block_key(row_id: Any) -> Any:
+        return row_id[0] if isinstance(row_id, tuple) else row_id
+
+    def render(self, width: int, height: int) -> list[str]:
+        if height <= 0:
+            return []
+        max_scroll = max(0, len(self.rows) - height)
+        self._scroll = max(0, min(self._scroll, max_scroll))
+        hkey = None
+        if 0 <= self.highlighted < len(self.rows):
+            hkey = self.block_key(self.rows[self.highlighted][0])
+            # Try to bring the whole block into view (block end first, so the
+            # main row wins if the block is taller than the window).
+            end = self.highlighted
+            while end + 1 < len(self.rows) and self.block_key(self.rows[end + 1][0]) == hkey:
+                end += 1
+            if end >= self._scroll + height:
+                self._scroll = end - height + 1
+            if self.highlighted < self._scroll:
+                self._scroll = self.highlighted
+            elif self.highlighted >= self._scroll + height:
+                self._scroll = self.highlighted - height + 1
+        lines = []
+        for i in range(self._scroll, min(len(self.rows), self._scroll + height)):
+            rid, markup, _disabled = self.rows[i]
+            if hkey is not None and rid != SEP_ID and self.block_key(rid) == hkey:
+                pad = " " * max(0, width - len(strip_markup(markup)))
+                lines.append(f"[on {HIGHLIGHT_BG}]{markup}{pad}[/]")
+            else:
+                lines.append(markup)
+        lines.extend([""] * (height - len(lines)))
+        return lines
 
 
 # ─── LineEdit ──────────────────────────────────────────────────────
@@ -423,6 +470,48 @@ class FuzzyList:
             self.list.highlighted = 0  # reset baseline: best match goes on top
         self.list.set_rows(rows, keep_id=False)  # clamps to 0, fires on change
         self.status = f"{len(rows)} of {len(self._items)}"
+
+
+# ─── FocusRing ─────────────────────────────────────────────────────
+
+
+class FocusRing:
+    """Ordered focus cycle over widgets exposing `handle_key(ev) -> bool`.
+
+    tab/shift+tab rotate focus; any other key goes to the focused widget.
+    """
+
+    def __init__(self, *widgets: Any) -> None:
+        self.widgets: list[Any] = list(widgets)
+        self.index = 0
+
+    @property
+    def focused(self) -> Any | None:
+        return self.widgets[self.index] if self.widgets else None
+
+    def focus(self, widget: Any) -> None:
+        try:
+            self.index = self.widgets.index(widget)
+        except ValueError:
+            pass
+
+    def focus_next(self) -> None:
+        if self.widgets:
+            self.index = (self.index + 1) % len(self.widgets)
+
+    def focus_prev(self) -> None:
+        if self.widgets:
+            self.index = (self.index - 1) % len(self.widgets)
+
+    def route_key(self, ev: KeyEvent) -> bool:
+        if ev.key == "tab":
+            self.focus_next()
+            return True
+        if ev.key == "shift+tab":
+            self.focus_prev()
+            return True
+        focused = self.focused
+        return focused.handle_key(ev) if focused is not None else False
 
 
 # ─── footer ────────────────────────────────────────────────────────

@@ -69,8 +69,8 @@ class OrchApp(App):
         if self._toast_timer is not None:
             self._toast_timer.cancel()
             self._toast_timer = None
-        if self._loop is not None:
-            self._toast_timer = Timer(timeout, self._clear_toast, repeat=False)
+        if self._loop is not None:  # pre-run notify: no loop for a timer yet
+            self._toast_timer = self.set_timer(timeout, self._clear_toast)
         self.request_paint()
 
     toast = notify
@@ -200,10 +200,7 @@ class OrchApp(App):
         if now - self._last_rust_update < 1.0:
             if not self._rust_update_pending:
                 self._rust_update_pending = True
-                # Bare Timer (not set_timer): app timers are never removed
-                # from the registry, and this path can fire once per second
-                # for hours during heavy streaming.
-                Timer(1.0, self._fire_deferred_rust_update, repeat=False)
+                self.set_timer(1.0, self._fire_deferred_rust_update)
             return
         self._last_rust_update = now
         self._rust_update_pending = False
@@ -241,7 +238,7 @@ class OrchApp(App):
         if elapsed < 2.0:
             if not self._liveness_deferred:
                 self._liveness_deferred = True
-                Timer(2.0 - elapsed, self._fire_deferred_liveness, repeat=False)
+                self.set_timer(2.0 - elapsed, self._fire_deferred_liveness)
             return
         self._last_liveness_check = now
         self._liveness_deferred = False

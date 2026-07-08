@@ -33,12 +33,11 @@ from threads import ThreadActivity, session_activity
 from ..keys import KeyEvent
 from ..layout import Rect, split_cols, split_rows
 from ..view import View
-from ..widgets import HIGHLIGHT_BG, LineEdit, ListView, footer_markup, strip_markup
+from ..widgets import SEP_ID as _SEP_ID
+from ..widgets import BlockList, LineEdit, ListView, footer_markup
 
 STUB_DETAIL = "Detail view lands in P4 — ORCH_ENGINE=textual for full UI"
 STUB_TABS = "Tabs land in P4 — ORCH_ENGINE=textual for full UI"
-
-_SEP_ID = "__sep__"
 
 
 def _markup_lines(content: Any) -> list[str]:
@@ -53,48 +52,6 @@ def _divider_line(width: int = 40) -> str:
     """Port of app.py's _divider_option markup."""
     pad = max(1, (width - 10) // 2)
     return f"[{C_FAINT}]{'─' * pad} earlier {'─' * pad}[/{C_FAINT}]"
-
-
-class BlockList(ListView):
-    """ListView where a logical item spans several rows (a block).
-
-    Main rows carry the item id (str); continuation rows carry
-    ``(item_id, n)`` and are disabled so navigation skips them. The
-    highlight covers the whole block, padded to the render width."""
-
-    @staticmethod
-    def block_key(row_id: Any) -> Any:
-        return row_id[0] if isinstance(row_id, tuple) else row_id
-
-    def render(self, width: int, height: int) -> list[str]:
-        if height <= 0:
-            return []
-        max_scroll = max(0, len(self.rows) - height)
-        self._scroll = max(0, min(self._scroll, max_scroll))
-        hkey = None
-        if 0 <= self.highlighted < len(self.rows):
-            hkey = self.block_key(self.rows[self.highlighted][0])
-            # Try to bring the whole block into view (block end first, so the
-            # main row wins if the block is taller than the window).
-            end = self.highlighted
-            while end + 1 < len(self.rows) and self.block_key(self.rows[end + 1][0]) == hkey:
-                end += 1
-            if end >= self._scroll + height:
-                self._scroll = end - height + 1
-            if self.highlighted < self._scroll:
-                self._scroll = self.highlighted
-            elif self.highlighted >= self._scroll + height:
-                self._scroll = self.highlighted - height + 1
-        lines = []
-        for i in range(self._scroll, min(len(self.rows), self._scroll + height)):
-            rid, markup, _disabled = self.rows[i]
-            if hkey is not None and rid != _SEP_ID and self.block_key(rid) == hkey:
-                pad = " " * max(0, width - len(strip_markup(markup)))
-                lines.append(f"[on {HIGHLIGHT_BG}]{markup}{pad}[/]")
-            else:
-                lines.append(markup)
-        lines.extend([""] * (height - len(lines)))
-        return lines
 
 
 class HomeView(View):

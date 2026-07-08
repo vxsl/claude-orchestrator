@@ -13,9 +13,14 @@ class Timer:
     pause() takes effect immediately: a tick whose sleep completes while
     paused is skipped, and resume() waits a full interval before firing.
     Callback exceptions are logged to stderr and never kill the loop.
+
+    Pass `registry` (a list) to have the timer append itself and remove
+    itself once its task finishes — a fired one-shot or a cancelled timer
+    never lingers in its owner's registry.
     """
 
-    def __init__(self, secs: float, fn, *, repeat: bool) -> None:
+    def __init__(self, secs: float, fn, *, repeat: bool,
+                 registry: list | None = None) -> None:
         self._secs = secs
         self._fn = fn
         self._repeat = repeat
@@ -23,6 +28,15 @@ class Timer:
         self._resumed = asyncio.Event()
         self._resumed.set()
         self._task = asyncio.get_running_loop().create_task(self._run())
+        if registry is not None:
+            registry.append(self)
+            self._task.add_done_callback(lambda _t: self._discard(registry))
+
+    def _discard(self, registry: list) -> None:
+        try:
+            registry.remove(self)
+        except ValueError:
+            pass  # already cleared (cancel_timers / shutdown)
 
     async def _run(self) -> None:
         while True:
@@ -92,16 +106,14 @@ class View:
     # ── services ──────────────────────────────────────────────────
 
     def set_interval(self, secs: float, fn, run_when_hidden: bool = False) -> Timer:
-        timer = Timer(secs, fn, repeat=True)
+        timer = Timer(secs, fn, repeat=True, registry=self._timers)
         timer.run_when_hidden = run_when_hidden
-        self._timers.append(timer)
         return timer
 
     def set_timer(self, secs: float, fn) -> Timer:
-        """One-shot timer (still paused/cancelled with the view)."""
-        timer = Timer(secs, fn, repeat=False)
-        self._timers.append(timer)
-        return timer
+        """One-shot timer (still paused/cancelled with the view); pruned
+        from the view's registry once it fires."""
+        return Timer(secs, fn, repeat=False, registry=self._timers)
 
     def cancel_timers(self) -> None:
         for timer in self._timers:
