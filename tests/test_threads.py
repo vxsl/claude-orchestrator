@@ -527,3 +527,50 @@ class TestThreadActivity:
     def test_empty_thread_is_idle(self):
         t = Thread(thread_id="t1", name="test", project_path="/p", sessions=[])
         assert t.activity == ThreadActivity.IDLE
+
+
+class TestLastSeenCache:
+    """load_last_seen's mtime-guarded parse cache (added in P5: the
+    session sidebar calls it every 0.5s)."""
+
+    def _point_at(self, monkeypatch, tmp_path):
+        import threads
+        path = tmp_path / "last-seen.json"
+        monkeypatch.setattr(threads, "LAST_SEEN_FILE", path)
+        return path
+
+    def test_reflects_external_writes(self, monkeypatch, tmp_path):
+        import json
+        import os
+        import threads
+        path = self._point_at(monkeypatch, tmp_path)
+        path.write_text(json.dumps({"a": "1"}))
+        assert threads.load_last_seen() == {"a": "1"}
+        path.write_text(json.dumps({"a": "2", "b": "3"}))
+        os.utime(path, ns=(1, 1))  # force a distinct mtime even on coarse fs
+        assert threads.load_last_seen() == {"a": "2", "b": "3"}
+
+    def test_returns_a_copy_not_the_cache(self, monkeypatch, tmp_path):
+        import json
+        import threads
+        path = self._point_at(monkeypatch, tmp_path)
+        path.write_text(json.dumps({"a": "1"}))
+        first = threads.load_last_seen()
+        first["mutated"] = "x"  # callers mutate before save_last_seen
+        assert threads.load_last_seen() == {"a": "1"}
+
+    def test_save_invalidates(self, monkeypatch, tmp_path):
+        import threads
+        self._point_at(monkeypatch, tmp_path)
+        threads.save_last_seen({"a": "1"})
+        assert threads.load_last_seen() == {"a": "1"}
+        threads.save_last_seen({"a": "2"})
+        assert threads.load_last_seen() == {"a": "2"}
+
+    def test_missing_file_empty_and_uncached(self, monkeypatch, tmp_path):
+        import json
+        import threads
+        path = self._point_at(monkeypatch, tmp_path)
+        assert threads.load_last_seen() == {}
+        path.write_text(json.dumps({"a": "1"}))
+        assert threads.load_last_seen() == {"a": "1"}

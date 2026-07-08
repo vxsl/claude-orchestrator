@@ -31,6 +31,7 @@ import os
 import time
 import uuid
 from datetime import datetime, timedelta
+from functools import lru_cache
 from pathlib import Path
 
 from models import _relative_time
@@ -74,6 +75,15 @@ _SESSIONS_MAX_H = 12  # other-sessions wrap max-height (incl. border)
 def _esc(text: str) -> str:
     """Escape Rich markup characters."""
     return text.replace("[", "\\[").replace("]", "\\]")
+
+
+@lru_cache(maxsize=512)
+def _padded_line(markup: str, w: int, bg: str) -> str:
+    """Background-padded row markup, cached: header/footer/sessions rows
+    repaint at 20fps while a pane streams, and rebuilding the pad (a
+    strip_markup regex pass per line) dominated the chrome cost."""
+    pad = " " * max(0, w - len(strip_markup(markup)))
+    return f"[on {bg}]{markup}{pad}[/on {bg}]"
 
 
 def _parse_tokens(tokens_str: str) -> float:
@@ -365,6 +375,8 @@ class WsSessionList:
         self.on_select = None          # callable(sid)
         self.on_items_changed = None   # callable(has_items)
         self._last_had_items = False
+        self._rev = 0                  # bumped on any visible change
+        self._lines_cache: tuple | None = None  # (key, lines)
 
     def refresh(self, state) -> bool:
         """Recompute rows from live session data; returns True on change.
@@ -427,6 +439,8 @@ class WsSessionList:
 
         changed = new_rows != self.rows
         self.rows = new_rows
+        if changed:
+            self._rev += 1
 
         # Maintain selection across refreshes
         sids = [r[0] for r in self.rows]
@@ -448,9 +462,13 @@ class WsSessionList:
         return False
 
     def render_lines(self, width: int, focused: bool) -> list[str]:
-        """Markup lines, two per session (port of _repaint)."""
+        """Markup lines, two per session (port of _repaint). Cached until
+        anything visible changes — this renders at 20fps while streaming."""
         if not self.rows:
             return [f"[{C_FAINT}]no other active sessions[/{C_FAINT}]"]
+        key = (width, focused, self._rev, self.throbber_frame, self.selected_sid)
+        if self._lines_cache is not None and self._lines_cache[0] == key:
+            return self._lines_cache[1]
 
         WIDTH = max(20, width)
         lines = []
@@ -499,6 +517,7 @@ class WsSessionList:
 
             lines.append(line1)
             lines.append(line2)
+        self._lines_cache = (key, lines)
         return lines
 
     def _move(self, delta: int) -> None:
@@ -625,6 +644,8 @@ class ClaudeSessionView(View):
         self._msg_snippets: dict[str, str] = {}
 
         self._keymap = self._build_keymap()
+        self._footer_cache: dict[int, str] = {}
+        self._layout_cache: tuple | None = None  # (key, layout dict)
 
     @staticmethod
     def _make_pane(command: str, *, env: dict, cwd: str) -> TerminalPane:
@@ -1033,7 +1054,18 @@ class ClaudeSessionView(View):
     # ── layout & render ───────────────────────────────────────────
 
     def _layout(self, rect: Rect) -> dict[str, Rect | None]:
-        """Rect for every region; hidden regions are None."""
+        """Rect for every region; hidden regions are None. Memoized on its
+        inputs — recomputed dozens of times a second while streaming."""
+        key = (rect, self._zoomed_panel, self._sidebar_enabled,
+               len(self.header.lines), self._has_other_sessions,
+               len(self.sessions_list.rows))
+        if self._layout_cache is not None and self._layout_cache[0] == key:
+            return self._layout_cache[1]
+        lay = self._compute_layout(rect)
+        self._layout_cache = (key, lay)
+        return lay
+
+    def _compute_layout(self, rect: Rect) -> dict[str, Rect | None]:
         tab, body, footer = split_rows(rect, 1, 1.0, 1)
         lay: dict[str, Rect | None] = {
             "tab": tab, "footer": footer, "header": None, "claude": None,
@@ -1092,8 +1124,7 @@ class ClaudeSessionView(View):
 
     def _raised_line(self, frame, x: int, y: int, w: int, markup: str,
                      bg: str = BG_RAISED) -> None:
-        pad = " " * max(0, w - len(strip_markup(markup)))
-        frame.write_markup(x, y, w, f"[on {bg}]{markup}{pad}[/on {bg}]")
+        frame.write_markup(x, y, w, _padded_line(markup, w, bg))
 
     def _render_header(self, frame, rect: Rect) -> None:
         self.header.width = max(20, rect.w - 3)  # padding 0 1 0 2
@@ -1110,26 +1141,30 @@ class ClaudeSessionView(View):
             self._raised_line(frame, c.x + 1, c.y + i, c.w - 2, line)
 
     def _render_footer(self, frame, rect: Rect) -> None:
-        """1-line static footer (port of SessionFooterWidget)."""
-        sid_short = self.session_id[:8]
-        short_cwd = self._cwd.replace(os.path.expanduser("~"), "~")
-        left_parts = [
-            f"[{C_BLUE}]{sid_short}[/]",
-            f"[{C_DIM}]{_esc(short_cwd)}[/]",
-        ]
-        if self._git_branch:
-            left_parts.append(f"[{C_PURPLE}]{_esc(self._git_branch)}[/]")
-        left_parts.append(f"[{C_DIM}]│[/]")
-        left_parts.append(f"[{C_YELLOW}]C-e[/] [{C_DIM}]extract[/]")
-        left_parts.append(f"[{C_YELLOW}]C-j/k[/] [{C_DIM}]panels[/]")
-        left_parts.append(f"[{C_YELLOW}]C-z[/] [{C_DIM}]zoom[/]")
-        left = "  ".join(left_parts)
-        flag = "--session-id" if self._is_new else "--resume"
-        right = f"[{C_DIM}]claude {flag} {self.session_id}[/]"
-        width = rect.w - 4  # padding 0 2
-        gap = max(2, width - len(strip_markup(left)) - len(strip_markup(right)))
-        self._raised_line(frame, rect.x, rect.y, rect.w,
-                          f"  {left}{' ' * gap}{right}", bg=BG_CHROME)
+        """1-line static footer (port of SessionFooterWidget). Composed
+        once per width — its inputs never change for a given view."""
+        cached = self._footer_cache.get(rect.w)
+        if cached is None:
+            sid_short = self.session_id[:8]
+            short_cwd = self._cwd.replace(os.path.expanduser("~"), "~")
+            left_parts = [
+                f"[{C_BLUE}]{sid_short}[/]",
+                f"[{C_DIM}]{_esc(short_cwd)}[/]",
+            ]
+            if self._git_branch:
+                left_parts.append(f"[{C_PURPLE}]{_esc(self._git_branch)}[/]")
+            left_parts.append(f"[{C_DIM}]│[/]")
+            left_parts.append(f"[{C_YELLOW}]C-e[/] [{C_DIM}]extract[/]")
+            left_parts.append(f"[{C_YELLOW}]C-j/k[/] [{C_DIM}]panels[/]")
+            left_parts.append(f"[{C_YELLOW}]C-z[/] [{C_DIM}]zoom[/]")
+            left = "  ".join(left_parts)
+            flag = "--session-id" if self._is_new else "--resume"
+            right = f"[{C_DIM}]claude {flag} {self.session_id}[/]"
+            width = rect.w - 4  # padding 0 2
+            gap = max(2, width - len(strip_markup(left)) - len(strip_markup(right)))
+            cached = f"  {left}{' ' * gap}{right}"
+            self._footer_cache = {rect.w: cached}
+        self._raised_line(frame, rect.x, rect.y, rect.w, cached, bg=BG_CHROME)
 
     def _render_picker(self, frame, rect: Rect) -> None:
         """Bottom-docked jump-to-message overlay (port of #cs-picker-overlay)."""

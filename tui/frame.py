@@ -12,6 +12,7 @@ never flickers.
 
 from __future__ import annotations
 
+from rich.cells import cell_len
 from rich.console import Console
 from rich.segment import Segment
 from rich.style import Style
@@ -158,17 +159,53 @@ class Frame:
         """Rows as plain text (wide chars count once) — for tests/harness."""
         return ["".join(seg.text for seg in row) for row in self.rows]
 
+    @staticmethod
+    def _cut(seg: Segment, at: int, seg_len: int) -> tuple[Segment, Segment]:
+        """Split `seg` at cell offset `at`. When the (cached) cell length
+        equals the character count there are no wide chars, so plain string
+        slicing replaces Segment.split_cells' per-character width scan —
+        the common case for every splice while a pane streams."""
+        text = seg.text
+        if seg_len == len(text):
+            style = seg.style
+            return Segment(text[:at], style), Segment(text[at:], style)
+        return seg.split_cells(at)
+
     def _splice(self, y: int, x: int, w: int, segments: list[Segment]) -> None:
-        """Replace exactly `w` cells at (x, y) with `segments` (already w cells)."""
+        """Replace exactly `w` cells at (x, y) with `segments` (already w cells).
+
+        Hand-rolled single walk instead of Segment.divide: a composed frame
+        splices a few hundred times per paint at 20fps while a pane streams,
+        and divide's generator + repeated cell-width scans dominated the
+        profile. At most two segments are split (wide chars bisected at a
+        boundary become spaces, as split_cells guarantees); everything else
+        is reused by reference.
+        """
         row = self.rows[y]
-        if x == 0 and w == self.width:
+        width = self.width
+        if x == 0 and w == width:
             self.rows[y] = segments
             return
-        if x + w >= self.width:
-            left = list(Segment.divide(row, [x]))[0]
-            self.rows[y] = left + segments
-            return
-        left, _, right = Segment.divide(row, [x, x + w, self.width])
+        end = x + w
+        crop_right = end < width  # cells at/after `end` survive
+        left: list[Segment] = []
+        right: list[Segment] = []
+        pos = 0
+        for seg in row:
+            seg_len = cell_len(seg.text)
+            seg_end = pos + seg_len
+            if seg_end <= x:
+                left.append(seg)
+            elif pos >= end:
+                right.append(seg)
+            else:  # overlaps the replaced range
+                if pos < x:
+                    left.append(self._cut(seg, x - pos, seg_len)[0])
+                if crop_right and seg_end > end:
+                    keep = self._cut(seg, end - pos, seg_len)[1]
+                    if keep.text:
+                        right.append(keep)
+            pos = seg_end
         self.rows[y] = left + segments + right
 
 

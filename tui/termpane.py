@@ -179,8 +179,13 @@ class TerminalPane(TerminalHost):
             await eof.wait()
             self._handle_pty_eof()
         finally:
-            with contextlib.suppress(Exception):
-                loop.remove_reader(fd)
+            # Only deregister an fd this pane still owns: detach()/stop()
+            # null _fd before this cancelled task unwinds, and the closed
+            # number may already have been reused by a newer pane —
+            # remove_reader(fd) then would silently kill *its* reader.
+            if self._fd == fd:
+                with contextlib.suppress(Exception):
+                    loop.remove_reader(fd)
 
     # ── Geometry ──────────────────────────────────────────────────
 

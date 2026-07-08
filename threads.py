@@ -66,19 +66,39 @@ _INTERACTIVE_TOOLS = frozenset({
 # Cache file for last-seen timestamps per thread
 LAST_SEEN_FILE = Path.home() / ".cache" / "claude-orchestrator" / "last-seen.json"
 
+# mtime-guarded parse cache: the session-sidebar/detail refreshers call
+# load_last_seen every 0.5s and re-parsing a few hundred entries of JSON
+# each tick showed up in profiles. Keyed on (path, mtime_ns, size) so
+# tests that repoint LAST_SEEN_FILE and external writers both invalidate.
+_LAST_SEEN_CACHE: tuple[tuple, dict[str, str]] | None = None
+
 
 def load_last_seen() -> dict[str, str]:
     """Load {thread_id: iso_timestamp} from cache."""
+    global _LAST_SEEN_CACHE
     try:
-        return json.loads(LAST_SEEN_FILE.read_text())
+        st = LAST_SEEN_FILE.stat()
+        key = (str(LAST_SEEN_FILE), st.st_mtime_ns, st.st_size)
+    except OSError:
+        _LAST_SEEN_CACHE = None
+        return {}
+    cached = _LAST_SEEN_CACHE
+    if cached is not None and cached[0] == key:
+        return dict(cached[1])  # copy: callers mutate before save_last_seen
+    try:
+        data = json.loads(LAST_SEEN_FILE.read_text())
     except (OSError, json.JSONDecodeError):
         return {}
+    _LAST_SEEN_CACHE = (key, data)
+    return dict(data)
 
 
 def save_last_seen(data: dict[str, str]) -> None:
     """Persist last-seen timestamps."""
+    global _LAST_SEEN_CACHE
     LAST_SEEN_FILE.parent.mkdir(parents=True, exist_ok=True)
     LAST_SEEN_FILE.write_text(json.dumps(data))
+    _LAST_SEEN_CACHE = None  # next load re-reads what was just written
 
 
 def mark_thread_seen(thread_id: str) -> None:
