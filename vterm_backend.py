@@ -275,6 +275,12 @@ class VTermBackend:
             self._screen, self._pos, ctypes.byref(self._cell))
         return self._cell
 
+    # libvterm marks the second column of a wide (width-2) character by
+    # setting chars[0] to (uint32_t)-1 in that cell (screen.c). The same
+    # sentinel appears in scrollback lines, which are pushed through the
+    # equivalent of vterm_screen_get_cell.
+    CONTINUATION = 0xFFFFFFFF
+
     def render_row_segments(self, row: int, cols: int,
                             cursor_x: int = -1) -> list[tuple[str, tuple]]:
         """Render an entire row as run-length-encoded (text, style_tuple) pairs.
@@ -282,26 +288,45 @@ class VTermBackend:
         Returns a list of (text, (fg, bg, attrs)) tuples where fg/bg are
         Rich color strings or None, and attrs is the raw bitfield.
         This avoids per-cell Style object creation in Python.
+
+        Wide characters (CJK, emoji) emit only their glyph; the
+        continuation cell libvterm places in the next column is skipped,
+        so the summed *cell* width of the returned runs always equals
+        `cols`. (Emitting a spacer for the continuation cell — the old
+        behavior — shifted everything after a wide char right by one
+        column per wide char.)
         """
         pos = self._pos
         cell = self._cell
         cell_ref = ctypes.byref(cell)
         screen = self._screen
         ctmp = self._ctmp
+        continuation = self.CONTINUATION
 
         segments: list[tuple[str, tuple]] = []
         run_chars: list[str] = []
         run_key: tuple = ()  # (fg, bg, attrs) or ("cursor",)
 
-        for x in range(cols):
+        x = 0
+        while x < cols:
             pos.row = row
             pos.col = x
             _vterm_screen_get_cell(screen, pos, cell_ref)
 
+            cp = cell.chars[0]
+            if cp == continuation:
+                # Second column of a wide char: the glyph emitted for the
+                # previous cell already covers this column.
+                x += 1
+                continue
+            wide = cell.width == 2 and x + 1 < cols
+
             # Inline color conversion needed for both cursor and normal cells
             fg_color = self._color_to_str(cell.fg, ctmp, screen)
             bg_color = self._color_to_str(cell.bg, ctmp, screen)
-            if x == cursor_x:
+            # A cursor reported on the continuation column highlights the
+            # wide char that owns it.
+            if x == cursor_x or (wide and x + 1 == cursor_x):
                 if self.cursor_shape == 1:
                     key = ("cursor", 1)  # block: reverse video
                 else:
@@ -310,7 +335,6 @@ class VTermBackend:
                 key = (fg_color, bg_color, cell.attrs)
 
             # Get character
-            cp = cell.chars[0]
             ch = chr(cp) if 0 < cp <= 0x10FFFF else " "
 
             if key != run_key:
@@ -320,6 +344,8 @@ class VTermBackend:
                 run_key = key
             else:
                 run_chars.append(ch)
+
+            x += 2 if wide else 1
 
         if run_chars:
             segments.append(("".join(run_chars), run_key))
