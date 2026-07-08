@@ -6,6 +6,7 @@ This is where the high-value regression protection lives.
 
 import json
 import pytest
+from types import SimpleNamespace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
@@ -2046,3 +2047,134 @@ class TestPathMatchesDir:
     def test_no_match_for_unrelated_path(self):
         with patch("state._git_toplevel", return_value="/repo"):
             assert _path_matches_dir("/other", "/repo") is False
+
+
+class TestGroupDetailSessions:
+    """Detail-view grouping (extracted from screens.DetailScreen in P4-C)."""
+
+    @staticmethod
+    def _session(n, *, live=False, role="assistant", last_activity=None,
+                 started_at=None):
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc).isoformat()
+        return SimpleNamespace(
+            session_id=f"sid{n}",
+            is_live=live,
+            last_message_role=role,
+            last_stop_reason="",
+            turn_complete=False,
+            last_tool_name="",
+            last_user_message_at="",
+            last_human_turn_at="",
+            message_count=3,
+            last_activity=last_activity if last_activity is not None else now,
+            started_at=started_at or now,
+        )
+
+    @staticmethod
+    def _notif(dt):
+        return SimpleNamespace(dt=dt, dismissed=False, session_id=None, cwd=None)
+
+    def test_notified_sort_by_notification_recency(self):
+        from datetime import datetime, timezone
+        from state import group_detail_sessions
+        s1, s2 = self._session(1), self._session(2)
+        notif_map = {
+            "sid1": self._notif(datetime(2026, 7, 1, tzinfo=timezone.utc)),
+            "sid2": self._notif(datetime(2026, 7, 5, tzinfo=timezone.utc)),
+        }
+        notified, elevated, today, thinking, earlier, shelved = \
+            group_detail_sessions([s1, s2], notif_map, {}, set())
+        assert [s.session_id for s in notified] == ["sid2", "sid1"]
+        assert elevated == today == thinking == earlier == shelved == []
+
+    def test_unseen_your_turn_is_elevated_seen_is_quiet(self):
+        from datetime import datetime, timezone
+        from state import group_detail_sessions
+        s1 = self._session(1)  # assistant spoke last, not live → your turn
+        s2 = self._session(2)
+        future = datetime(2099, 1, 1, tzinfo=timezone.utc).isoformat()
+        last_seen = {"sid2": future}  # sid2 seen; sid1 not
+        notified, elevated, today, thinking, earlier, shelved = \
+            group_detail_sessions([s1, s2], {}, last_seen, set())
+        assert [s.session_id for s in elevated] == ["sid1"]
+        assert [s.session_id for s in today] == ["sid2"]
+
+    def test_thinking_earlier_and_shelved_buckets(self):
+        from state import group_detail_sessions
+        thinking_s = self._session(1, live=True, role="user")
+        earlier_s = self._session(2, last_activity="2026-01-01T00:00:00+00:00")
+        shelved_s = self._session(3, last_activity="2026-01-02T00:00:00+00:00")
+        # mark all seen so nothing is elevated
+        future = "2099-01-01T00:00:00+00:00"
+        last_seen = {f"sid{n}": future for n in (1, 2, 3)}
+        notified, elevated, today, thinking, earlier, shelved = \
+            group_detail_sessions([thinking_s, earlier_s, shelved_s],
+                                  {}, last_seen, {"sid3"})
+        assert [s.session_id for s in thinking] == ["sid1"]
+        assert [s.session_id for s in earlier] == ["sid2"]
+        assert [s.session_id for s in shelved] == ["sid3"]
+        assert today == []
+
+
+class TestMapNotificationsToSessions:
+    @staticmethod
+    def _notif(dt, session_id=None, cwd=None, dismissed=False):
+        return SimpleNamespace(id=f"n-{dt}", dt=dt, session_id=session_id,
+                               cwd=cwd, dismissed=dismissed)
+
+    @staticmethod
+    def _session(sid, project_path="/home/u/dev/proj", last_activity=""):
+        return SimpleNamespace(session_id=sid, project_path=project_path,
+                               last_activity=last_activity)
+
+    def test_sid_match_keeps_latest(self):
+        from datetime import datetime, timezone
+        from state import map_notifications_to_sessions
+        old = self._notif(datetime(2026, 7, 1, tzinfo=timezone.utc), session_id="s1")
+        new = self._notif(datetime(2026, 7, 2, tzinfo=timezone.utc), session_id="s1")
+        m = map_notifications_to_sessions([old, new], [self._session("s1")])
+        assert m == {"s1": new}
+
+    def test_dismissed_ignored(self):
+        from datetime import datetime, timezone
+        from state import map_notifications_to_sessions
+        n = self._notif(datetime(2026, 7, 1, tzinfo=timezone.utc),
+                        session_id="s1", dismissed=True)
+        assert map_notifications_to_sessions([n], [self._session("s1")]) == {}
+
+    def test_cwd_fallback_picks_closest_activity(self):
+        from datetime import datetime, timezone
+        from state import map_notifications_to_sessions
+        n = self._notif(datetime(2026, 7, 2, 12, tzinfo=timezone.utc),
+                        cwd="/home/u/dev/proj/")
+        near = self._session("near", last_activity="2026-07-02T11:59:00+00:00")
+        far = self._session("far", last_activity="2026-07-01T00:00:00+00:00")
+        m = map_notifications_to_sessions([n], [far, near])
+        assert set(m) == {"near"}
+
+    def test_cwd_mismatch_maps_nothing(self):
+        from datetime import datetime, timezone
+        from state import map_notifications_to_sessions
+        n = self._notif(datetime(2026, 7, 2, tzinfo=timezone.utc), cwd="/elsewhere")
+        assert map_notifications_to_sessions([n], [self._session("s1")]) == {}
+
+
+class TestAutoUnshelveSessions:
+    @staticmethod
+    def _session(sid, last_human):
+        return SimpleNamespace(session_id=sid, last_human_turn_at=last_human)
+
+    def test_new_human_turn_unshelves(self, sample_ws):
+        from state import auto_unshelve_sessions
+        sample_ws.shelved_sessions = {"s1": "2026-07-01T00:00:00+00:00"}
+        s = self._session("s1", "2026-07-02T00:00:00+00:00")
+        assert auto_unshelve_sessions(sample_ws, [s]) is True
+        assert sample_ws.shelved_sessions == {}
+
+    def test_older_human_turn_stays_shelved(self, sample_ws):
+        from state import auto_unshelve_sessions
+        sample_ws.shelved_sessions = {"s1": "2026-07-02T00:00:00+00:00"}
+        s = self._session("s1", "2026-07-01T00:00:00+00:00")
+        assert auto_unshelve_sessions(sample_ws, [s]) is False
+        assert "s1" in sample_ws.shelved_sessions

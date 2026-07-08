@@ -1303,3 +1303,102 @@ def _render_todo_option(item: TodoItem, is_archived: bool = False) -> str:
     line1 = f" [{icon_color}]{icon}[/{icon_color}]  {text_fmt}{ctx_hint}"
     line2 = f"      [{C_DIM}]{age}[/{C_DIM}]"
     return f"{line1}\n{line2}"
+
+
+# ─── Workstream detail header / body (ports of DetailScreen renderers) ──
+
+def render_ws_meta(ws, sessions: list) -> str:
+    """Meta badge line for the workstream detail header: category, ticket
+    status, MR, solve status, auto-mode status, session totals."""
+    import os as _os
+
+    parts = [_category_markup(ws.category)]
+    ticket_key = getattr(ws, "ticket_key", "")
+    if ticket_key:
+        ticket_status = getattr(ws, "ticket_status", "")
+        if ticket_status:
+            ts_lower = ticket_status.lower()
+            if "progress" in ts_lower or "review" in ts_lower:
+                ts_color = C_CYAN
+            elif "done" in ts_lower or "closed" in ts_lower or "resolved" in ts_lower:
+                ts_color = C_GREEN
+            else:
+                ts_color = C_DIM
+            parts.append(f"[bold]{_rich_escape(ticket_key)}[/bold] "
+                         f"[{ts_color}]{_rich_escape(ticket_status)}[/{ts_color}]")
+        else:
+            parts.append(f"[bold]{_rich_escape(ticket_key)}[/bold]")
+    if getattr(ws, "mr_url", ""):
+        parts.append(f"[{C_PURPLE}]MR[/{C_PURPLE}]")
+    solve_status = getattr(ws, "ticket_solve_status", "")
+    if solve_status:
+        if solve_status.lower() in ("running", "active"):
+            parts.append(f"[{C_YELLOW}]solving[/{C_YELLOW}]")
+        elif solve_status.lower() in ("done", "complete"):
+            parts.append(f"[{C_GREEN}]solved[/{C_GREEN}]")
+        else:
+            parts.append(f"[{C_DIM}]solve:{_rich_escape(solve_status)}[/{C_DIM}]")
+    # Auto-mode status — same at-a-glance visibility for a second orch
+    # instance (over ssh) that doesn't own the loop.
+    if ws.auto_running:
+        if ws.auto_pid_alive:
+            bits = [f"auto iter {ws.auto_iteration}"]
+            if ws.auto_current_todo_id:
+                bits.append(f"todo {ws.auto_current_todo_id[:8]}")
+            pid = ws.auto_pid
+            if pid != _os.getpid():
+                bits.append(f"pid {pid}")
+            parts.append(f"[{C_BLUE}]" + " · ".join(bits) + f"[/{C_BLUE}]")
+        else:
+            parts.append(f"[{C_RED}]auto:stale (dead pid {ws.auto_pid})[/{C_RED}]")
+    if sessions:
+        n = len(sessions)
+        total_tok = sum(s.total_input_tokens + s.total_output_tokens for s in sessions)
+        total_msgs = sum(s.message_count for s in sessions)
+        _tk = (f"{total_tok / 1_000_000:.1f}M" if total_tok > 1_000_000
+               else f"{total_tok / 1_000:.0f}k" if total_tok > 1_000
+               else str(total_tok))
+        parts.append(f"[{C_DIM}]{n} sessions · {total_msgs} msgs · "
+                     f"{_token_color_markup(_tk, total_tok)}[/{C_DIM}]")
+    return "  ".join(parts)
+
+
+def render_ws_body_lines(ws, active_todos: list) -> list[str]:
+    """Detail body panel lines: external links, todo summary, timestamps
+    (port of DetailScreen._render_body, one markup string per line)."""
+    lines: list[str] = []
+    ext_links = [lnk for lnk in ws.links
+                 if lnk.kind not in ("worktree", "file", "claude-session")]
+    if ext_links:
+        lines.append(f"[bold {C_BLUE}]Links[/bold {C_BLUE}]")
+        for lnk in ext_links:
+            lines.append(f"  {_link_icon(lnk.kind)} {_rich_escape(lnk.value)}")
+        lines.append("")
+    if active_todos:
+        undone = [t for t in active_todos if not t.done]
+        done = [t for t in active_todos if t.done]
+        lines.append(f"[bold {C_BLUE}]Todos[/bold {C_BLUE}] "
+                     f"[{C_DIM}]({len(undone)} pending, {len(done)} done)[/{C_DIM}]")
+        for t in active_todos[:6]:
+            icon = TODO_DONE_ICON if t.done else TODO_UNDONE_ICON
+            if t.done:
+                lines.append(f"  [{C_GREEN}]{icon} {_rich_escape(t.text)}[/{C_GREEN}]")
+            else:
+                lines.append(f"  {icon} {_rich_escape(t.text)}")
+        if len(active_todos) > 6:
+            lines.append(f"  [{C_DIM}]... +{len(active_todos) - 6} more[/{C_DIM}]")
+        lines.append("")
+    lines.append(f"[{C_DIM}]Created {_relative_time(ws.created_at)} · "
+                 f"Updated {_relative_time(ws.updated_at)}[/{C_DIM}]")
+    return lines
+
+
+def render_peek_header(session) -> str:
+    """Two-line header block for the detail session peek."""
+    title_text = _session_title(session)
+    return (
+        f"[bold {C_BLUE}]{_rich_escape(title_text)}[/bold {C_BLUE}]  "
+        f"[{C_DIM}]{session.age} · {_short_model(session.model)} · "
+        f"{session.message_count} msgs · {session.tokens_display}[/{C_DIM}]\n"
+        f"[{C_DIM}]p[/{C_DIM}] close  [{C_DIM}]j/k[/{C_DIM}] scroll"
+    )

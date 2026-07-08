@@ -28,6 +28,19 @@ _HINT_SELECT = f"[{C_DIM}]Enter[/{C_DIM}] select  [{C_DIM}]^H[/{C_DIM}] back"
 _HINT_SUBMIT = f"[{C_DIM}]Enter[/{C_DIM}] submit  [{C_DIM}]^H[/{C_DIM}] back"
 
 
+def draw_border(frame, box: Rect, style: str) -> None:
+    """Rounded border on the perimeter of `box` (shared by ModalView and
+    the DetailView focused-pane ring)."""
+    if box.w < 2 or box.h < 2:
+        return
+    horiz = "─" * (box.w - 2)
+    frame.write_markup(box.x, box.y, box.w, f"[{style}]╭{horiz}╮[/{style}]")
+    for y in range(box.y + 1, box.bottom - 1):
+        frame.write_markup(box.x, y, 1, f"[{style}]│[/{style}]")
+        frame.write_markup(box.right - 1, y, 1, f"[{style}]│[/{style}]")
+    frame.write_markup(box.x, box.bottom - 1, box.w, f"[{style}]╰{horiz}╯[/{style}]")
+
+
 class ModalView(View):
     """Centered bordered modal box; the view below renders underneath.
 
@@ -113,13 +126,7 @@ class ModalView(View):
         """Subclass hook: draw content into the body rect."""
 
     def _draw_border(self, frame, box: Rect) -> None:
-        style = f"{self.border_color} on {BG_SURFACE}"
-        horiz = "─" * (box.w - 2)
-        frame.write_markup(box.x, box.y, box.w, f"[{style}]╭{horiz}╮[/{style}]")
-        for y in range(box.y + 1, box.bottom - 1):
-            frame.write_markup(box.x, y, 1, f"[{style}]│[/{style}]")
-            frame.write_markup(box.right - 1, y, 1, f"[{style}]│[/{style}]")
-        frame.write_markup(box.x, box.bottom - 1, box.w, f"[{style}]╰{horiz}╯[/{style}]")
+        draw_border(frame, box, f"{self.border_color} on {BG_SURFACE}")
 
     def _write_line(self, frame, x: int, y: int, width: int, markup: str,
                     bg: str = BG_SURFACE) -> None:

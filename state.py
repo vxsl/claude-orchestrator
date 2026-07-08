@@ -617,7 +617,124 @@ def _rg_files_matching(terms: list[str], paths: list[str]) -> set[str] | None:
 
 
 from threads import Thread, ThreadActivity, session_activity, load_last_seen, mark_thread_seen
-from rendering import _best_activity, _all_sessions_seen, _is_today
+from rendering import _best_activity, _all_sessions_seen, _is_session_seen, _is_today
+
+
+# ── Detail-view session grouping (extracted from screens.DetailScreen) ──
+
+_DETAIL_ELEVATED_ACTS = (ThreadActivity.AWAITING_INPUT, ThreadActivity.RESPONSE_READY)
+
+
+def group_detail_sessions(sessions, notif_map, last_seen, shelved):
+    """Split a workstream's sessions into the detail view's display groups.
+
+    Returns (notified, elevated, quiet_today, quiet_thinking, quiet_earlier,
+    quiet_shelved), each sorted the way the detail list renders them:
+    notified by notification recency, the rest by session recency (thinking
+    by started_at).
+    """
+    notified, elevated, quiet = [], [], []
+    for s in sessions:
+        if s.session_id in notif_map:
+            notified.append(s)
+        else:
+            act = session_activity(s, last_seen)
+            seen = _is_session_seen(s, last_seen)
+            if not seen and act in _DETAIL_ELEVATED_ACTS:
+                elevated.append(s)
+            else:
+                quiet.append(s)
+    notified.sort(key=lambda s: notif_map[s.session_id].dt, reverse=True)
+    elevated.sort(key=lambda s: s.last_activity or "", reverse=True)
+    quiet.sort(key=lambda s: s.last_activity or "", reverse=True)
+    quiet_active = [s for s in quiet if s.session_id not in shelved]
+    quiet_shelved = [s for s in quiet if s.session_id in shelved]
+    quiet_thinking = [
+        s for s in quiet_active
+        if session_activity(s, last_seen) == ThreadActivity.THINKING
+    ]
+    quiet_thinking.sort(key=lambda s: s.started_at or "", reverse=True)
+    quiet_other = [s for s in quiet_active if s not in quiet_thinking]
+    quiet_today = [s for s in quiet_other
+                   if _is_today(s.last_activity or s.started_at or "")]
+    quiet_earlier = [s for s in quiet_other if s not in quiet_today]
+    return notified, elevated, quiet_today, quiet_thinking, quiet_earlier, quiet_shelved
+
+
+def map_notifications_to_sessions(notifications, sessions):
+    """session_id -> latest non-dismissed notification (extracted from
+    DetailScreen._load_feed).
+
+    Matches by session_id when available; notifications without one fall
+    back to cwd match + closest last_activity timestamp.
+    """
+    from rendering import _parse_iso
+
+    notif_map = {}
+    unmatched = []
+    for n in notifications:
+        if n.dismissed:
+            continue
+        if n.session_id:
+            existing = notif_map.get(n.session_id)
+            if not existing or n.dt > existing.dt:
+                notif_map[n.session_id] = n
+        else:
+            unmatched.append(n)
+    if unmatched and sessions:
+        for n in unmatched:
+            if not n.cwd:
+                continue
+            cwd_norm = n.cwd.rstrip("/")
+            best_sid = None
+            best_gap = None
+            for s in sessions:
+                if not s.project_path or s.project_path.rstrip("/") != cwd_norm:
+                    continue
+                if s.last_activity:
+                    s_dt = _parse_iso(s.last_activity)
+                    if s_dt:
+                        gap = abs((n.dt - s_dt).total_seconds())
+                        if best_gap is None or gap < best_gap:
+                            best_gap = gap
+                            best_sid = s.session_id
+                elif best_sid is None:
+                    best_sid = s.session_id
+            if best_sid:
+                existing = notif_map.get(best_sid)
+                if not existing or n.dt > existing.dt:
+                    notif_map[best_sid] = n
+    return notif_map
+
+
+def _parse_shelve_ts(ts: str) -> datetime:
+    """Parse a timestamp string, returning a UTC-aware datetime (min on error)."""
+    from datetime import timezone as _tz
+    ts = (ts or "").replace("Z", "+00:00")
+    try:
+        dt = datetime.fromisoformat(ts)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=_tz.utc)
+        return dt
+    except (ValueError, TypeError):
+        return datetime.min.replace(tzinfo=_tz.utc)
+
+
+def auto_unshelve_sessions(ws, sessions) -> bool:
+    """Wake shelved sessions the human typed into after shelving (extracted
+    from DetailScreen._load_detail_sessions). Mutates ws.shelved_sessions;
+    returns True when anything was unshelved (caller persists)."""
+    unshelved = set()
+    for s in sessions:
+        if s.session_id in ws.shelved_sessions:
+            shelved_at = ws.shelved_sessions[s.session_id]
+            last_human = s.last_human_turn_at or ""
+            if last_human and shelved_at and \
+                    _parse_shelve_ts(last_human) > _parse_shelve_ts(shelved_at):
+                unshelved.add(s.session_id)
+    for sid in unshelved:
+        del ws.shelved_sessions[sid]
+    return bool(unshelved)
 
 
 def _drop_zombie_sessions(sessions):
