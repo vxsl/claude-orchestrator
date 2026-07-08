@@ -36,6 +36,7 @@ PURE_MODULES = [
     "tui.term",
     "tui.view",
     "tui.app",
+    "tui.widgets",
     "tui.testing",
 ]
 
