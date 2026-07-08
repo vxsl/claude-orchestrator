@@ -396,9 +396,14 @@ class TestSubScreens:
     async def test_t_runs_tig_fullscreen_over_suspend(self, detail_app, monkeypatch, tmp_path):
         detail_app._ws.repo_path = str(tmp_path)
         ran = []
+
+        def fake_run(cmd, **kw):
+            if cmd[0] != "git":  # the rev-parse gate passes
+                ran.append((cmd, kw.get("cwd")))
+            return SimpleNamespace(returncode=0)
+
         monkeypatch.setattr("tui.views.detail.shutil.which", lambda cmd: "/usr/bin/tig")
-        monkeypatch.setattr("tui.views.detail.subprocess.run",
-                            lambda cmd, **kw: ran.append((cmd, kw.get("cwd"))))
+        monkeypatch.setattr("tui.views.detail.subprocess.run", fake_run)
         async with detail_headless(detail_app) as h:
             view = await push_detail(h)
             view._cwd = str(tmp_path)  # skip the ws_working_dir git shell-out

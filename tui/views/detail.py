@@ -554,15 +554,25 @@ class DetailView(View):
 
     def _action_tig(self) -> None:
         """Detail-lite substitute: fullscreen tig over suspend() (embedded
-        tig panes land in P6)."""
+        tig panes land in P6). Same gate as the original's
+        _detect_git_sidebar: tig on PATH + a directory that git recognizes."""
         if not self._has_repo():
             self.app.notify("No git repo linked to this workstream", timeout=2)
             return
         if not shutil.which("tig"):
             self.app.notify("tig not found on PATH", timeout=2)
             return
+        cwd = self._working_dir()
+        try:
+            ok = subprocess.run(["git", "-C", cwd, "rev-parse", "--git-dir"],
+                                capture_output=True, timeout=3).returncode == 0
+        except Exception:
+            ok = False
+        if not ok:
+            self.app.notify(f"Not a git repo: {cwd}", timeout=2)
+            return
         with self.app.suspend():
-            subprocess.run(["tig"], cwd=self._working_dir())
+            subprocess.run(["tig"], cwd=cwd)
 
     # ── back cascade (port of action_dismiss/action_go_back) ─────
 
@@ -1076,7 +1086,9 @@ class DetailView(View):
                 ("space", "archive/restore"),
                 ("z", "defer/undefer"),
                 ("p", "peek"), ("y", "yank cmd"),
-                ("^j/^k", "panels"), ("/", "search"), ("\\", "titles"),
+                # "\\\\" renders one backslash — a bare "\" would escape the
+                # closing tag (the Textual original had that glitch)
+                ("^j/^k", "panels"), ("/", "search"), ("\\\\", "titles"),
                 ("^H", "back"),
             ]
         return "  ".join(f"[{C_YELLOW}]{k}[/{C_YELLOW}] {v}" for k, v in pairs)

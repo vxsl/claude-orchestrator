@@ -121,7 +121,7 @@ class HelpView(FuzzyModalView):
             K("notif-all", "D", "Dismiss all notifications"),
             H("Find things"),
             K("flt-search", "/", "Search session content"),
-            K("flt-titles", "\\", "Search session titles only"),
+            K("flt-titles", "\\\\", "Search session titles only"),
             K("cmd-palette", ":", "Command palette"),
             K("help", "?", "This help"),
         ]
