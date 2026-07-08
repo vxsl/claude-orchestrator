@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import tomllib
 from pathlib import Path
-from textual.binding import Binding
 
 
 CONFIG_DIR = Path.home() / ".claude-orchestrator"
@@ -91,8 +90,15 @@ def get_key(action: str) -> str:
     return default[0] if default else ""
 
 
-def build_app_bindings() -> list[Binding]:
-    """Build the main app BINDINGS list with user overrides applied."""
+def build_app_bindings() -> list:
+    """Build the main app BINDINGS list with user overrides applied.
+
+    Textual-only adapter; the import is local so this module stays
+    importable without Textual (the tui engine consumes DEFAULT_KEYS
+    and get_key directly).
+    """
+    from textual.binding import Binding
+
     overrides = _user_overrides()
     bindings = []
     for action, (default_keys, desc, show, priority) in DEFAULT_KEYS.items():
