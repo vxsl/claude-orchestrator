@@ -7,6 +7,7 @@ the tui engine migration builds on them.
 
 import asyncio
 import base64
+import os
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -191,10 +192,12 @@ class TestPersistentLifecycle:
         host._p_out = MagicMock()
 
         with patch("term_host.os.kill") as kill, \
-             patch("term_host.os.waitpid"), \
+             patch("term_host.os.waitpid", return_value=(4242, 0)) as waitpid, \
              patch("term_host.subprocess.run") as run:
             host.detach_persistent()
+            # SIGTERM sent, then reaped on the first WNOHANG poll — no SIGKILL.
             kill.assert_called_once()          # attach client killed...
+            waitpid.assert_called_once_with(4242, os.WNOHANG)
             run.assert_not_called()            # ...but no tmux kill-session
         assert host._pid is None and host._p_out is None
 

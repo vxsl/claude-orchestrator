@@ -28,6 +28,7 @@ import struct
 import subprocess
 import tempfile
 import termios
+import time
 from pathlib import Path
 
 import pyte
@@ -405,6 +406,39 @@ class TerminalHost:
         self._set_pty_size(self._nrow, self._ncol)
         self._read_task = asyncio.create_task(self._read_loop())
 
+    @staticmethod
+    def _reap_pid(pid: int) -> None:
+        """Terminate a child PTY process without blocking the event loop.
+
+        A plain ``os.waitpid(pid, 0)`` can hang forever: tmux attach clients
+        install a SIGTERM handler, so SIGTERM makes them *detach* but not
+        necessarily *exit*, and the blocking wait then wedges the whole TUI
+        (the asyncio loop runs on this thread).  So: SIGTERM, poll briefly for
+        a clean exit, then escalate to SIGKILL (uncatchable) and reap.
+        """
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except (OSError, ProcessLookupError):
+            pass  # already dead — fall through to reap any zombie
+        # Give it a short window to exit cleanly after SIGTERM.
+        for _ in range(20):  # ~0.2s total
+            try:
+                reaped, _ = os.waitpid(pid, os.WNOHANG)
+            except (OSError, ChildProcessError):
+                return  # not our child / already reaped
+            if reaped:
+                return
+            time.sleep(0.01)
+        # Still alive (e.g. tmux caught SIGTERM but didn't exit): force it.
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except (OSError, ProcessLookupError):
+            pass
+        try:
+            os.waitpid(pid, 0)  # SIGKILL is uncatchable → returns promptly
+        except (OSError, ChildProcessError):
+            pass
+
     def stop(self) -> None:
         """Kill the subprocess and clean up."""
         if self._pid is None:
@@ -412,11 +446,7 @@ class TerminalHost:
         if self._read_task:
             self._read_task.cancel()
             self._read_task = None
-        try:
-            os.kill(self._pid, signal.SIGTERM)
-            os.waitpid(self._pid, 0)
-        except (OSError, ChildProcessError):
-            pass
+        self._reap_pid(self._pid)
         # Deregister any event-loop reader while the fd is still open, then
         # close the PTY master fd to avoid leaking file descriptors.
         self._release_fd_reader()
@@ -688,11 +718,7 @@ class TerminalHost:
             self._read_task = None
         # Kill just the tmux attach client, not the session
         if self._pid is not None:
-            try:
-                os.kill(self._pid, signal.SIGTERM)
-                os.waitpid(self._pid, 0)
-            except (OSError, ChildProcessError):
-                pass
+            self._reap_pid(self._pid)
         # Deregister any event-loop reader while the fd is still open, then
         # close the PTY master fd to avoid leaking file descriptors.
         self._release_fd_reader()
