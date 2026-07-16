@@ -20,6 +20,7 @@ from textual.strip import Strip
 from textual.widget import Widget
 
 from profile_app import perf_trace
+from rendering import BG_BASE
 from term_host import (
     TMUX_NAV_KEYS,
     TerminalHost,
@@ -28,15 +29,30 @@ from term_host import (
     _pyte_color,
 )
 
+# Opaque base painted under any cell that sets no background of its own.
+# Without it, cells with bgcolor=None emit no background and a transparent
+# terminal shows through the pane. Textual only pads blank/gutter area with
+# the widget background — it never fills it under content segments — so the
+# substitution has to happen per cell here. Reverse runs (the block cursor)
+# already swap in a solid fg color as their background, so leave them alone.
+_OPAQUE_BG = Style(bgcolor=BG_BASE)
+
+
+def _opaque(style: Style) -> Style:
+    if style.bgcolor is None and not style.reverse:
+        return _OPAQUE_BG + style
+    return style
+
 
 class TerminalWidget(Widget, TerminalHost, can_focus=True):
     """A terminal emulator widget that runs a command in a PTY."""
 
-    DEFAULT_CSS = """
-    TerminalWidget {
+    DEFAULT_CSS = f"""
+    TerminalWidget {{
         height: 1fr;
         width: 1fr;
-    }
+        background: {BG_BASE};
+    }}
     """
 
     def __init__(
@@ -212,6 +228,7 @@ class TerminalWidget(Widget, TerminalHost, can_focus=True):
             else:
                 ch = " "
                 style = Style()
+            style = _opaque(style)
 
             if style != run_style:
                 _flush()
@@ -254,6 +271,7 @@ class TerminalWidget(Widget, TerminalHost, can_focus=True):
                 strike=bool(attrs & 0x80),
                 reverse=bool(attrs & 0x20),
             )
+        style = _opaque(style)
         # Limit cache size to prevent unbounded growth
         if len(cls._style_cache) > 4096:
             cls._style_cache.clear()
@@ -333,6 +351,7 @@ class TerminalWidget(Widget, TerminalHost, can_focus=True):
                     strike=bool(attrs & 0x80),
                     reverse=bool(attrs & 0x20),
                 )
+            style = _opaque(style)
 
             if style != run_style:
                 _flush()
