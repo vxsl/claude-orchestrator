@@ -32,11 +32,6 @@ paint. render() consumes backend.dirty_rows and clears has_dirty.
 
 from __future__ import annotations
 
-import asyncio
-import contextlib
-import os
-import select
-
 from term_host import TMUX_NAV_KEYS, TerminalHost, _KEY_MAP, _pyte_color
 
 from .frame import runs_to_segments
@@ -130,79 +125,9 @@ class TerminalPane(TerminalHost):
         if self.copy_to_clipboard is not None:
             self.copy_to_clipboard(text)
 
-    def _release_fd_reader(self) -> None:
-        # stop()/detach() call this while self._fd is still open, before the
-        # fd is closed or handed off. Removing the reader now tears down the
-        # epoll registration and the selector-map entry together; otherwise a
-        # pane that reuses this fd number would add_reader onto the stale key
-        # (a no-op modify) and never receive output. The read task's own
-        # finally can't do this — it unwinds after the fd is already gone.
-        fd = self._fd
-        if fd is None:
-            return
-        try:
-            loop = asyncio.get_running_loop()
-        except RuntimeError:
-            return  # no loop (unit test / already torn down)
-        with contextlib.suppress(Exception):
-            loop.remove_reader(fd)
-
     # _handle_pty_eof: host default fires self.on_finished — sufficient.
-
-    # ── PTY read loop ─────────────────────────────────────────────
-
-    async def _read_loop(self) -> None:
-        """add_reader-driven replacement for the host's executor-based
-        loop: a thread-pool round trip per PTY chunk costs ~10x an epoll
-        wakeup, and a streaming child produces dozens of chunks a second.
-
-        The read happens inside the readiness callback — the same loop
-        pass epoll reported data in — never deferred to a task wake (a
-        stale wake would block the whole loop on the blocking fd; seen in
-        practice). A zero-timeout select re-check guards the same way.
-
-        Same contract as the host loop: feed the backend, set _has_dirty,
-        EOF fires _handle_pty_eof. The task exists so the host lifecycle
-        methods (start/attach/stop/detach) can cancel it as usual; it just
-        parks on an EOF event while the callback does the work."""
-        loop = asyncio.get_running_loop()
-        fd = self._fd
-        eof = asyncio.Event()
-
-        def on_readable() -> None:
-            try:
-                if not select.select([fd], [], [], 0)[0]:
-                    return  # stale readiness: never risk a blocking read
-                data = os.read(fd, 65536)
-            except OSError:  # EIO: child side closed
-                data = b""
-            if not data:
-                with contextlib.suppress(Exception):
-                    loop.remove_reader(fd)  # stop HUP readiness re-firing
-                eof.set()
-                return
-            if self._backend:
-                self._process_output_vterm(data)
-            else:
-                self._process_output(data.decode(errors="replace"))
-            self._has_dirty = True
-
-        try:
-            loop.add_reader(fd, on_readable)
-        except (NotImplementedError, PermissionError, OSError):
-            await TerminalHost._read_loop(self)  # loop lacks add_reader
-            return
-        try:
-            await eof.wait()
-            self._handle_pty_eof()
-        finally:
-            # Only deregister an fd this pane still owns: detach()/stop()
-            # null _fd before this cancelled task unwinds, and the closed
-            # number may already have been reused by a newer pane —
-            # remove_reader(fd) then would silently kill *its* reader.
-            if self._fd == fd:
-                with contextlib.suppress(Exception):
-                    loop.remove_reader(fd)
+    # _read_loop / _release_fd_reader: the add_reader loop this pane used to
+    # override now lives in TerminalHost, so both engines share it.
 
     # ── Geometry ──────────────────────────────────────────────────
 

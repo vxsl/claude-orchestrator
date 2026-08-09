@@ -8,6 +8,7 @@ the tui engine migration builds on them.
 import asyncio
 import base64
 import os
+from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -212,6 +213,89 @@ class TestPersistentLifecycle:
             assert argv == [
                 "tmux", "-L", "orch-sessions", "kill-session", "-t", "sess-1",
             ]
+
+
+@pytest.mark.asyncio
+class TestReadLoopScaling:
+    """The read loop must not consume a shared thread-pool worker per pane.
+
+    It used to: each pane parked one worker of asyncio's *default* executor
+    on a blocking read for the pane's whole lifetime.  That pool is bounded
+    (min(32, cpu_count + 4)) and shared with every asyncio.to_thread call in
+    the app, so past ~16 open panes it saturated — later panes rendered
+    nothing until an already-running pane happened to emit output, and
+    unrelated to_thread work queued behind them.  The event loop itself was
+    never blocked, so the UI stayed responsive and it read as "terminals
+    randomly freeze".
+    """
+
+    async def _drain(self, host, timeout=3.0):
+        """Write to the PTY and wait for the read loop to see it come back
+        (the tty echoes, and `cat` re-emits the line)."""
+        host._write_to_pty("ping\n")
+        for _ in range(int(timeout / 0.02)):
+            if host._has_dirty:
+                return True
+            await asyncio.sleep(0.02)
+        return False
+
+    async def test_read_loop_registers_an_fd_reader(self):
+        host = TerminalHost("cat")
+        host.start()
+        try:
+            assert await self._drain(host), "pane never saw PTY output"
+            loop = asyncio.get_running_loop()
+            # remove_reader() reports whether a reader was registered; a
+            # blocking-read-in-a-thread loop would register none.
+            assert loop.remove_reader(host._fd) is True
+        finally:
+            host.stop()
+
+    async def test_idle_panes_cannot_starve_another_panes_reader(self):
+        """Silent panes must not hold the resource a busy pane needs.
+
+        This is the shape of the real bug: most panes are idle, and an idle
+        pane's blocking read never returns, so under the old loop it owned a
+        pool worker forever.  Shrinking the pool to one worker reproduces
+        that deterministically, independent of the host's cpu_count — the
+        live app hit the same wall at 16 panes with 22 open.
+        """
+        loop = asyncio.get_running_loop()
+        prev = getattr(loop, "_default_executor", None)
+        loop.set_default_executor(ThreadPoolExecutor(max_workers=1))
+        hosts = [TerminalHost("cat") for _ in range(4)]
+        try:
+            for h in hosts:
+                h.start()
+            await asyncio.sleep(0.2)  # let the silent panes settle
+            assert await self._drain(hosts[-1]), (
+                "pane starved: idle panes monopolized the reader")
+        finally:
+            for h in hosts:
+                h.stop()
+            loop.set_default_executor(prev or ThreadPoolExecutor())
+
+    async def test_to_thread_still_runs_with_many_panes_open(self):
+        """Panes must not queue ahead of unrelated to_thread work.
+
+        app code calls asyncio.to_thread (tmux liveness checks, header
+        refreshes) on the same default pool the read loops used to occupy.
+        """
+        loop = asyncio.get_running_loop()
+        prev = getattr(loop, "_default_executor", None)
+        loop.set_default_executor(ThreadPoolExecutor(max_workers=1))
+        hosts = [TerminalHost("cat") for _ in range(8)]
+        try:
+            for h in hosts:
+                h.start()
+            for h in hosts:
+                await self._drain(h)
+            got = await asyncio.wait_for(asyncio.to_thread(lambda: "ok"), 3.0)
+            assert got == "ok"
+        finally:
+            for h in hosts:
+                h.stop()
+            loop.set_default_executor(prev or ThreadPoolExecutor())
 
 
 class TestTmuxConf:

@@ -18,10 +18,12 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import contextlib
 import fcntl
 import os
 import pty
 import re
+import select
 import shlex
 import signal
 import struct
@@ -370,14 +372,24 @@ class TerminalHost:
         """Scrollback offset changed — repaint the pane."""
 
     def _release_fd_reader(self) -> None:
-        """Called immediately before the master fd is closed or handed off
-        (stop/detach), while it is still open. A UI layer that registered an
-        event-loop reader on the fd MUST deregister it here: closing an fd
-        out from under asyncio leaves a stale selector key that silently
-        defeats the next ``add_reader`` on the reused fd number (epoll drops
-        the closed fd, but asyncio's map keeps it, so the reuse is treated as
-        a no-op ``modify`` and the new reader never fires). No-op for the
-        base executor read loop, which owns no such reader."""
+        """Deregister the event-loop reader immediately before the master fd
+        is closed or handed off (stop/detach), while it is still open.
+
+        Closing an fd out from under asyncio leaves a stale selector key that
+        silently defeats the next ``add_reader`` on the reused fd number
+        (epoll drops the closed fd, but asyncio's map keeps it, so the reuse
+        is treated as a no-op ``modify`` and the new reader never fires).
+        The read task's own ``finally`` can't do this — it unwinds after the
+        fd is already gone."""
+        fd = self._fd
+        if fd is None:
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return  # no loop (unit test / already torn down)
+        with contextlib.suppress(Exception):
+            loop.remove_reader(fd)
 
     # ── Lifecycle ──────────────────────────────────────────────────
 
@@ -762,12 +774,74 @@ class TerminalHost:
             return None
 
     async def _read_loop(self) -> None:
-        """Read PTY output and feed to terminal backend.
+        """Read PTY output (via add_reader) and feed the terminal backend.
 
-        Uses run_in_executor so the blocking read happens in a thread pool
-        worker instead of an add_reader callback.  This means the event loop
-        only wakes up when data actually arrives, keeping CPU idle between
-        chunks and leaving headroom for keystroke processing.
+        Registers the master fd with the event loop rather than parking a
+        thread on a blocking read.  This is not just a latency win (a
+        thread-pool round trip per chunk costs ~10x an epoll wakeup, and a
+        streaming child produces dozens of chunks a second) — it is a
+        correctness requirement.  The executor version held one worker of the
+        *default* pool per pane for the pane's entire lifetime, and that pool
+        is both bounded (``min(32, cpu_count + 4)``) and shared with every
+        ``asyncio.to_thread`` call in the app.  Past ~16 open panes it
+        saturated: further panes never got a worker and so rendered nothing
+        until an already-running pane happened to emit output, while
+        unrelated ``to_thread`` work queued behind them.  The UI stayed
+        responsive throughout (the loop itself was never blocked), which made
+        it read as "terminals randomly freeze" rather than as pool exhaustion.
+
+        The read happens inside the readiness callback — the same loop pass
+        epoll reported data in — never deferred to a task wake (a stale wake
+        would block the whole loop on the blocking fd; seen in practice).  A
+        zero-timeout select re-check guards the same way.
+
+        The task exists so the lifecycle methods (start/attach/stop/detach)
+        can cancel it as usual; it just parks on an EOF event while the
+        callback does the work.
+        """
+        loop = asyncio.get_running_loop()
+        fd = self._fd
+        eof = asyncio.Event()
+
+        def on_readable() -> None:
+            try:
+                if not select.select([fd], [], [], 0)[0]:
+                    return  # stale readiness: never risk a blocking read
+                data = os.read(fd, 65536)
+            except OSError:  # EIO: child side closed
+                data = b""
+            if not data:
+                with contextlib.suppress(Exception):
+                    loop.remove_reader(fd)  # stop HUP readiness re-firing
+                eof.set()
+                return
+            if self._backend:
+                self._process_output_vterm(data)
+            else:
+                self._process_output(data.decode(errors="replace"))
+            self._has_dirty = True
+
+        try:
+            loop.add_reader(fd, on_readable)
+        except (NotImplementedError, PermissionError, OSError):
+            await self._read_loop_executor()  # loop lacks add_reader
+            return
+        try:
+            await eof.wait()
+            self._handle_pty_eof()
+        finally:
+            # Only deregister an fd this pane still owns: detach()/stop()
+            # null _fd before this cancelled task unwinds, and the closed
+            # number may already have been reused by a newer pane —
+            # remove_reader(fd) then would silently kill *its* reader.
+            if self._fd == fd:
+                with contextlib.suppress(Exception):
+                    loop.remove_reader(fd)
+
+    async def _read_loop_executor(self) -> None:
+        """Fallback read loop for event loops without ``add_reader`` (e.g.
+        ProactorEventLoop).  Parks a thread-pool worker on a blocking read —
+        see the pool-saturation caveat in ``_read_loop``.
         """
         loop = asyncio.get_running_loop()
         try:
