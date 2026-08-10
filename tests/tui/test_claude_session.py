@@ -25,8 +25,10 @@ from tui.orch_app import OrchApp
 from tui.termpane import TerminalPane
 from tui.testing import Headless, make_key_event
 from tui.views.claude_session import (
-    _PASSTHROUGH_KEYS, ClaudeSessionView, WsSessionList,
+    _AUTO_MODE_KEYS, _PASSTHROUGH_KEYS, ClaudeSessionView, WsSessionList,
 )
+
+AUTO_KEY = _AUTO_MODE_KEYS.split(",")[0]
 
 
 @pytest.fixture(autouse=True)
@@ -309,13 +311,23 @@ class TestKeyRouting:
                 assert view.on_key(make_key_event(key)) is False
                 assert not view.claude_pane.writes
 
-    async def test_ctrl_y_delegates_to_app(self, cs_app):
+    async def test_auto_key_delegates_to_app(self, cs_app):
+        async with Headless(cs_app, size=(140, 40)) as h:
+            view, _ = await push_view(h)
+            calls = []
+            cs_app.toggle_auto_mode = lambda ws_id, sid: calls.append((ws_id, sid))
+            await h.press(AUTO_KEY)
+            assert calls == [(cs_app._ws.id, SID)]
+
+    async def test_ctrl_y_is_not_bound(self, cs_app):
+        """ctrl+y used to be auto mode; it now reaches claude as a yank."""
+        assert "ctrl+y" not in _PASSTHROUGH_KEYS
         async with Headless(cs_app, size=(140, 40)) as h:
             view, _ = await push_view(h)
             calls = []
             cs_app.toggle_auto_mode = lambda ws_id, sid: calls.append((ws_id, sid))
             await h.press("ctrl+y")
-            assert calls == [(cs_app._ws.id, SID)]
+            assert calls == []
 
 
 # ─── ctrl+r jump overlay ─────────────────────────────────────────────
@@ -788,7 +800,7 @@ class TestTabSwitchResume:
 
 @pytest.mark.asyncio
 class TestAutoModeWiring:
-    async def test_ctrl_y_with_backlog_opens_start_view(self, wired_app):
+    async def test_auto_key_with_backlog_opens_start_view(self, wired_app):
         ws = wired_app._ws
         wired_app.state.add_todo(ws.id, "task one")
         started = []
@@ -796,13 +808,13 @@ class TestAutoModeWiring:
         async with Headless(wired_app, size=(140, 40)) as h:
             wired_app.launch_claude_session(ws, session_id=SID, cwd=wired_app._cwd)
             await wait_for_session_view(h)
-            await h.press("ctrl+y")
+            await h.press(AUTO_KEY)
             from tui.views.auto_mode_start import AutoModeStartView
             assert isinstance(h.app.top, AutoModeStartView)
             await h.press("escape")  # cancel → nothing started
             assert not started
 
-    async def test_ctrl_y_no_backlog_starts_immediately(self, wired_app):
+    async def test_auto_key_no_backlog_confirms_first(self, wired_app):
         ws = wired_app._ws
         started = []
         wired_app._start_auto_mode = (
@@ -810,10 +822,26 @@ class TestAutoModeWiring:
         async with Headless(wired_app, size=(140, 40)) as h:
             wired_app.launch_claude_session(ws, session_id=SID, cwd=wired_app._cwd)
             await wait_for_session_view(h)
-            await h.press("ctrl+y")
+            await h.press(AUTO_KEY)
+            from tui.views.confirm import ConfirmView
+            assert isinstance(h.app.top, ConfirmView)
+            assert not started  # the key alone starts nothing
+            await h.press("y")
             assert started == [(ws.id, SID, set())]
 
-    async def test_ctrl_y_cancels_running_loop(self, wired_app):
+    async def test_auto_key_no_backlog_confirm_declined(self, wired_app):
+        ws = wired_app._ws
+        started = []
+        wired_app._start_auto_mode = (
+            lambda ws_id, sid, skip_ids: started.append((ws_id, sid, skip_ids)))
+        async with Headless(wired_app, size=(140, 40)) as h:
+            wired_app.launch_claude_session(ws, session_id=SID, cwd=wired_app._cwd)
+            await wait_for_session_view(h)
+            await h.press(AUTO_KEY)
+            await h.press("n")
+            assert not started
+
+    async def test_auto_key_cancels_running_loop(self, wired_app):
         ws = wired_app._ws
         cancelled = []
         wired_app._auto_modes[ws.id] = type(
@@ -821,7 +849,7 @@ class TestAutoModeWiring:
         async with Headless(wired_app, size=(140, 40)) as h:
             wired_app.launch_claude_session(ws, session_id=SID, cwd=wired_app._cwd)
             await wait_for_session_view(h)
-            await h.press("ctrl+y")
+            await h.press(AUTO_KEY)
             assert cancelled == [True]
             assert "[auto] canceling" in wired_app.toast_text
 

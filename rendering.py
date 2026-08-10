@@ -530,7 +530,7 @@ def _render_ws_option(
     # Auto-mode badge — visible from any orch instance, not just the owner.
     # "auto iter N" while running; "auto stale" if the owner pid is dead
     # (orch crashed without clearing auto_running) so the user can clear
-    # it by pressing ctrl+y to start a fresh loop.
+    # it by pressing the auto-mode key to start a fresh loop.
     if ws.auto_running:
         if ws.auto_pid_alive:
             iter_part = f" iter {ws.auto_iteration}" if ws.auto_iteration else ""

@@ -2484,16 +2484,17 @@ class OrchestratorApp(App):
     def toggle_auto_mode(self, ws_id: str, screen_session_id: str) -> None:
         """Cancel an existing auto-mode loop for this ws, or start a new one.
 
-        On start: if the workstream has a non-empty crystallized-undone
-        backlog, prompts the user to use it or skip it ("start fresh").
-        With no backlog, starts immediately.
+        Starting is never one keypress: a non-empty crystallized-undone
+        backlog opens the todo picker (Esc backs out), and with no backlog
+        a ConfirmScreen asks first. Auto mode spawns real sessions, so an
+        accidental key must not launch one.
 
         ws_id is the workstream. screen_session_id is the session the user
-        pressed ctrl+y on (used as coordinator only on first start). On
-        re-toggle from an implementer screen, the original coordinator
+        pressed the auto key on (used as coordinator only on first start).
+        On re-toggle from an implementer screen, the original coordinator
         session is reused if it's still alive in tmux — that prevents an
         implementer from accidentally promoting itself when the user
-        re-presses ctrl+y.
+        re-presses it.
         """
         if not ws_id:
             self.notify("[auto] workstream has no id", timeout=3)
@@ -2540,7 +2541,22 @@ class OrchestratorApp(App):
         backlog_ids = {t.id for t in backlog}
 
         if not backlog_ids:
-            self._start_auto_mode(ws_id, screen_session_id, skip_ids=set())
+            # No backlog to pick from, so the picker never appears — ask
+            # outright before spawning a coordinator loop.
+            from screens import ConfirmScreen
+
+            def on_confirm(ok: bool) -> None:
+                if ok:
+                    self._start_auto_mode(ws_id, screen_session_id, skip_ids=set())
+
+            self.push_screen(
+                ConfirmScreen(
+                    f"Start auto mode on [bold]{_rich_escape(ws.name)}[/bold]?\n\n"
+                    f"[{C_DIM}]No pending todos — the coordinator\n"
+                    f"runs unattended until you stop it.[/{C_DIM}]"
+                ),
+                callback=on_confirm,
+            )
             return
 
         # Non-empty backlog — let the user pick which todos to include

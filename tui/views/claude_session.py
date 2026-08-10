@@ -34,6 +34,7 @@ from datetime import datetime, timedelta
 from functools import lru_cache
 from pathlib import Path
 
+from config import get_session_key, key_label, key_set
 from models import _relative_time
 from rendering import (
     BG_CHROME, BG_RAISED, BG_SURFACE,
@@ -58,13 +59,19 @@ from ..widgets import FuzzyList, strip_markup
 from .home import render_tab_bar
 from .modals import draw_border
 
+# Auto mode's key lives in config.py (SESSION_KEYS) so both engines and a
+# user config.toml override agree on it. ctrl+y is no longer bound — it now
+# reaches claude as a plain yank.
+_AUTO_MODE_KEYS = get_session_key("toggle_auto_mode")
+_AUTO_MODE_LABEL = key_label(_AUTO_MODE_KEYS)
+
 # Keys that pass through the claude/tig panes to the view for panel
 # navigation and app-level tab keys (claude_session_screen.py:44).
 _PASSTHROUGH_KEYS = {
     "ctrl+j", "ctrl+k", "ctrl+shift+j", "ctrl+shift+k", "ctrl+e", "ctrl+h",
-    "ctrl+z", "ctrl+backslash", "ctrl+b", "ctrl+x", "ctrl+@", "ctrl+y",
+    "ctrl+z", "ctrl+backslash", "ctrl+b", "ctrl+x", "ctrl+@",
     "ctrl+r",
-}
+} | key_set(_AUTO_MODE_KEYS)
 
 _SIDEBAR_W = 36
 _SESSIONS_MAX_H = 12  # other-sessions wrap max-height (incl. border)
@@ -865,7 +872,7 @@ class ClaudeSessionView(View):
     # ── keys ──────────────────────────────────────────────────────
 
     def _build_keymap(self) -> dict:
-        return {
+        keymap = {
             "ctrl+j": lambda: self._cycle_panel(1),
             "ctrl+k": lambda: self._cycle_panel(-1),
             "ctrl+e": self._action_extract_todo,
@@ -873,11 +880,13 @@ class ClaudeSessionView(View):
             "ctrl+backslash": self.go_back,
             "ctrl+z": self._action_zoom_panel,
             "ctrl+@": self._archive_and_go_back,
-            "ctrl+y": self._action_toggle_auto_mode,
             "ctrl+r": self._action_jump_to_message,
             "ctrl+shift+j": lambda: self._cycle_session(1),
             "ctrl+shift+k": lambda: self._cycle_session(-1),
         }
+        for key in key_set(_AUTO_MODE_KEYS):
+            keymap[key] = self._action_toggle_auto_mode
+        return keymap
 
     def on_key(self, ev) -> bool:
         if self._picker_active:
@@ -967,7 +976,7 @@ class ClaudeSessionView(View):
     def _action_extract_todo(self) -> None:
         self.claude_pane._write_to_pty("/user:extract-orch-todo\r")
 
-    # ── C-y: auto mode ────────────────────────────────────────────
+    # ── auto mode (SESSION_KEYS toggle_auto_mode) ─────────────────
 
     def _action_toggle_auto_mode(self) -> None:
         # Delegate to the app so state is per-workstream, not per-view.
@@ -1157,6 +1166,7 @@ class ClaudeSessionView(View):
             left_parts.append(f"[{C_YELLOW}]C-e[/] [{C_DIM}]extract[/]")
             left_parts.append(f"[{C_YELLOW}]C-j/k[/] [{C_DIM}]panels[/]")
             left_parts.append(f"[{C_YELLOW}]C-z[/] [{C_DIM}]zoom[/]")
+            left_parts.append(f"[{C_YELLOW}]{_AUTO_MODE_LABEL}[/] [{C_DIM}]auto[/]")
             left = "  ".join(left_parts)
             flag = "--session-id" if self._is_new else "--resume"
             right = f"[{C_DIM}]claude {flag} {self.session_id}[/]"

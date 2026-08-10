@@ -4,8 +4,11 @@ Multi-select over a workstream's backlog when auto mode starts:
 space toggles ◉/○, a selects all, n none; enter dismisses with the
 set of todo ids to RUN (the caller computes skip_ids = backlog −
 returned set); escape / ctrl+h → None. Its caller — app
-toggle_auto_mode, reached via ctrl+y on a Claude session screen —
-lands with the ClaudeSessionScreen port in P5.
+toggle_auto_mode, reached via the SESSION_KEYS toggle_auto_mode key on
+a Claude session screen — lands with the ClaudeSessionScreen port in P5.
+
+This view doubles as auto mode's confirmation step: nothing starts until
+the user presses Enter. The no-backlog path gets a ConfirmView instead.
 """
 
 from __future__ import annotations

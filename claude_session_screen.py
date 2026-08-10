@@ -24,6 +24,7 @@ from textual.message import Message
 from textual.screen import Screen
 from textual.widgets import Input, OptionList, Static
 
+from config import get_session_key, key_label, key_set
 from models import Link, Store, Workstream
 from rendering import (
     BG_RAISED, BG_BASE, BG_CHROME, BG_SURFACE,
@@ -40,8 +41,14 @@ from thread_namer import get_session_title
 from threads import ThreadActivity, session_activity
 from widgets import FuzzyPicker
 
+# Auto mode's key lives in config.py (SESSION_KEYS) so both engines and a
+# user config.toml override agree on it. ctrl+y is no longer bound — it now
+# reaches claude as a plain yank.
+_AUTO_MODE_KEYS = get_session_key("toggle_auto_mode")
+_AUTO_MODE_LABEL = key_label(_AUTO_MODE_KEYS)
+
 # Keys that pass through the TerminalWidget to the screen for panel navigation
-_PASSTHROUGH_KEYS = {"ctrl+j", "ctrl+k", "ctrl+shift+j", "ctrl+shift+k", "ctrl+e", "ctrl+h", "ctrl+z", "ctrl+backslash", "ctrl+b", "ctrl+x", "ctrl+@", "ctrl+y", "ctrl+r"}
+_PASSTHROUGH_KEYS = {"ctrl+j", "ctrl+k", "ctrl+shift+j", "ctrl+shift+k", "ctrl+e", "ctrl+h", "ctrl+z", "ctrl+backslash", "ctrl+b", "ctrl+x", "ctrl+@", "ctrl+r"} | key_set(_AUTO_MODE_KEYS)
 
 # Spawn/bookkeeping helpers moved verbatim to session_launch.py so the tui
 # engine can use them without importing Textual (sanctioned import-redirect,
@@ -300,6 +307,7 @@ class SessionFooterWidget(Static):
         left_parts.append(f"[{C_YELLOW}]C-e[/] [{C_DIM}]extract[/]")
         left_parts.append(f"[{C_YELLOW}]C-j/k[/] [{C_DIM}]panels[/]")
         left_parts.append(f"[{C_YELLOW}]C-z[/] [{C_DIM}]zoom[/]")
+        left_parts.append(f"[{C_YELLOW}]{_AUTO_MODE_LABEL}[/] [{C_DIM}]auto[/]")
 
         left = "  ".join(left_parts)
         flag = "--session-id" if self._is_new else "--resume"
@@ -643,7 +651,7 @@ class ClaudeSessionScreen(Screen):
 
     BINDINGS = [
         Binding("ctrl+e", "extract_todo", "Extract todo", priority=True),
-        Binding("ctrl+y", "toggle_auto_mode", "Auto mode", priority=True),
+        Binding(_AUTO_MODE_KEYS, "toggle_auto_mode", "Auto mode", priority=True),
         Binding("ctrl+backslash", "go_back", "C-\\ back", priority=True),
         Binding("ctrl+r", "jump_to_message", "Jump to msg", priority=True),
         Binding("ctrl+shift+j", "next_session", "Next session", priority=True),
@@ -1196,12 +1204,12 @@ class ClaudeSessionScreen(Screen):
         except Exception:
             pass
 
-    # ── C-y: auto mode (coordinator/implementer loop) ─────────────
+    # ── auto mode (coordinator/implementer loop) ──────────────────
 
     def action_toggle_auto_mode(self) -> None:
         # Delegate to the App so state is per-workstream, not per-screen.
-        # Pressing ctrl+y on an implementer screen cancels the running loop
-        # rather than starting a parallel one (which would spawn duplicates).
+        # Pressing the auto key on an implementer screen cancels the running
+        # loop rather than starting a parallel one (which would duplicate).
         self.app.toggle_auto_mode(self._ws.id, self._session_id)
 
     # ── Other-sessions sidebar widget integration ─────────────────

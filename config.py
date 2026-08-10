@@ -65,6 +65,42 @@ DEFAULT_KEYS: dict[str, tuple[str, str, bool, bool]] = {
 }
 
 
+# Keys scoped to the Claude session screen: action -> (keys, description).
+# These are NOT app-level bindings (build_app_bindings only walks
+# DEFAULT_KEYS) — each engine's session view consumes them directly. They
+# honour the same [keybindings] section of config.toml.
+SESSION_KEYS: dict[str, tuple[str, str]] = {
+    # f9, deliberately not ctrl+y: starting auto mode spawns a coordinator
+    # plus implementer sessions, and ctrl+y is muscle-memory yank inside
+    # claude's input line — it was being hit by accident.
+    "toggle_auto_mode": ("f9", "Auto mode"),
+}
+
+
+def get_session_key(action: str) -> str:
+    """Key(s) for a session-screen action, respecting user overrides."""
+    overrides = _user_overrides()
+    if action in overrides:
+        return overrides[action]
+    default = SESSION_KEYS.get(action)
+    return default[0] if default else ""
+
+
+def key_set(keys: str) -> set[str]:
+    """Split a comma-separated key spec into individual key names."""
+    return {k.strip() for k in keys.split(",") if k.strip()}
+
+
+def key_label(keys: str) -> str:
+    """Display form of the first key in a spec: ctrl+y → C-y, f9 → F9."""
+    first = next(iter(keys.split(",")), "").strip()
+    if first.startswith("ctrl+"):
+        return "C-" + first[5:]
+    if first[:1] == "f" and first[1:].isdigit():
+        return first.upper()
+    return first
+
+
 def load_config() -> dict:
     """Load config.toml, returning empty dict on missing/invalid file."""
     if not CONFIG_PATH.exists():

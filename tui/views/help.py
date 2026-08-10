@@ -7,6 +7,7 @@ trash. Selecting any row just closes the help, as the original.
 
 from __future__ import annotations
 
+from config import get_session_key, key_label
 from rendering import C_DIM, C_PURPLE, C_YELLOW
 
 from .modals import FuzzyModalView
@@ -164,6 +165,8 @@ class HelpView(FuzzyModalView):
             K("sess-extract", "Ctrl+E", "Extract a todo from the conversation"),
             K("sess-jump", "Ctrl+R", "Jump to a previous message"),
             K("sess-switch", "Ctrl+Shift+J / K", "Switch to next / prev session"),
+            K("sess-auto", key_label(get_session_key("toggle_auto_mode")),
+              "Start / cancel auto mode (asks first)"),
             H("Terminal"),
             K("term-scroll", "Ctrl+U / D", "Scroll up / down (half-page)"),
             K("term-type", "", "Type normally to interact with Claude"),

@@ -770,12 +770,12 @@ class OrchApp(App):
 
     def toggle_auto_mode(self, ws_id: str, screen_session_id: str) -> None:
         """Cancel an existing auto-mode loop for this ws, or start a new
-        one (port of app.toggle_auto_mode; reached via ctrl+y on a
-        ClaudeSessionView).
+        one (port of app.toggle_auto_mode; reached via the SESSION_KEYS
+        toggle_auto_mode key on a ClaudeSessionView).
 
-        On start: a non-empty crystallized-undone backlog prompts the user
-        (AutoModeStartView) to pick which todos to run; with no backlog
-        the loop starts immediately.
+        Starting is never one keypress: a non-empty crystallized-undone
+        backlog opens AutoModeStartView to pick which todos to run (Esc
+        backs out), and with no backlog a ConfirmView asks first.
         """
         if not ws_id:
             self.notify("[auto] workstream has no id", timeout=3)
@@ -819,7 +819,25 @@ class OrchApp(App):
         backlog_ids = {t.id for t in backlog}
 
         if not backlog_ids:
-            self._start_auto_mode(ws_id, screen_session_id, skip_ids=set())
+            # No backlog to pick from, so the picker never appears — ask
+            # outright before spawning a coordinator loop.
+            from rendering import C_DIM, _rich_escape
+
+            from .views.confirm import ConfirmView
+
+            def on_confirm(ok) -> None:
+                if ok:
+                    self._start_auto_mode(ws_id, screen_session_id, skip_ids=set())
+
+            self.push(
+                ConfirmView(
+                    f"Start auto mode on [bold]{_rich_escape(ws.name)}[/bold]?\n"
+                    f"\n"
+                    f"[{C_DIM}]No pending todos — the coordinator[/{C_DIM}]\n"
+                    f"[{C_DIM}]runs unattended until you stop it.[/{C_DIM}]"
+                ),
+                on_result=on_confirm,
+            )
             return
 
         from .views.auto_mode_start import AutoModeStartView

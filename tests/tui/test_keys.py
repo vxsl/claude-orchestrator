@@ -76,6 +76,8 @@ def default_keys_names() -> list[str]:
     names = set()
     for keys, _desc, _show, _priority in config.DEFAULT_KEYS.values():
         names.update(k.strip() for k in keys.split(","))
+    for keys, _desc in config.SESSION_KEYS.values():
+        names.update(k.strip() for k in keys.split(","))
     return sorted(names)
 
 
