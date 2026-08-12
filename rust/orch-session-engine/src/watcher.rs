@@ -190,6 +190,9 @@ pub fn run_daemon(db_path: &str, pipe_path: &str) -> Result<()> {
 }
 
 fn process_event(event: &Event, jsonl_changed: &mut HashSet<PathBuf>, session_json_changed: &mut bool) {
+    // Recomputed per event rather than held: this runs on filesystem events, not in a
+    // hot loop, and reading the env each time keeps it consistent with discovery.
+    let ignored = crate::discovery::ignored_project_dirs();
     match event.kind {
         EventKind::Create(_) | EventKind::Modify(_) | EventKind::Remove(_) => {
             for path in &event.paths {
@@ -200,6 +203,7 @@ fn process_event(event: &Event, jsonl_changed: &mut HashSet<PathBuf>, session_js
                             .unwrap_or_default()
                             .to_string_lossy()
                             .ends_with(".wakatime")
+                        && !crate::discovery::is_ignored_path(path, &ignored)
                     {
                         jsonl_changed.insert(path.clone());
                     } else if ext == "json" {

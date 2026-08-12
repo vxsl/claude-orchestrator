@@ -30,6 +30,33 @@ _PERF_ENABLED = bool(os.environ.get("ORCH_PERF_LOG", ""))
 CLAUDE_PROJECTS_DIR = Path.home() / ".claude" / "projects"
 CLAUDE_SESSIONS_DIR = Path.home() / ".claude" / "sessions"
 
+
+def ignored_project_dirs() -> set[str]:
+    """Project directories whose sessions are not anyone's work.
+
+    Tools that shell out to `claude -p` for a utility purpose -- an intent classifier, a
+    summarizer, the work-arcs arc namer -- start a real Claude Code session every time,
+    and orch listed each one. A single batch put 67 of them in a workstream, each
+    holding nothing but a meta-prompt, which is also why Claude's own session titler
+    could not name them.
+
+    Those callers run with cwd set to $XDG_STATE_HOME/claude-headless, so the whole
+    class is identifiable by the one project directory it lands in. Matching the
+    directory rather than the prompt text means a reworded prompt cannot slip through.
+    Additional directories may be named in ORCH_IGNORED_PROJECT_DIRS, comma-separated.
+
+    Kept in step with the Rust engine's discovery::ignored_project_dirs(); both derive
+    the name rather than hardcode it, so neither embeds a username.
+    """
+    state = os.environ.get("XDG_STATE_HOME") or str(Path.home() / ".local" / "state")
+    # Claude Code names a project directory after its cwd with every non-alphanumeric
+    # character replaced by a dash.
+    headless = re.sub(r"[^A-Za-z0-9]", "-", str(Path(state) / "claude-headless"))
+    dirs = {headless}
+    extra = os.environ.get("ORCH_IGNORED_PROJECT_DIRS", "")
+    dirs.update(d.strip() for d in extra.split(",") if d.strip())
+    return dirs
+
 # ─── Rust session engine integration ─────────────────────────────────
 
 def _default_db_path() -> Path:
@@ -208,6 +235,12 @@ def _discover_sessions_from_db(
     try:
         query = "SELECT * FROM sessions WHERE message_count >= ?"
         params: list = [min_messages]
+        # Also filtered here, not only in the daemon that writes the row: rows written
+        # by an older engine outlive the fix, and the UI reads this table directly.
+        ignored = ignored_project_dirs()
+        if ignored:
+            query += " AND project_dir NOT IN (%s)" % ",".join("?" * len(ignored))
+            params.extend(sorted(ignored))
         if project_filter:
             query += " AND project_dir LIKE ?"
             params.append(f"%{project_filter}%")
@@ -1374,8 +1407,11 @@ def discover_sessions(
     sessions: list[ClaudeSession] = []
     seen_paths: set[str] = set()
 
+    _ignored = ignored_project_dirs()
     for proj_dir in CLAUDE_PROJECTS_DIR.iterdir():
         if not proj_dir.is_dir():
+            continue
+        if proj_dir.name in _ignored:
             continue
         if project_filter and project_filter.lower() not in proj_dir.name.lower():
             continue
@@ -1423,8 +1459,11 @@ def find_session(session_id: str) -> Optional[ClaudeSession]:
     if not CLAUDE_PROJECTS_DIR.exists():
         return None
 
+    _ignored = ignored_project_dirs()
     for proj_dir in CLAUDE_PROJECTS_DIR.iterdir():
         if not proj_dir.is_dir():
+            continue
+        if proj_dir.name in _ignored:
             continue
         for jsonl_file in proj_dir.glob("*.jsonl"):
             if jsonl_file.name.endswith(".wakatime"):

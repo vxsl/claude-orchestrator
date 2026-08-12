@@ -6,6 +6,51 @@ use std::collections::HashSet;
 use std::fs;
 use std::path::Path;
 
+/// Project directories whose sessions are not anyone's work.
+///
+/// Tools that shell out to `claude -p` for a utility purpose — an intent classifier, a
+/// summarizer, the work-arcs arc namer — start a real Claude Code session every time,
+/// and orch listed each one. A single batch put 67 of them in a workstream, each holding
+/// nothing but a meta-prompt, which is also why Claude's own session titler could not
+/// name them.
+///
+/// Those callers run with cwd set to `$XDG_STATE_HOME/claude-headless`, so the whole
+/// class is identifiable by the one project directory it lands in. Matching the
+/// directory rather than the prompt text means a reworded prompt cannot slip through.
+/// Additional directories may be named in `ORCH_IGNORED_PROJECT_DIRS`, comma-separated.
+pub fn ignored_project_dirs() -> Vec<String> {
+    let state = std::env::var("XDG_STATE_HOME").unwrap_or_else(|_| {
+        let home = std::env::var("HOME").unwrap_or_default();
+        format!("{home}/.local/state")
+    });
+    // Claude Code names a project directory after its cwd with every non-alphanumeric
+    // character replaced by a dash.
+    let headless: String = format!("{state}/claude-headless")
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect();
+
+    let mut dirs = vec![headless];
+    if let Ok(extra) = std::env::var("ORCH_IGNORED_PROJECT_DIRS") {
+        dirs.extend(
+            extra
+                .split(',')
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string),
+        );
+    }
+    dirs
+}
+
+/// Whether a JSONL path sits in a project directory orch should not surface.
+pub fn is_ignored_path(path: &Path, ignored: &[String]) -> bool {
+    path.parent()
+        .and_then(|p| p.file_name())
+        .map(|n| ignored.iter().any(|d| d.as_str() == n.to_string_lossy()))
+        .unwrap_or(false)
+}
+
 /// Discover all sessions from ~/.claude/projects/.
 /// Returns sessions sorted by last_activity (most recent first).
 pub fn discover_all(projects_dir: &Path) -> Result<Vec<Session>> {
@@ -15,10 +60,19 @@ pub fn discover_all(projects_dir: &Path) -> Result<Vec<Session>> {
         return Ok(sessions);
     }
 
+    let ignored = ignored_project_dirs();
+
     for entry in fs::read_dir(projects_dir)? {
         let entry = entry?;
         let proj_dir = entry.path();
         if !proj_dir.is_dir() {
+            continue;
+        }
+        if proj_dir
+            .file_name()
+            .map(|n| ignored.iter().any(|d| d.as_str() == n.to_string_lossy()))
+            .unwrap_or(false)
+        {
             continue;
         }
 
