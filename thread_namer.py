@@ -97,6 +97,32 @@ def _extract_context(thread: Thread) -> str:
     return "\n".join(parts)
 
 
+def _utility_call_kwargs() -> dict:
+    """Isolation for the titler's own `claude -p` calls, so the tool cannot see itself.
+
+    Each call starts a real Claude Code session, and an unisolated one does two wrong
+    things at once: the Stop hook fires a desktop notification carrying the model's
+    reply (observed live: "I don't have enough information to title these sessions..."
+    as a popup), and -- before --no-session-persistence was added -- the transcript
+    landed in whatever project directory orch ran from, where the next discovery pass
+    found it and asked the titler to title its own previous invocation. The cwd pins
+    any future transcript to the claude-headless directory that discovery already
+    ignores (see sessions.ignored_project_dirs), and the env var is the Stop hook's
+    documented per-session opt-out. Same contract as dev-workflow-tools'
+    lib/headless_claude.py, restated here because the two repos share no code.
+    """
+    import os
+    state = os.environ.get("XDG_STATE_HOME") or str(Path.home() / ".local" / "state")
+    cwd = Path(state) / "claude-headless"
+    try:
+        cwd.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        cwd = None
+    env = dict(os.environ)
+    env["CLAUDE_NOTIFY_QUIET"] = "1"
+    return {"env": env, "cwd": str(cwd) if cwd else None}
+
+
 def _build_prompt(threads_context: list[tuple[str, str]]) -> str:
     """Build a prompt for batch thread naming.
 
@@ -150,6 +176,7 @@ def name_threads_batch(threads: list[Thread]) -> dict[str, ThreadMeta]:
              "--allowedTools", ""],
             input=prompt,
             capture_output=True, text=True, timeout=30,
+            **_utility_call_kwargs(),
         )
 
         if result.returncode != 0:
@@ -349,6 +376,7 @@ def refresh_thread_titles(threads: list[Thread]) -> int:
              "--allowedTools", ""],
             input=prompt,
             capture_output=True, text=True, timeout=30,
+            **_utility_call_kwargs(),
         )
 
         if result.returncode != 0:
@@ -509,6 +537,7 @@ def title_sessions(sessions: list[ClaudeSession]) -> dict[str, str]:
              "--allowedTools", ""],
             input=_build_session_prompt(contexts),
             capture_output=True, text=True, timeout=30,
+            **_utility_call_kwargs(),
         )
 
         if proc.returncode != 0:
