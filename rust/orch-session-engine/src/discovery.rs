@@ -47,7 +47,14 @@ pub fn ignored_project_dirs() -> Vec<String> {
 pub fn is_ignored_path(path: &Path, ignored: &[String]) -> bool {
     path.parent()
         .and_then(|p| p.file_name())
-        .map(|n| ignored.iter().any(|d| d.as_str() == n.to_string_lossy()))
+        .map(|n| {
+            let n = n.to_string_lossy();
+            // The suffix, not only the derived name: a test run under a scratch
+            // XDG_STATE_HOME writes headless transcripts to a project dir the
+            // current-env derivation cannot name, and five such dirs were found
+            // live being offered to the titler.
+            ignored.iter().any(|d| d.as_str() == n) || n.ends_with("-claude-headless")
+        })
         .unwrap_or(false)
 }
 
@@ -70,7 +77,14 @@ pub fn discover_all(projects_dir: &Path) -> Result<Vec<Session>> {
         }
         if proj_dir
             .file_name()
-            .map(|n| ignored.iter().any(|d| d.as_str() == n.to_string_lossy()))
+            .map(|n| {
+            let n = n.to_string_lossy();
+            // The suffix, not only the derived name: a test run under a scratch
+            // XDG_STATE_HOME writes headless transcripts to a project dir the
+            // current-env derivation cannot name, and five such dirs were found
+            // live being offered to the titler.
+            ignored.iter().any(|d| d.as_str() == n) || n.ends_with("-claude-headless")
+        })
             .unwrap_or(false)
         {
             continue;

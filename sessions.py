@@ -57,6 +57,18 @@ def ignored_project_dirs() -> set[str]:
     dirs.update(d.strip() for d in extra.split(",") if d.strip())
     return dirs
 
+def is_ignored_project_dir(name: str) -> bool:
+    """The ignore test every reader must use, by suffix as well as by name.
+
+    ignored_project_dirs() derives the headless directory from the CURRENT env's
+    XDG_STATE_HOME — but a test run under a scratch state dir writes its headless
+    transcripts to a project dir that derivation cannot name (observed live: five
+    scratch `*-claude-headless` dirs whose arc-brief calls were offered to the
+    titler, which then complained it was being asked to title naming prompts).
+    The mangled name always ends in `-claude-headless`, so the suffix is the class.
+    """
+    return name in ignored_project_dirs() or name.endswith("-claude-headless")
+
 # ─── Rust session engine integration ─────────────────────────────────
 
 def _default_db_path() -> Path:
@@ -241,6 +253,9 @@ def _discover_sessions_from_db(
         if ignored:
             query += " AND project_dir NOT IN (%s)" % ",".join("?" * len(ignored))
             params.extend(sorted(ignored))
+        # By suffix too — scratch-state headless dirs are not in the derived set.
+        query += " AND project_dir NOT LIKE ?"
+        params.append("%-claude-headless")
         if project_filter:
             query += " AND project_dir LIKE ?"
             params.append(f"%{project_filter}%")
@@ -1411,7 +1426,7 @@ def discover_sessions(
     for proj_dir in CLAUDE_PROJECTS_DIR.iterdir():
         if not proj_dir.is_dir():
             continue
-        if proj_dir.name in _ignored:
+        if is_ignored_project_dir(proj_dir.name):
             continue
         if project_filter and project_filter.lower() not in proj_dir.name.lower():
             continue
@@ -1463,7 +1478,7 @@ def find_session(session_id: str) -> Optional[ClaudeSession]:
     for proj_dir in CLAUDE_PROJECTS_DIR.iterdir():
         if not proj_dir.is_dir():
             continue
-        if proj_dir.name in _ignored:
+        if is_ignored_project_dir(proj_dir.name):
             continue
         for jsonl_file in proj_dir.glob("*.jsonl"):
             if jsonl_file.name.endswith(".wakatime"):
