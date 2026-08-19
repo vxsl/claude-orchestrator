@@ -1372,3 +1372,72 @@ class TestAutoResumeTabSession:
             await coro(app, ws, session_id)
 
         launch_mock.assert_called_once_with(ws, session_id=session_id)
+
+
+# ─── E2E: Persisted UI state (ui_state.py) ──────────────────────────
+
+
+@pytest.mark.asyncio
+class TestUiStateRestore:
+    """Reopening lands where the last run left off: view options, home
+    cursor, and the open tab set. The autouse isolated_ui_state fixture
+    keeps this off the developer's real ~/.cache file."""
+
+    async def test_view_options_restored(self, app_with_store):
+        from ui_state import UiState, save_ui_state
+        target = app_with_store.state.store.active[1]
+        save_ui_state(UiState(sort_mode="name", filter_mode="stale",
+                              home_ws_id=target.id))
+        async with app_with_store.run_test(size=(120, 40)) as pilot:
+            assert pilot.app.state.sort_mode == "name"
+            assert pilot.app.state.filter_mode == "stale"
+
+    async def test_cursor_restored_to_saved_workstream(self, app_with_store):
+        from textual.widgets import OptionList
+        from ui_state import UiState, save_ui_state
+        target = app_with_store.state.store.active[2]
+        save_ui_state(UiState(home_ws_id=target.id))
+        async with app_with_store.run_test(size=(120, 40)) as pilot:
+            table = pilot.app.query_one("#ws-table", OptionList)
+            assert pilot.app._olist_cursor_key(table) == target.id
+
+    async def test_saved_tab_reopens_as_detail_screen(self, app_with_store):
+        from screens import DetailScreen
+        from ui_state import UiState, save_ui_state
+        ws = app_with_store.state.store.active[0]
+        save_ui_state(UiState(tab_ws_ids=[ws.id], active_tab_id=ws.id))
+        async with app_with_store.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            assert [t.ws_id for t in pilot.app.tabs.tabs if t.ws_id] == [ws.id]
+            assert isinstance(pilot.app.screen, DetailScreen)
+            assert pilot.app.screen.ws.id == ws.id
+
+    async def test_saved_tab_stays_closed_when_workstream_is_gone(self, app_with_store):
+        from ui_state import UiState, save_ui_state
+        save_ui_state(UiState(tab_ws_ids=["deleted-since"], active_tab_id="deleted-since"))
+        async with app_with_store.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            assert len(pilot.app.tabs.tabs) == 2
+            assert pilot.app.tabs.is_home
+
+    async def test_restore_yields_to_startup_navigation(self, app_with_store):
+        """A keypress that lands before the deferred restore wins — the app
+        must not yank the user onto a restored tab."""
+        from ui_state import UiState, save_ui_state
+        a, b = app_with_store.state.store.active[0], app_with_store.state.store.active[1]
+        save_ui_state(UiState(tab_ws_ids=[b.id], active_tab_id=b.id))
+        async with app_with_store.run_test(size=(120, 40)) as pilot:
+            pilot.app.tabs.switch_to(1)  # user is on the Sessions tab already
+            pilot.app._restore_ui_tabs()
+            assert pilot.app.tabs.is_current_sessions
+            assert len(pilot.app.tabs.tabs) == 2
+
+    async def test_exit_writes_open_tabs_and_cursor(self, app_with_store):
+        from ui_state import load_ui_state
+        ws = app_with_store.state.store.active[0]
+        async with app_with_store.run_test(size=(120, 40)) as pilot:
+            pilot.app._open_detail_for_ws(ws)
+            await pilot.pause()
+        saved = load_ui_state()
+        assert saved.tab_ws_ids == [ws.id]
+        assert saved.active_tab_id == ws.id

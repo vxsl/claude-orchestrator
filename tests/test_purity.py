@@ -29,6 +29,7 @@ PURE_MODULES = [
     "notifications",
     "cleanup",
     "session_launch",
+    "ui_state",
     "term_host",
     "vterm_backend",
     "tui.keys",

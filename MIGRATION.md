@@ -23,6 +23,10 @@ the plan lives with the session notes.
 - Data isolation for new-engine testing: `OrchApp(store_path=...)` or the
   `ORCH_STORE_PATH` env var points the store at a copy instead of the real
   `data.json` (models.py has no env override; this lives in OrchApp only).
+  Persisted UI state has its own override, `ORCH_UI_STATE_PATH`, so a test
+  or a second orch never restores from — or overwrites — the real
+  `~/.cache/claude-orchestrator/ui-state.json` (tests/conftest.py sets it
+  in an autouse fixture).
 
 ## Screen port ledger
 
@@ -59,5 +63,6 @@ Changes made to old-UI files after 2026-07-08 that the port must pick up:
 
 | Date | File | Change | Picked up in port? |
 |---|---|---|---|
+| 2026-08-19 | app.py | orch now reopens where you left off. New shared `ui_state.py` (UiState + load/save/capture/apply/restorable_tabs/resolve_active_tab, persisted to `~/.cache/claude-orchestrator/ui-state.json`, `ORCH_UI_STATE_PATH` override). In app.py: `on_mount` loads it and applies filter/sort/preview before the first table build, then `_restore_ui_cursor` puts the home cursor back; a `call_after_refresh(_restore_ui_tabs)` reopens the saved tab set and re-activates the tab that was active (bails out if anything already navigated during startup — a keypress or a test must win over the restore); `_flush_ui_state` writes on a 5s interval and from `on_unmount`, skipping unchanged state, so a crash still keeps recent navigation. | yes — `OrchApp.restore_ui_state` (called once from `HomeView.on_show` so it runs with pollers off too) + the same flush interval and an `OrchApp.exit` flush; `ListView.highlight_id` added for the cursor restore |
 | 2026-08-10 | claude_session_screen.py, app.py | Auto mode is no longer one accidental keypress. Its key moved off `ctrl+y` (muscle-memory yank in claude's input line) to `f9`, now sourced from the new shared `config.SESSION_KEYS` / `get_session_key()` (+ `key_set()`, `key_label()` helpers) so a config.toml `[keybindings] toggle_auto_mode` override works in both engines; `_PASSTHROUGH_KEYS` drops ctrl+y and picks up the configured key; the footer gained an `F9 auto` hint. `app.toggle_auto_mode`'s no-backlog path now pushes a `ConfirmScreen` instead of starting immediately (the non-empty-backlog path already had AutoModeStartScreen as its confirmation). | yes — mirrored in tui/views/claude_session.py (keymap + passthrough + footer) and tui/orch_app.py (ConfirmView) in the same commit |
 | 2026-07-08 | claude_session_screen.py | Sanctioned import-redirect (P5): the pure spawn helpers (`_git_status_snapshot`, `auto_link_session`, `log_session_exit`, `build_session_context`, `build_claude_command`, `build_session_env`, `claude_jsonl_path`, `spawn_implementer_session`, `ORCH_DIR`) moved verbatim to the new shared `session_launch.py`; the frozen module re-imports them for back-compat. Only behavior delta: `spawn_implementer_session` now reaches tmux via `term_host.TerminalHost` instead of `terminal.TerminalWidget` (same inherited classmethods — argv unchanged). | yes — session_launch.py is the port |

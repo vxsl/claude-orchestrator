@@ -76,6 +76,16 @@ class ListView:
         if self.highlighted_id is not None and self.highlighted_id != prev_id:
             self._fire_highlight()
 
+    def highlight_id(self, row_id: Any) -> bool:
+        """Move the highlight onto a row by id; False if that id is gone.
+
+        Used to restore a remembered selection (see ui_state.py) — a caller
+        that misses just leaves the current highlight alone."""
+        for i, (rid, _, disabled) in enumerate(self.rows):
+            if rid == row_id and not disabled:
+                return self._move(i)
+        return False
+
     def update_row(self, row_id: Any, markup: str) -> bool:
         """In-place text swap (the 1-row throbber path). No callbacks."""
         for i, (rid, _, disabled) in enumerate(self.rows):

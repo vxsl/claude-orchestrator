@@ -85,6 +85,10 @@ from rendering import (
     _best_activity, _activity_icon,
 )
 from state import AppState, TabManager
+from ui_state import (
+    HOME_TAB, SESSIONS_TAB, UiState, apply_ui_state, capture_ui_state,
+    load_ui_state, resolve_active_tab, restorable_tabs, save_ui_state,
+)
 from actions import (
     ws_directories,
     do_resume, resume_session_now, open_link,
@@ -262,6 +266,11 @@ class OrchestratorApp(App):
         self.theme = "mellow"
         self.state = AppState(Store())
         self.tabs = TabManager()
+        # Persisted UI state (ui_state.py): loaded in on_mount, flushed every
+        # few seconds and on exit so a crash doesn't lose "where you were".
+        self._saved_ui_state: UiState | None = None
+        self._ui_state_written: dict | None = None
+        self._last_home_cursor: str | None = None
         self._throbber_timer = None
         self._throbber_paused = False
         self._session_watcher: SessionWatcher | None = None
@@ -429,7 +438,13 @@ class OrchestratorApp(App):
             self.state.store.save()
             self.notify(f"Pruned {pruned} orphan archived workstreams", timeout=3)
 
+        # Restore persisted view options (ui_state.py) before the first
+        # table build so the list is filtered/sorted right on frame one.
+        self._saved_ui_state = load_ui_state()
+        apply_ui_state(self._saved_ui_state, self.state)
+
         self._refresh_ws_table()
+        self._restore_ui_cursor()
         self._load_sessions()
 
         # Hide sessions pane items until a ws is selected
@@ -438,6 +453,11 @@ class OrchestratorApp(App):
 
         # Start tig after layout is computed so terminal size is correct
         self.call_after_refresh(self._init_main_tig)
+
+        # Reopen last run's tabs once layout exists (a pushed DetailScreen
+        # needs real dimensions), then keep UI state on disk as it changes.
+        self.call_after_refresh(self._restore_ui_tabs)
+        self.set_interval(5.0, self._flush_ui_state)
 
         # ── Visibility gating ──
         # When orch's terminal is off screen (inactive VT, detached tmux),
@@ -491,6 +511,7 @@ class OrchestratorApp(App):
         ws_table.focus()
 
     def on_unmount(self):
+        self._flush_ui_state()
         if self._session_bridge:
             self._session_bridge.stop()
         if self._session_watcher:
@@ -917,6 +938,81 @@ class OrchestratorApp(App):
         self.tabs.switch_to(0)
         self._sync_tab_bar()
         self._on_return_from_modal()
+
+    # ── Persisted UI state (ui_state.py) ──
+
+    def _home_cursor_ws_id(self) -> str | None:
+        """The workstream under the home cursor.
+
+        Falls back to the last value we saw: while a fullscreen surface is
+        pushed the #ws-table query can come back empty, and forgetting the
+        cursor then would mean quitting from a Detail tab loses it.
+        """
+        try:
+            key = self._olist_cursor_key(self.query_one("#ws-table", OptionList))
+        except Exception:
+            key = None
+        if key:
+            self._last_home_cursor = key
+        elif self._last_home_cursor is None and self._saved_ui_state is not None:
+            self._last_home_cursor = self._saved_ui_state.home_ws_id
+        return self._last_home_cursor
+
+    def _restore_ui_cursor(self) -> None:
+        """Put the home cursor back on the workstream from the last run."""
+        ui = self._saved_ui_state
+        if ui is None or not ui.home_ws_id:
+            return
+        try:
+            self._olist_restore_cursor(
+                self.query_one("#ws-table", OptionList), ui.home_ws_id
+            )
+        except Exception:
+            pass
+
+    def _restore_ui_tabs(self) -> None:
+        """Reopen last run's tabs and activate the one that was active.
+
+        Runs a frame after mount, so it bails out if anything navigated in
+        the meantime (a keypress landing during startup, a test driving the
+        app): yanking someone onto a restored tab is worse than not
+        restoring at all.
+        """
+        ui = self._saved_ui_state
+        if ui is None:
+            return
+        try:
+            self.query_one("#main-sessions-pane").display = self.state.preview_visible
+        except Exception:
+            pass
+        if len(self.tabs.tabs) > 2 or self.tabs.active_idx != 0 or len(self.screen_stack) > 1:
+            return
+        restored = restorable_tabs(ui, self.state)
+        for ws in restored:
+            self.tabs.open_tab(ws.id, ws.name, "\u00b7")
+        target = resolve_active_tab(ui, [w.id for w in restored])
+        if target == HOME_TAB:
+            if restored:
+                # open_tab activated what it opened; the home tab was active.
+                self.tabs.switch_to(0)
+                self._sync_tab_bar()
+            return
+        self.tabs.switch_to_id(target)
+        self._apply_tab_switch()
+
+    def _flush_ui_state(self) -> None:
+        """Write UI state when it changed since the last write.
+
+        On a timer as well as at exit, so a crash or a kill -9 still leaves
+        the last few seconds of navigation on disk.
+        """
+        try:
+            ui = capture_ui_state(self.state, self.tabs, self._home_cursor_ws_id())
+        except Exception:
+            return
+        data = ui.to_dict()
+        if data != self._ui_state_written and save_ui_state(ui):
+            self._ui_state_written = data
 
     @perf_trace()
     def _sync_tab_bar(self):

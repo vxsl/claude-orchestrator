@@ -169,6 +169,9 @@ class HomeView(View):
         app = self.app
         if app is not None and hasattr(app, "ensure_background_started"):
             app.ensure_background_started()
+        # Restore last run's cursor/tabs (ui_state.py) once rows exist.
+        if app is not None and hasattr(app, "restore_ui_state"):
+            app.restore_ui_state()
 
     def on_resize(self, rect) -> None:
         old_width = self._rect.w if self._rect else -1

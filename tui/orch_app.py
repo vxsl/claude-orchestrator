@@ -26,6 +26,10 @@ from session_bridge import SessionBridge
 from session_launch import auto_link_session, claude_jsonl_path
 from sessions import ClaudeSession, parse_session
 from state import AppState, TabManager
+from ui_state import (
+    HOME_TAB, apply_ui_state, capture_ui_state, load_ui_state,
+    resolve_active_tab, restorable_tabs, save_ui_state,
+)
 from term_host import TerminalHost
 
 from .app import App
@@ -34,6 +38,7 @@ from .views.claude_session import ClaudeSessionView
 from .views.current_sessions import CurrentSessionsView
 from .views.detail import DetailView
 from .views.home import HomeView
+from .widgets import SEP_ID as _SEP_ID
 
 TOAST_SECS = 3.0
 
@@ -73,6 +78,15 @@ class OrchApp(App):
 
         self.toast_text = ""
         self._toast_timer: Timer | None = None
+
+        # Persisted UI state (ui_state.py). The view options land before the
+        # first paint; tabs + cursor are restored in ensure_background_started,
+        # once home has rows and the prune sweep has run.
+        self._saved_ui_state = load_ui_state()
+        apply_ui_state(self._saved_ui_state, self.state)
+        self._ui_state_written: dict | None = None
+        self._last_home_cursor: str | None = None
+        self._ui_restored = False
 
         self.home = HomeView(self.state, self.tabs)
         self.push(self.home)
@@ -151,7 +165,62 @@ class OrchApp(App):
             )
             self._session_watcher.start()
 
+    # ── persisted UI state (ui_state.py) ──────────────────────────
+
+    def restore_ui_state(self) -> None:
+        """Put back last run's home cursor, open tabs, and active tab, then
+        start the periodic flush. Called once from HomeView.on_show (it must
+        run with pollers disabled too, hence not in ensure_background_started).
+
+        Bails on the tab half if anything already navigated — restoring over
+        a surface the user just opened would be worse than not restoring.
+        """
+        if self._ui_restored:
+            return
+        self._ui_restored = True
+        self.set_interval(5.0, self._flush_ui_state)
+        ui = self._saved_ui_state
+        if ui is None:
+            return
+        if ui.home_ws_id:
+            self.home.ws_list.highlight_id(ui.home_ws_id)
+        if len(self.tabs.tabs) > 2 or self.tabs.active_idx != 0 or len(self._stack) > 1:
+            return
+        restored = restorable_tabs(ui, self.state)
+        for ws in restored:
+            self.tabs.open_tab(ws.id, ws.name, "\u00b7")
+        target = resolve_active_tab(ui, [w.id for w in restored])
+        if target == HOME_TAB:
+            self.tabs.switch_to(0)  # open_tab activated what it opened
+        else:
+            self.tabs.switch_to_id(target)
+            self._apply_tab_switch()
+        self.request_paint()
+
+    def _home_cursor_ws_id(self) -> str | None:
+        """The workstream under the home cursor, remembered across tab
+        switches (home keeps its rows, but be defensive about an empty list
+        so quitting from a Detail tab never clears the saved cursor)."""
+        rid = self.home.ws_list.highlighted_id
+        if isinstance(rid, str) and rid and rid != _SEP_ID:
+            self._last_home_cursor = rid
+        elif self._last_home_cursor is None and self._saved_ui_state is not None:
+            self._last_home_cursor = self._saved_ui_state.home_ws_id
+        return self._last_home_cursor
+
+    def _flush_ui_state(self) -> None:
+        """Write UI state when it changed since the last write. On a timer as
+        well as at exit, so a crash still leaves recent navigation on disk."""
+        try:
+            ui = capture_ui_state(self.state, self.tabs, self._home_cursor_ws_id())
+        except Exception:
+            return
+        data = ui.to_dict()
+        if data != self._ui_state_written and save_ui_state(ui):
+            self._ui_state_written = data
+
     def exit(self, result=None) -> None:
+        self._flush_ui_state()
         # Detach/stop embedded PTY children while the loop still runs — a
         # live child deadlocks asyncio's executor shutdown. detach keeps
         # claude alive in tmux; tig children die with the app.

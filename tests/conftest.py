@@ -8,6 +8,14 @@ from pathlib import Path
 from models import Category, Link, Store, Workstream
 
 
+@pytest.fixture(autouse=True)
+def isolated_ui_state(tmp_path, monkeypatch):
+    """Keep persisted UI state (ui_state.py) out of the developer's real
+    ~/.cache: an app-level test must not restore — or overwrite — the tabs
+    and cursor of the orch instance the developer is running right now."""
+    monkeypatch.setenv("ORCH_UI_STATE_PATH", str(tmp_path / "ui-state.json"))
+
+
 @pytest.fixture
 def tmp_store(tmp_path):
     """Create a Store backed by a temp file."""
