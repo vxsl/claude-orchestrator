@@ -3,8 +3,9 @@
 orch used to reopen cold: home tab, cursor on the first row, filter/sort back
 to defaults, every workstream tab you had open gone.  This module persists the
 small set of UI choices that make a relaunch feel like resuming — filter mode,
-sort mode, preview visibility, the highlighted workstream, and the open tab set
-plus which tab was active — to ~/.cache/claude-orchestrator/ui-state.json.
+sort mode, preview visibility, the highlighted workstream, the open tab set plus
+which tab was active, and the claude session each tab had open — to
+~/.cache/claude-orchestrator/ui-state.json.
 
 Engine-neutral (no Textual, no tui imports): both engines capture and apply
 through the same functions.  Every I/O path is best-effort — a missing,
@@ -45,6 +46,10 @@ class UiState:
     home_ws_id: str | None = None
     tab_ws_ids: list[str] = field(default_factory=list)
     active_tab_id: str = HOME_TAB
+    # ws_id -> the claude session that tab had open. Seeds the engines'
+    # _tab_active_session map, so activating the tab re-attaches that
+    # session exactly like a tab switch does (dead tmux sessions no-op).
+    tab_sessions: dict[str, str] = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         return {
@@ -54,6 +59,7 @@ class UiState:
             "home_ws_id": self.home_ws_id,
             "tab_ws_ids": list(self.tab_ws_ids),
             "active_tab_id": self.active_tab_id,
+            "tab_sessions": dict(self.tab_sessions),
         }
 
     @classmethod
@@ -91,6 +97,13 @@ class UiState:
         active = data.get("active_tab_id")
         if isinstance(active, str) and active:
             ui.active_tab_id = active
+
+        sessions = data.get("tab_sessions")
+        if isinstance(sessions, dict):
+            ui.tab_sessions = {
+                k: v for k, v in sessions.items()
+                if isinstance(k, str) and isinstance(v, str) and k and v
+            }
 
         return ui
 
@@ -136,20 +149,34 @@ def save_ui_state(state: UiState, path: Path | None = None) -> bool:
         return False
 
 
-def capture_ui_state(app_state, tabs, home_ws_id: str | None = None) -> UiState:
+def capture_ui_state(
+    app_state,
+    tabs,
+    home_ws_id: str | None = None,
+    tab_sessions: dict[str, str] | None = None,
+) -> UiState:
     """Snapshot the restorable UI state from AppState + TabManager.
 
-    `home_ws_id` is the workstream under the home cursor — the engine reads
-    that from its own list widget, so it comes in as a parameter.
+    `home_ws_id` (the workstream under the home cursor) and `tab_sessions`
+    (ws_id -> open claude session id) live in engine widgets and the screen
+    stack, so they come in as parameters.
     """
     active = tabs.active_tab
+    open_ws_ids = [t.ws_id for t in tabs.tabs if t.ws_id][-MAX_RESTORED_TABS:]
     return UiState(
         filter_mode=app_state.filter_mode,
         sort_mode=app_state.sort_mode,
         preview_visible=app_state.preview_visible,
         home_ws_id=home_ws_id,
-        tab_ws_ids=[t.ws_id for t in tabs.tabs if t.ws_id][-MAX_RESTORED_TABS:],
+        tab_ws_ids=open_ws_ids,
         active_tab_id=(active.ws_id or active.id) if active else HOME_TAB,
+        # Only for tabs that are actually open — a closed tab's session is
+        # not something we should silently re-attach on the next launch.
+        tab_sessions={
+            ws_id: sid
+            for ws_id, sid in (tab_sessions or {}).items()
+            if ws_id in set(open_ws_ids) and sid
+        },
     )
 
 
@@ -177,6 +204,17 @@ def restorable_tabs(ui: UiState, app_state) -> list:
         if ws is not None:
             out.append(ws)
     return out
+
+
+def restorable_tab_sessions(ui: UiState, restored_ws_ids: list[str]) -> dict[str, str]:
+    """Saved per-tab sessions, narrowed to the tabs that actually reopened.
+
+    The engines merge this into their tab-switch resume map, so a restored
+    tab re-attaches its session the moment it becomes active — and a session
+    whose tmux is gone simply doesn't come back (the resume path checks).
+    """
+    keep = set(restored_ws_ids)
+    return {ws_id: sid for ws_id, sid in ui.tab_sessions.items() if ws_id in keep}
 
 
 def resolve_active_tab(ui: UiState, restored_ws_ids: list[str]) -> str:

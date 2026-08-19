@@ -140,3 +140,103 @@ class TestPersist:
             assert h2.app.tabs.active_tab.ws_id == opened
             assert isinstance(h2.app.top, DetailView)
             assert h2.app.top.ws.id == opened
+
+
+@pytest.mark.asyncio
+class TestSessionRestore:
+    """The claude session a tab had open comes back with the tab."""
+
+    @staticmethod
+    def _stub_resume(app, monkeypatch, alive=True):
+        """Record launch_claude_session calls; fake tmux liveness."""
+        from term_host import TerminalHost
+        monkeypatch.setattr(TerminalHost, "tmux_session_alive",
+                            staticmethod(lambda sid: alive))
+        calls = []
+        monkeypatch.setattr(app, "launch_claude_session",
+                            lambda ws, session_id=None: calls.append((ws.id, session_id)))
+        return calls
+
+    async def test_saved_session_reattaches_with_its_tab(
+        self, populated_store, ui_file, monkeypatch
+    ):
+        a = populated_store.active[0]
+        save_ui_state(UiState(tab_ws_ids=[a.id], active_tab_id=a.id,
+                              tab_sessions={a.id: "sid-live"}), ui_file)
+        app = _app(populated_store)
+        calls = self._stub_resume(app, monkeypatch)
+        async with Headless(app) as h:
+            await h.pause()
+            await h.pause()
+            assert calls == [(a.id, "sid-live")]
+
+    async def test_dead_session_is_not_reattached(
+        self, populated_store, ui_file, monkeypatch
+    ):
+        a = populated_store.active[0]
+        save_ui_state(UiState(tab_ws_ids=[a.id], active_tab_id=a.id,
+                              tab_sessions={a.id: "sid-gone"}), ui_file)
+        app = _app(populated_store)
+        calls = self._stub_resume(app, monkeypatch, alive=False)
+        async with Headless(app) as h:
+            await h.pause()
+            await h.pause()
+            assert calls == []
+            assert isinstance(h.app.top, DetailView)  # tab still reopens
+
+    async def test_session_waits_until_its_tab_is_activated(
+        self, populated_store, ui_file, monkeypatch
+    ):
+        """A saved session on a non-active tab resumes on the tab switch, not
+        at startup — the same laziness as an in-session tab switch."""
+        a, b = populated_store.active[0], populated_store.active[1]
+        save_ui_state(UiState(tab_ws_ids=[a.id, b.id], active_tab_id=a.id,
+                              tab_sessions={b.id: "sid-b"}), ui_file)
+        app = _app(populated_store)
+        calls = self._stub_resume(app, monkeypatch)
+        async with Headless(app) as h:
+            await h.pause()
+            assert calls == []
+            h.app.tabs.switch_to_id(b.id)
+            h.app._apply_tab_switch()
+            await h.pause()
+            await h.pause()
+            assert calls == [(b.id, "sid-b")]
+
+    async def test_session_for_a_deleted_workstream_is_dropped(
+        self, populated_store, ui_file, monkeypatch
+    ):
+        save_ui_state(UiState(tab_ws_ids=["gone"], tab_sessions={"gone": "sid"}), ui_file)
+        app = _app(populated_store)
+        calls = self._stub_resume(app, monkeypatch)
+        async with Headless(app) as h:
+            await h.pause()
+            assert calls == []
+            assert h.app._tab_active_session == {}
+
+    async def test_session_on_screen_at_quit_is_remembered(self, populated_store, ui_file):
+        """The session showing at quit time is what gets saved —
+        _tab_active_session only holds tabs the user navigated away from, so
+        quitting straight out of a session has to read the view stack."""
+        from unittest.mock import MagicMock
+        from tui.views.claude_session import ClaudeSessionView
+        a = populated_store.active[0]
+        app = _app(populated_store)
+        async with Headless(app) as h:
+            h.app.tabs.open_tab(a.id, a.name, "·")
+            fake = MagicMock(spec=ClaudeSessionView)
+            fake.ws = a
+            fake.session_id = "sid-on-screen"
+            h.app._stack.append((fake, None))
+            assert h.app._open_tab_sessions() == {a.id: "sid-on-screen"}
+        assert load_ui_state(ui_file).tab_sessions == {a.id: "sid-on-screen"}
+
+    async def test_detached_session_is_remembered(self, populated_store, ui_file):
+        a = populated_store.active[0]
+        app = _app(populated_store)
+        async with Headless(app) as h:
+            h.app.tabs.open_tab(a.id, a.name, "·")
+            h.app._tab_active_session[a.id] = "sid-detached"
+        saved = load_ui_state(ui_file)
+        assert saved.tab_sessions == {a.id: "sid-detached"}
+        assert saved.active_tab_id == a.id

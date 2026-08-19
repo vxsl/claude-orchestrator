@@ -15,6 +15,7 @@ from ui_state import (
     capture_ui_state,
     load_ui_state,
     resolve_active_tab,
+    restorable_tab_sessions,
     restorable_tabs,
     save_ui_state,
 )
@@ -172,6 +173,43 @@ def test_resolve_active_tab():
     assert resolve_active_tab(UiState(active_tab_id="gone"), ["ws1"]) == HOME_TAB
     assert resolve_active_tab(UiState(active_tab_id=SESSIONS_TAB), []) == SESSIONS_TAB
     assert resolve_active_tab(UiState(), ["ws1"]) == HOME_TAB
+
+
+# ── open sessions ──
+
+def test_tab_sessions_round_trip(tmp_path):
+    path = tmp_path / "ui-state.json"
+    ui = UiState(tab_ws_ids=["a"], active_tab_id="a", tab_sessions={"a": "sid-1"})
+    save_ui_state(ui, path)
+    assert load_ui_state(path).tab_sessions == {"a": "sid-1"}
+
+
+def test_tab_sessions_wrong_types_ignored(tmp_path):
+    path = tmp_path / "ui-state.json"
+    path.write_text(json.dumps({"tab_sessions": {"a": "sid", "b": 7, "": "x", "c": ""}}))
+    assert load_ui_state(path).tab_sessions == {"a": "sid"}
+
+
+def test_capture_records_the_open_session(state):
+    a = _ws(state, "alpha")
+    tabs = TabManager()
+    tabs.open_tab(a.id, a.name)
+    ui = capture_ui_state(state, tabs, a.id, {a.id: "sid-1"})
+    assert ui.tab_sessions == {a.id: "sid-1"}
+
+
+def test_capture_drops_sessions_for_tabs_that_are_closed(state):
+    a, b = _ws(state, "alpha"), _ws(state, "beta")
+    tabs = TabManager()
+    tabs.open_tab(a.id, a.name)  # b's tab was closed before quitting
+    ui = capture_ui_state(state, tabs, None, {a.id: "sid-a", b.id: "sid-b"})
+    assert ui.tab_sessions == {a.id: "sid-a"}
+
+
+def test_restorable_tab_sessions_narrows_to_reopened_tabs():
+    ui = UiState(tab_ws_ids=["a", "b"], tab_sessions={"a": "sid-a", "b": "sid-b"})
+    assert restorable_tab_sessions(ui, ["a"]) == {"a": "sid-a"}
+    assert restorable_tab_sessions(ui, []) == {}
 
 
 def test_full_cycle_capture_save_load_restore(state, tmp_path):

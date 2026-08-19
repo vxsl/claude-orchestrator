@@ -87,7 +87,8 @@ from rendering import (
 from state import AppState, TabManager
 from ui_state import (
     HOME_TAB, SESSIONS_TAB, UiState, apply_ui_state, capture_ui_state,
-    load_ui_state, resolve_active_tab, restorable_tabs, save_ui_state,
+    load_ui_state, resolve_active_tab, restorable_tab_sessions, restorable_tabs,
+    save_ui_state,
 )
 from actions import (
     ws_directories,
@@ -509,6 +510,16 @@ class OrchestratorApp(App):
             self.set_interval(600, self._auto_cleanup_idle_sessions)
 
         ws_table.focus()
+
+    async def action_quit(self) -> None:
+        """Flush UI state before teardown starts.
+
+        on_unmount also flushes, but by then the session screens may already
+        be off the stack — and the session that was open is exactly what we
+        want to remember.
+        """
+        self._flush_ui_state()
+        await super().action_quit()
 
     def on_unmount(self):
         self._flush_ui_state()
@@ -958,6 +969,23 @@ class OrchestratorApp(App):
             self._last_home_cursor = self._saved_ui_state.home_ws_id
         return self._last_home_cursor
 
+    def _open_tab_sessions(self) -> dict[str, str]:
+        """ws_id -> the claude session that tab has open.
+
+        `_tab_active_session` only holds sessions the user tabbed *away*
+        from, so the one on screen right now is read off the screen stack —
+        otherwise quitting straight out of a session wouldn't remember it.
+        """
+        sessions = dict(self._tab_active_session)
+        try:
+            from claude_session_screen import ClaudeSessionScreen as CSS
+            for screen in self.screen_stack:
+                if isinstance(screen, CSS) and screen._ws is not None:
+                    sessions[screen._ws.id] = screen._session_id
+        except Exception:
+            pass
+        return sessions
+
     def _restore_ui_cursor(self) -> None:
         """Put the home cursor back on the workstream from the last run."""
         ui = self._saved_ui_state
@@ -990,7 +1018,11 @@ class OrchestratorApp(App):
         restored = restorable_tabs(ui, self.state)
         for ws in restored:
             self.tabs.open_tab(ws.id, ws.name, "\u00b7")
-        target = resolve_active_tab(ui, [w.id for w in restored])
+        restored_ids = [w.id for w in restored]
+        # Seed the tab-switch resume map: activating a tab below (or later,
+        # when the user tabs to it) re-attaches the session it had open.
+        self._tab_active_session.update(restorable_tab_sessions(ui, restored_ids))
+        target = resolve_active_tab(ui, restored_ids)
         if target == HOME_TAB:
             if restored:
                 # open_tab activated what it opened; the home tab was active.
@@ -1007,7 +1039,10 @@ class OrchestratorApp(App):
         the last few seconds of navigation on disk.
         """
         try:
-            ui = capture_ui_state(self.state, self.tabs, self._home_cursor_ws_id())
+            ui = capture_ui_state(
+                self.state, self.tabs, self._home_cursor_ws_id(),
+                self._open_tab_sessions(),
+            )
         except Exception:
             return
         data = ui.to_dict()

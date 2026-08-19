@@ -1441,3 +1441,43 @@ class TestUiStateRestore:
         saved = load_ui_state()
         assert saved.tab_ws_ids == [ws.id]
         assert saved.active_tab_id == ws.id
+
+    async def test_saved_session_reattaches_with_its_tab(self, app_with_store):
+        """The session that was open comes back: restore seeds the tab-switch
+        resume map, and activating the restored tab re-attaches it."""
+        from unittest.mock import MagicMock
+        from ui_state import UiState, save_ui_state
+        ws = app_with_store.state.store.active[0]
+        save_ui_state(UiState(tab_ws_ids=[ws.id], active_tab_id=ws.id,
+                              tab_sessions={ws.id: "sid-live"}))
+        launch = MagicMock()
+        app_with_store.launch_claude_session = launch
+        with patch("terminal.TerminalWidget.tmux_session_alive", return_value=True):
+            async with app_with_store.run_test(size=(120, 40)) as pilot:
+                await pilot.pause()
+                await pilot.pause()
+        launch.assert_called_once_with(ws, session_id="sid-live")
+
+    async def test_dead_saved_session_is_not_reattached(self, app_with_store):
+        from unittest.mock import MagicMock
+        from ui_state import UiState, save_ui_state
+        ws = app_with_store.state.store.active[0]
+        save_ui_state(UiState(tab_ws_ids=[ws.id], active_tab_id=ws.id,
+                              tab_sessions={ws.id: "sid-gone"}))
+        launch = MagicMock()
+        app_with_store.launch_claude_session = launch
+        with patch("terminal.TerminalWidget.tmux_session_alive", return_value=False):
+            async with app_with_store.run_test(size=(120, 40)) as pilot:
+                await pilot.pause()
+                await pilot.pause()
+        launch.assert_not_called()
+
+    async def test_exit_writes_the_detached_session(self, app_with_store):
+        from ui_state import load_ui_state
+        ws = app_with_store.state.store.active[0]
+        async with app_with_store.run_test(size=(120, 40)) as pilot:
+            pilot.app._open_detail_for_ws(ws)
+            pilot.app._tab_active_session[ws.id] = "sid-detached"
+            await pilot.pause()
+        saved = load_ui_state()
+        assert saved.tab_sessions == {ws.id: "sid-detached"}

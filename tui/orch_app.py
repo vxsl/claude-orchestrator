@@ -28,7 +28,7 @@ from sessions import ClaudeSession, parse_session
 from state import AppState, TabManager
 from ui_state import (
     HOME_TAB, apply_ui_state, capture_ui_state, load_ui_state,
-    resolve_active_tab, restorable_tabs, save_ui_state,
+    resolve_active_tab, restorable_tab_sessions, restorable_tabs, save_ui_state,
 )
 from term_host import TerminalHost
 
@@ -189,7 +189,11 @@ class OrchApp(App):
         restored = restorable_tabs(ui, self.state)
         for ws in restored:
             self.tabs.open_tab(ws.id, ws.name, "\u00b7")
-        target = resolve_active_tab(ui, [w.id for w in restored])
+        restored_ids = [w.id for w in restored]
+        # Seed the tab-switch resume map: activating a tab below (or later,
+        # when the user tabs to it) re-attaches the session it had open.
+        self._tab_active_session.update(restorable_tab_sessions(ui, restored_ids))
+        target = resolve_active_tab(ui, restored_ids)
         if target == HOME_TAB:
             self.tabs.switch_to(0)  # open_tab activated what it opened
         else:
@@ -208,11 +212,27 @@ class OrchApp(App):
             self._last_home_cursor = self._saved_ui_state.home_ws_id
         return self._last_home_cursor
 
+    def _open_tab_sessions(self) -> dict[str, str]:
+        """ws_id -> the claude session that tab has open.
+
+        `_tab_active_session` only holds sessions the user tabbed *away*
+        from, so the one on screen right now is read off the view stack —
+        otherwise quitting straight out of a session wouldn't remember it.
+        """
+        sessions = dict(self._tab_active_session)
+        for view, _ in self._stack:
+            if isinstance(view, ClaudeSessionView) and view.ws is not None:
+                sessions[view.ws.id] = view.session_id
+        return sessions
+
     def _flush_ui_state(self) -> None:
         """Write UI state when it changed since the last write. On a timer as
         well as at exit, so a crash still leaves recent navigation on disk."""
         try:
-            ui = capture_ui_state(self.state, self.tabs, self._home_cursor_ws_id())
+            ui = capture_ui_state(
+                self.state, self.tabs, self._home_cursor_ws_id(),
+                self._open_tab_sessions(),
+            )
         except Exception:
             return
         data = ui.to_dict()
