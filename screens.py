@@ -2462,7 +2462,18 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
                 pid = self.ws.auto_pid
                 if pid != os.getpid():
                     bits.append(f"pid {pid}")
-                parts.append(f"[{C_BLUE}]" + " · ".join(bits) + f"[/{C_BLUE}]")
+                color = C_BLUE
+                if self.ws.auto_paused:
+                    # Parked on a spent Claude quota. Say what it's waiting
+                    # on, not just that it isn't moving.
+                    eta = self.ws.auto_resume_eta
+                    bits.append(
+                        "paused: "
+                        + _rich_escape(self.ws.auto_pause_reason or "quota spent")
+                        + (f" — resumes {eta}" if eta else "")
+                    )
+                    color = C_YELLOW
+                parts.append(f"[{color}]" + " · ".join(bits) + f"[/{color}]")
             else:
                 parts.append(f"[{C_RED}]auto:stale (dead pid {self.ws.auto_pid})[/{C_RED}]")
 
