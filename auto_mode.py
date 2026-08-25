@@ -19,6 +19,11 @@ If the coordinator goes silent after a followup (it generates text but
 takes none of those three actions), the loop re-injects a short nudge
 every NUDGE_INTERVAL_S seconds until something changes.
 
+Quota gate: before each step that would burn tokens (kickoff, spawning
+implementers, injecting a followup) the loop checks the account's Claude
+subscription limits. When one is spent it parks — no dispatch, no
+nudges — and wakes itself when the window resets. See `usage.py`.
+
 Pure logic — no Textual imports. The TUI wires three callables:
   spawn_implementer(todo, brief) -> awaitable[None]
       Resolves whichever is sooner: todo.report becomes non-empty, OR
@@ -33,7 +38,7 @@ from __future__ import annotations
 
 import asyncio
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Awaitable, Callable, Optional
 
 from models import Store, TodoItem, Workstream
@@ -41,6 +46,30 @@ from models import Store, TodoItem, Workstream
 CANCEL_POLL_INTERVAL_S = 3.0  # how often to poll auto_cancel_requested
 
 NUDGE_INTERVAL_S = 180.0  # 3 minutes of coordinator silence → re-prompt
+
+# ── Quota gate tuning ────────────────────────────────────────────────
+# While parked, the loop sleeps in bounded hops and re-reads the quota on
+# each one, so it recovers if the reset lands early, the user tops up, or
+# the first read was stale. MIN keeps a just-past-reset retry from
+# hot-looping; MAX keeps a 5-hour park from sleeping through a change.
+QUOTA_MIN_SLEEP_S = 5.0
+QUOTA_MAX_SLEEP_S = 300.0
+QUOTA_POLL_INTERVAL_S = 60.0   # used when no reset timestamp is available
+QUOTA_RESET_BUFFER_S = 20.0    # wake a beat *after* the stated reset
+
+
+def quota_wait_seconds(resume_at, now=None) -> float:
+    """How long to sleep before re-reading the quota.
+
+    Aims at `resume_at` plus a small buffer, clamped into
+    [QUOTA_MIN_SLEEP_S, QUOTA_MAX_SLEEP_S]. With no reset timestamp,
+    falls back to a plain poll interval.
+    """
+    if resume_at is None:
+        return QUOTA_POLL_INTERVAL_S
+    ref = now or datetime.now(timezone.utc)
+    secs = (resume_at - ref).total_seconds() + QUOTA_RESET_BUFFER_S
+    return max(QUOTA_MIN_SLEEP_S, min(QUOTA_MAX_SLEEP_S, secs))
 
 
 # Patterns indicating Claude has stalled on a usage-quota prompt and is
@@ -321,6 +350,10 @@ class AutoMode:
         poll_interval: float = 2.0,
         skip_todo_ids: Optional[set] = None,
         coord_sid: str = "",
+        quota_gate: Optional[bool] = None,
+        quota_threshold: Optional[float] = None,
+        quota_kinds: Optional[tuple] = None,
+        check_quota: Optional[Callable[[], object]] = None,
     ):
         self.store = store
         self.ws_id = ws_id
@@ -330,6 +363,23 @@ class AutoMode:
         self.poll_interval = poll_interval
         self.skip_todo_ids: set = set(skip_todo_ids) if skip_todo_ids else set()
         self.coord_sid = coord_sid
+
+        # Quota gate. Settings resolve from config.toml / env unless the
+        # caller overrides them, so neither engine has to plumb anything
+        # through to get the behaviour (see config.auto_quota_config).
+        # check_quota is injectable purely so tests don't touch the network.
+        from config import auto_quota_config
+        qcfg = auto_quota_config()
+        self.quota_gate = qcfg["enabled"] if quota_gate is None else bool(quota_gate)
+        self.quota_threshold = (
+            qcfg["percent"] if quota_threshold is None else float(quota_threshold)
+        )
+        self.quota_kinds = tuple(
+            qcfg["kinds"] if quota_kinds is None else quota_kinds
+        )
+        self.check_quota = check_quota
+        self.quota_paused = False
+        self.quota_resume_at: Optional[datetime] = None
 
         self.canceled = False
         self.iteration = 0
@@ -368,6 +418,9 @@ class AutoMode:
             ws.auto_impl_sids = []
             ws.auto_cancel_requested = False
             ws.auto_dispatched_todo_ids = sorted(self.skip_todo_ids)
+            ws.auto_paused = False
+            ws.auto_pause_reason = ""
+            ws.auto_resume_at = ""
             self.store.update(ws)
         except Exception:
             pass  # Best-effort observability; never fail the loop on a store write.
@@ -408,9 +461,119 @@ class AutoMode:
             ws.auto_pid = 0
             ws.auto_cancel_requested = False
             ws.auto_dispatched_todo_ids = []
+            ws.auto_paused = False
+            ws.auto_pause_reason = ""
+            ws.auto_resume_at = ""
             self.store.update(ws)
         except Exception:
             pass
+
+    def _persist_quota_pause(self, reason: str, resume_at) -> None:
+        """Publish the park to data.json so other orch instances and
+        `orch auto status` can tell 'waiting on quota until 9am' apart
+        from 'wedged'."""
+        try:
+            self.store.load(force=True)
+            ws = self.store.get(self.ws_id)
+            if ws is None:
+                return
+            ws.auto_paused = True
+            ws.auto_pause_reason = reason
+            ws.auto_resume_at = resume_at.isoformat() if resume_at else ""
+            self.store.update(ws)
+        except Exception:
+            pass  # Best-effort observability; never fail the loop on a store write.
+
+    def _clear_quota_pause(self) -> None:
+        try:
+            self.store.load(force=True)
+            ws = self.store.get(self.ws_id)
+            if ws is None or not ws.auto_paused:
+                return
+            ws.auto_paused = False
+            ws.auto_pause_reason = ""
+            ws.auto_resume_at = ""
+            self.store.update(ws)
+        except Exception:
+            pass
+
+    # ── Quota gate ────────────────────────────────────────────────
+    # Fails OPEN throughout: an unreadable quota (no OAuth token, network
+    # down, API shape changed) lets the loop run. Getting rate-limited is
+    # recoverable — the in-session watchdog parks Claude until reset —
+    # whereas a gate that fails closed silently kills every loop the
+    # moment the endpoint hiccups.
+
+    async def _blocking_limits(self) -> list:
+        """Watched quota limits that are spent right now.
+
+        Empty when the gate is disabled or the quota can't be read.
+        """
+        if not self.quota_gate:
+            return []
+        probe = self.check_quota
+        if probe is None:
+            from usage import get_usage
+            probe = get_usage
+        try:
+            snap = await asyncio.to_thread(probe)
+        except Exception:
+            return []
+        if snap is None:
+            return []
+        try:
+            return list(snap.blocking(self.quota_threshold, self.quota_kinds))
+        except Exception:
+            return []
+
+    async def _await_quota(self, context: str) -> bool:
+        """Hold the loop while a Claude subscription limit is spent.
+
+        Returns True when it's safe to burn tokens, False if the loop was
+        canceled while parked. Sleeps in bounded hops (see
+        `quota_wait_seconds`), re-reading the quota each time, so an early
+        reset or a topped-up balance is picked up without waiting out the
+        full estimate.
+        """
+        from usage import describe_limits, format_eta, soonest_reset
+
+        announced = False
+        while not self.canceled:
+            blocking = await self._blocking_limits()
+            if not blocking:
+                if announced:
+                    self.notify("quota reset — resuming")
+                    self.quota_paused = False
+                    self.quota_resume_at = None
+                    self._clear_quota_pause()
+                return True
+
+            resume_at = soonest_reset(blocking)
+            reason = describe_limits(blocking)
+            self.quota_paused = True
+            self.quota_resume_at = resume_at
+            if not announced:
+                eta = format_eta(resume_at)
+                self.notify(
+                    f"paused before {context}: {reason}"
+                    + (f" — resumes {eta}" if eta else "")
+                )
+                announced = True
+            self._persist_quota_pause(reason, resume_at)
+
+            try:
+                await asyncio.wait_for(
+                    self.cancel_event.wait(),
+                    timeout=quota_wait_seconds(resume_at),
+                )
+                break  # canceled
+            except asyncio.TimeoutError:
+                pass  # slept a hop; re-read the quota
+
+        self.quota_paused = False
+        self.quota_resume_at = None
+        self._clear_quota_pause()
+        return False
 
     async def _watch_cancel_requested(self) -> None:
         """Poll the persisted auto_cancel_requested flag. If another
@@ -542,11 +705,16 @@ class AutoMode:
                 if t.id not in existing_ids:
                     return [t], ""
 
-            # (3) Silent — nudge.
+            # (3) Silent — nudge. Unless the quota is spent, in which case
+            # the coordinator's own Claude is parked too and nudges would
+            # just pile up in an input box nobody is reading.
             if _time.time() - last_nudge_at > NUDGE_INTERVAL_S:
-                self.notify("coordinator silent — sending nudge")
-                pending = [t for t in self._pending_todos(ws) if t.id in existing_ids]
-                self.inject_coordinator(build_coordinator_nudge(pending))
+                if await self._blocking_limits():
+                    self.notify("quota spent — holding nudges until reset")
+                else:
+                    self.notify("coordinator silent — sending nudge")
+                    pending = [t for t in self._pending_todos(ws) if t.id in existing_ids]
+                    self.inject_coordinator(build_coordinator_nudge(pending))
                 last_nudge_at = _time.time()
             try:
                 await asyncio.wait_for(
@@ -609,6 +777,10 @@ class AutoMode:
             self.final_status = "workstream not found"
             return self.final_status
 
+        if not await self._await_quota("kickoff"):
+            self.final_status = "canceled"
+            return self.final_status
+
         pending = self._pending_todos(ws)
         existing_ids = {t.id for t in pending}
         self.inject_coordinator(build_coordinator_kickoff(ws, pending_todos=pending))
@@ -620,6 +792,10 @@ class AutoMode:
             return self.final_status
 
         while not self.canceled:
+            if not await self._await_quota("dispatch"):
+                self.final_status = "canceled"
+                return self.final_status
+
             self.iteration += 1
             self.current_todo_id = batch[0].id  # informational; first of batch
             self._persist_iteration()
@@ -661,6 +837,13 @@ class AutoMode:
                 report = report_text or "(implementer did not run `orch report` — no writeback)"
                 items.append((t, report))
             self.last_report = items[-1][1] if items else ""
+
+            # The batch that just finished may have spent the last of the
+            # quota. Hold the followup rather than typing it into a
+            # coordinator that's parked on its own limit prompt.
+            if not await self._await_quota("coordinator followup"):
+                self.final_status = "canceled"
+                return self.final_status
 
             # Snapshot pending todos AS OF NOW — anything created after
             # this point counts as a fresh coordinator decision and will

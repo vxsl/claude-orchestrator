@@ -544,6 +544,36 @@ class TestEnrichmentRendering:
         # Should still have category and time
         assert "personal" in result
 
+    def test_auto_paused_badge_renders_with_eta(self):
+        """A quota-parked loop must read as waiting, not as running."""
+        import os
+        from datetime import datetime, timedelta, timezone
+        from rendering import _render_ws_option
+        ws = Workstream(name="Parked WS", category=Category.WORK)
+        ws.auto_running = True
+        ws.auto_pid = os.getpid()  # alive, so the badge isn't "stale"
+        ws.auto_iteration = 3
+        ws.auto_paused = True
+        ws.auto_pause_reason = "5h session at 100%"
+        ws.auto_resume_at = (
+            datetime.now(timezone.utc) + timedelta(hours=2, minutes=30)
+        ).isoformat()
+        result = str(_render_ws_option(ws, [], {}))
+        assert "auto paused" in result
+        assert "\u21bb2h" in result
+        assert "auto iter 3" not in result
+
+    def test_auto_running_badge_unaffected_when_not_paused(self):
+        import os
+        from rendering import _render_ws_option
+        ws = Workstream(name="Running WS", category=Category.WORK)
+        ws.auto_running = True
+        ws.auto_pid = os.getpid()
+        ws.auto_iteration = 2
+        result = str(_render_ws_option(ws, [], {}))
+        assert "auto iter 2" in result
+        assert "paused" not in result
+
     def test_enrichment_badges_parse_as_rich_markup(self):
         """Rendered enrichment markup must be valid Rich markup (no crashes)."""
         from rich.text import Text

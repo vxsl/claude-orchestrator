@@ -141,3 +141,59 @@ def build_app_bindings() -> list:
         keys = overrides.get(action, default_keys)
         bindings.append(Binding(keys, action, desc, show=show, priority=priority))
     return bindings
+
+
+# ── Auto-mode quota gate ──────────────────────────────────────────────
+# Auto mode holds the loop when a Claude subscription limit is exhausted
+# and resumes once it resets (see auto_mode.AutoMode._await_quota).
+# Configure under [auto_mode] in config.toml:
+#
+#   [auto_mode]
+#   quota_pause = true          # hold the loop at the threshold
+#   quota_percent = 100         # percent of a window that counts as spent
+#   quota_kinds = ["session", "weekly_all"]
+#
+# ORCH_AUTO_QUOTA_PAUSE=0/1 overrides `quota_pause` for a single run.
+
+AUTO_QUOTA_DEFAULTS: dict = {
+    "enabled": True,
+    "percent": 100.0,
+    # Mirrors usage.DEFAULT_BLOCKING_KINDS; duplicated as plain data so
+    # config stays importable without pulling in the network module.
+    "kinds": ("session", "weekly_all"),
+}
+
+
+def auto_quota_config() -> dict:
+    """Resolved quota-gate settings: {'enabled', 'percent', 'kinds'}.
+
+    Precedence: ORCH_AUTO_QUOTA_PAUSE env var > [auto_mode] in
+    config.toml > AUTO_QUOTA_DEFAULTS. Malformed values fall back to the
+    default rather than raising — a typo in config.toml must not stop
+    auto mode from starting.
+    """
+    import os
+
+    section = load_config().get("auto_mode", {})
+    if not isinstance(section, dict):
+        section = {}
+
+    enabled = bool(section.get("quota_pause", AUTO_QUOTA_DEFAULTS["enabled"]))
+    env = os.environ.get("ORCH_AUTO_QUOTA_PAUSE")
+    if env is not None and env.strip() != "":
+        enabled = env.strip().lower() not in ("0", "false", "no", "off")
+
+    try:
+        percent = float(section.get("quota_percent", AUTO_QUOTA_DEFAULTS["percent"]))
+    except (TypeError, ValueError):
+        percent = AUTO_QUOTA_DEFAULTS["percent"]
+
+    raw_kinds = section.get("quota_kinds", AUTO_QUOTA_DEFAULTS["kinds"])
+    if isinstance(raw_kinds, (list, tuple)):
+        kinds = tuple(str(k) for k in raw_kinds if str(k).strip())
+    else:
+        kinds = AUTO_QUOTA_DEFAULTS["kinds"]
+    if not kinds:
+        kinds = AUTO_QUOTA_DEFAULTS["kinds"]
+
+    return {"enabled": enabled, "percent": percent, "kinds": kinds}

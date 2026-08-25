@@ -11,6 +11,10 @@ import pytest
 from auto_mode import (
     AutoMode,
     NUDGE_INTERVAL_S,
+    QUOTA_MAX_SLEEP_S,
+    QUOTA_MIN_SLEEP_S,
+    QUOTA_POLL_INTERVAL_S,
+    quota_wait_seconds,
     build_coordinator_followup,
     build_coordinator_kickoff,
     build_coordinator_nudge,
@@ -1754,3 +1758,296 @@ class TestDistillNextCLI:
         cmd_distill(Args())
         s2 = Store(path=target)
         assert s2.workstreams[0].auto_next_todo_ids == ["aaa11111", "bbb22222"]
+
+
+# ─── quota gate ──────────────────────────────────────────────────────
+
+from datetime import datetime, timedelta, timezone  # noqa: E402
+
+from usage import QuotaLimit, QuotaSnapshot  # noqa: E402
+
+
+def _spent_snapshot(mins_to_reset=120, percent=100.0):
+    """A snapshot whose 5h session window is exhausted."""
+    return QuotaSnapshot(
+        limits=(QuotaLimit(
+            kind="session", group="session", percent=percent,
+            resets_at=datetime.now(timezone.utc) + timedelta(minutes=mins_to_reset),
+        ),),
+        fetched_at=datetime.now(timezone.utc),
+    )
+
+
+def _clear_snapshot():
+    return QuotaSnapshot(
+        limits=(QuotaLimit(
+            kind="session", group="session", percent=12.0,
+            resets_at=datetime.now(timezone.utc) + timedelta(hours=3),
+        ),),
+        fetched_at=datetime.now(timezone.utc),
+    )
+
+
+class TestQuotaWaitSeconds:
+    def test_no_reset_falls_back_to_poll_interval(self):
+        assert quota_wait_seconds(None) == QUOTA_POLL_INTERVAL_S
+
+    def test_clamps_long_wait_to_max(self):
+        far = datetime.now(timezone.utc) + timedelta(hours=5)
+        assert quota_wait_seconds(far) == QUOTA_MAX_SLEEP_S
+
+    def test_clamps_past_reset_to_min(self):
+        past = datetime.now(timezone.utc) - timedelta(hours=1)
+        assert quota_wait_seconds(past) == QUOTA_MIN_SLEEP_S
+
+    def test_targets_reset_plus_buffer(self):
+        now = datetime(2026, 8, 24, 12, 0, tzinfo=timezone.utc)
+        soon = now + timedelta(seconds=100)
+        assert quota_wait_seconds(soon, now=now) == 120.0  # 100 + 20s buffer
+
+
+class TestQuotaGate:
+    """The gate must park the loop at 100% and release it on reset."""
+
+    @pytest.fixture(autouse=True)
+    def _fast_sleeps(self, monkeypatch):
+        # Park in millisecond hops so a re-check is observable in a test.
+        monkeypatch.setattr("auto_mode.QUOTA_MIN_SLEEP_S", 0.01)
+        monkeypatch.setattr("auto_mode.QUOTA_MAX_SLEEP_S", 0.01)
+        monkeypatch.setattr("auto_mode.QUOTA_POLL_INTERVAL_S", 0.01)
+
+    def _mode(self, store, ws, probe, **kw):
+        async def spawn(_todo, _brief):
+            raise AssertionError("should not spawn")
+
+        return AutoMode(
+            store=store, ws_id=ws.id,
+            spawn_implementer=kw.pop("spawn", spawn),
+            inject_coordinator=kw.pop("inject", lambda _t: None),
+            poll_interval=0.01,
+            quota_gate=True,
+            check_quota=probe,
+            **kw,
+        )
+
+    def test_holds_kickoff_until_quota_resets(self, store):
+        ws = _ws_with_todos(store, [])
+        reads = []
+        injected = []
+
+        def probe():
+            reads.append(1)
+            # Spent for the first three reads, then the window rolls over.
+            return _spent_snapshot() if len(reads) <= 3 else _clear_snapshot()
+
+        def inject(text):
+            injected.append(text)
+            fresh = store.get(ws.id)
+            fresh.auto_done_reason = "done"
+            store.update(fresh)
+
+        mode = self._mode(store, ws, probe, inject=inject)
+        assert asyncio.run(mode.run()) == "done"
+        # Kickoff was withheld while spent, then sent once clear.
+        assert len(reads) >= 4
+        assert len(injected) == 1
+        assert "[auto-mode started]" in injected[0]
+
+    def test_publishes_pause_state_then_clears_it(self, store):
+        ws = _ws_with_todos(store, [])
+        seen_while_paused = {}
+        reads = []
+
+        def probe():
+            reads.append(1)
+            if len(reads) <= 2:
+                return _spent_snapshot(mins_to_reset=90)
+            # Capture what another process would see mid-park.
+            fresh = store.get(ws.id)
+            seen_while_paused.update(
+                paused=fresh.auto_paused,
+                reason=fresh.auto_pause_reason,
+                resume_at=fresh.auto_resume_at,
+                eta=fresh.auto_resume_eta,
+            )
+            return _clear_snapshot()
+
+        def inject(_text):
+            fresh = store.get(ws.id)
+            fresh.auto_done_reason = "done"
+            store.update(fresh)
+
+        mode = self._mode(store, ws, probe, inject=inject)
+        assert asyncio.run(mode.run()) == "done"
+
+        assert seen_while_paused["paused"] is True
+        assert "5h session at 100%" in seen_while_paused["reason"]
+        assert seen_while_paused["resume_at"]
+        assert seen_while_paused["eta"] == "in 1h"
+
+        # Cleared once the loop stops.
+        after = store.get(ws.id)
+        assert after.auto_paused is False
+        assert after.auto_pause_reason == ""
+        assert after.auto_resume_at == ""
+
+    def test_notifies_on_park_and_resume(self, store):
+        ws = _ws_with_todos(store, [])
+        reads = []
+        notices = []
+
+        def probe():
+            reads.append(1)
+            return _spent_snapshot() if len(reads) <= 2 else _clear_snapshot()
+
+        def inject(_text):
+            fresh = store.get(ws.id)
+            fresh.auto_done_reason = "done"
+            store.update(fresh)
+
+        mode = self._mode(store, ws, probe, inject=inject, notify=notices.append)
+        asyncio.run(mode.run())
+        assert any("paused before kickoff" in n and "5h session at 100%" in n
+                   and "resumes in " in n for n in notices)
+        assert any("quota reset — resuming" in n for n in notices)
+
+    def test_cancel_while_parked_exits(self, store):
+        ws = _ws_with_todos(store, [])
+
+        def probe():
+            return _spent_snapshot()  # never clears
+
+        def inject(_text):
+            raise AssertionError("must not inject while parked")
+
+        mode = self._mode(store, ws, probe, inject=inject)
+
+        async def runner():
+            task = asyncio.create_task(mode.run())
+            await asyncio.sleep(0.05)
+            mode.cancel()
+            return await task
+
+        assert asyncio.run(runner()) == "canceled"
+        assert store.get(ws.id).auto_paused is False
+
+    def test_unreadable_quota_fails_open(self, store):
+        """No token / network down must not stall every loop."""
+        ws = _ws_with_todos(store, [])
+        injected = []
+
+        def inject(text):
+            injected.append(text)
+            fresh = store.get(ws.id)
+            fresh.auto_done_reason = "done"
+            store.update(fresh)
+
+        mode = self._mode(store, ws, lambda: None, inject=inject)
+        assert asyncio.run(mode.run()) == "done"
+        assert len(injected) == 1
+
+    def test_probe_exception_fails_open(self, store):
+        ws = _ws_with_todos(store, [])
+        injected = []
+
+        def boom():
+            raise RuntimeError("endpoint moved")
+
+        def inject(text):
+            injected.append(text)
+            fresh = store.get(ws.id)
+            fresh.auto_done_reason = "done"
+            store.update(fresh)
+
+        mode = self._mode(store, ws, boom, inject=inject)
+        assert asyncio.run(mode.run()) == "done"
+        assert len(injected) == 1
+
+    def test_gate_disabled_never_probes(self, store):
+        ws = _ws_with_todos(store, [])
+        reads = []
+
+        def probe():
+            reads.append(1)
+            return _spent_snapshot()
+
+        def inject(_text):
+            fresh = store.get(ws.id)
+            fresh.auto_done_reason = "done"
+            store.update(fresh)
+
+        async def spawn(_t, _b):
+            raise AssertionError("should not spawn")
+
+        mode = AutoMode(
+            store=store, ws_id=ws.id,
+            spawn_implementer=spawn, inject_coordinator=inject,
+            poll_interval=0.01, quota_gate=False, check_quota=probe,
+        )
+        assert asyncio.run(mode.run()) == "done"
+        assert reads == []
+
+    def test_holds_dispatch_before_spawning(self, store):
+        """Quota spent between the coordinator's pick and the spawn."""
+        ws = _ws_with_todos(store, [
+            TodoItem(text="task", origin="crystallized", id="todoq001"),
+        ])
+        spawned = []
+        reads = []
+
+        def probe():
+            reads.append(1)
+            # Clear for the kickoff gate, spent for the dispatch gate, then clear.
+            return _spent_snapshot() if len(reads) in (2, 3) else _clear_snapshot()
+
+        async def spawn(_todo, _brief):
+            spawned.append(_todo.id)
+            fresh = store.get(ws.id)
+            fresh.todos[0].report = "did it"
+            fresh.todos[0].done = True
+            store.update(fresh)
+
+        def inject(text):
+            fresh = store.get(ws.id)
+            if "[auto-mode started]" in text:
+                fresh.auto_next_todo_ids = ["todoq001"]
+            else:
+                fresh.auto_done_reason = "done"
+            store.update(fresh)
+
+        mode = self._mode(store, ws, probe, inject=inject, spawn=spawn)
+        assert asyncio.run(mode.run()) == "done"
+        assert spawned == ["todoq001"]
+        # Kickoff gate + a parked dispatch gate + the clear read that released it.
+        assert len(reads) >= 4
+
+    def test_nudges_are_withheld_while_parked(self, store, monkeypatch):
+        """A parked coordinator can't act — don't pile nudges into it."""
+        monkeypatch.setattr("auto_mode.NUDGE_INTERVAL_S", 0.0)
+        ws = _ws_with_todos(store, [
+            TodoItem(text="pending", origin="manual", id="todoq002"),
+        ])
+        injected = []
+        reads = []
+
+        def probe():
+            reads.append(1)
+            # Clear for the kickoff gate; spent for every nudge check after.
+            return _clear_snapshot() if len(reads) == 1 else _spent_snapshot()
+
+        def inject(text):
+            injected.append(text)
+
+        mode = self._mode(store, ws, probe, inject=inject)
+
+        async def runner():
+            task = asyncio.create_task(mode.run())
+            await asyncio.sleep(0.15)
+            mode.cancel()
+            return await task
+
+        assert asyncio.run(runner()) == "canceled"
+        # Kickoff went out; no nudge followed it.
+        assert len(injected) == 1
+        assert "[auto-mode started]" in injected[0]
+        assert not any("Still waiting on you" in t for t in injected)

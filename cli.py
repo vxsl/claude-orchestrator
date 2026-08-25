@@ -664,12 +664,22 @@ def cmd_auto(args):
             return f"  {_c('dim', '○')} {ws.id[:8]}  {ws.name}  {_c('dim', '(idle)')}"
         pid_state = "" if ws.auto_pid_alive else _c("red", "  [stale pid: process dead]")
         cur = ws.auto_current_todo_id[:8] if ws.auto_current_todo_id else "—"
+        # A quota park looks identical to a wedged loop from the outside —
+        # spell out what it's waiting on and when it expects to move.
+        paused = ""
+        if ws.auto_paused:
+            eta = ws.auto_resume_eta
+            paused = "\n      " + _c("yellow", (
+                f"paused: {ws.auto_pause_reason or 'quota spent'}"
+                + (f" — resumes {eta}" if eta else "")
+            ))
+        bullet = _c("yellow", "⏸") if ws.auto_paused else _c("green", "●")
         return (
-            f"  {_c('green', '●')} {ws.id[:8]}  {ws.name}\n"
+            f"  {bullet} {ws.id[:8]}  {ws.name}\n"
             f"      pid={ws.auto_pid}  started={ws.auto_started_at}\n"
             f"      iter={ws.auto_iteration}  current_todo={cur}  "
             f"coord={ws.auto_coord_sid[:8] or '—'}  "
-            f"impls={len(ws.auto_impl_sids)}{pid_state}"
+            f"impls={len(ws.auto_impl_sids)}{pid_state}{paused}"
         )
 
     if mode == "status":
@@ -699,6 +709,35 @@ def cmd_auto(args):
         store.update(ws)
         print(f"  {_c('green', '✓')} Cancel requested for {_c('bold', ws.name)} (pid {ws.auto_pid}).")
         print(_c("dim", "    The owning orch process will exit on its next poll (~3s)."))
+
+    elif mode == "quota":
+        from config import auto_quota_config
+        from usage import describe_limits, format_eta, get_usage
+
+        cfg = auto_quota_config()
+        state = "on" if cfg["enabled"] else _c("yellow", "off")
+        print(f"  gate: {state}  threshold={cfg['percent']:.0f}%  "
+              f"watching={', '.join(cfg['kinds'])}")
+        snap = get_usage(force=True)
+        if snap is None:
+            print(_c("red", "  Could not read usage "
+                            "(no OAuth token in ~/.claude/.credentials.json, "
+                            "or the endpoint is unreachable)."))
+            print(_c("dim", "    Auto mode fails open: it keeps running when the "
+                            "quota can't be read."))
+            return
+        for lim in snap.limits:
+            spent = lim.is_spent(cfg["percent"]) and lim.kind in cfg["kinds"]
+            color = "red" if spent else ("yellow" if lim.percent >= 80 else "green")
+            eta = format_eta(lim.resets_at)
+            watched = "" if lim.kind in cfg["kinds"] else _c("dim", "  (not gated)")
+            print(f"  {_c(color, f'{lim.percent:5.0f}%')}  {lim.label:<18}"
+                  f"resets {eta or '—'}{watched}")
+        blocking = snap.blocking(cfg["percent"], cfg["kinds"])
+        if blocking and cfg["enabled"]:
+            print(_c("yellow", f"  → auto mode would park: {describe_limits(blocking)}"))
+        else:
+            print(_c("green", "  → auto mode would run."))
 
     else:
         print(_c("red", f"  Unknown auto subcommand: {mode}"))
@@ -1324,13 +1363,19 @@ examples:
   orch auto status                        List all running auto-mode loops
   orch auto status --ws-id abc12345       Status for one workstream
   orch auto cancel --ws-id abc12345       Signal the owning orch to exit
+  orch auto quota                         Show the quota the loop gates on
 
 `auto cancel` writes a flag to data.json; the owning orch process polls
 it every ~3s and self-cancels. The implementer claude processes keep
 running (they're attached to the orch tmux server, not the loop).
+
+`auto quota` reads the same subscription limits auto mode parks on. Tune
+the gate under [auto_mode] in ~/.claude-orchestrator/config.toml
+(quota_pause / quota_percent / quota_kinds).
 """)
-    p_auto.add_argument("auto_mode", choices=["status", "cancel"],
-                        help="status: print loop state; cancel: request the running loop exit")
+    p_auto.add_argument("auto_mode", choices=["status", "cancel", "quota"],
+                        help="status: print loop state; cancel: request the running loop exit; "
+                             "quota: show the Claude limits the gate watches")
     p_auto.add_argument("--ws-id", dest="ws_id",
                         help="Workstream ID (8-char UUID prefix). Defaults to $ORCH_WS_ID.")
 

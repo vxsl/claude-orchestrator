@@ -16,6 +16,17 @@ def isolated_ui_state(tmp_path, monkeypatch):
     monkeypatch.setenv("ORCH_UI_STATE_PATH", str(tmp_path / "ui-state.json"))
 
 
+@pytest.fixture(autouse=True)
+def no_quota_network(monkeypatch):
+    """Keep auto-mode's quota gate off the network in tests.
+
+    AutoMode reads config.auto_quota_config() at construction, so without
+    this every AutoMode test would make a live call to the usage endpoint.
+    Gate behaviour is tested explicitly by passing quota_gate=True plus a
+    fake check_quota (see tests/test_auto_mode.py)."""
+    monkeypatch.setenv("ORCH_AUTO_QUOTA_PAUSE", "0")
+
+
 @pytest.fixture
 def tmp_store(tmp_path):
     """Create a Store backed by a temp file."""

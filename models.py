@@ -100,6 +100,13 @@ class Workstream:
     auto_coord_sid: str = ""               # coordinator's tmux session id
     auto_impl_sids: list[str] = field(default_factory=list)  # implementer tmux session ids spawned this run
     auto_cancel_requested: bool = False    # set by any process; owner polls and exits
+    # Quota gate: the loop parks here when a Claude subscription limit is
+    # spent, and resumes itself once the window resets. Persisted so a
+    # second orch (or `orch auto status`) can tell "parked until 9am"
+    # apart from "hung".
+    auto_paused: bool = False              # loop is holding for a quota reset
+    auto_pause_reason: str = ""            # e.g. "5h session at 100%"
+    auto_resume_at: str = ""               # ISO timestamp the quota is expected to reset
 
     def __post_init__(self):
         # Sanitize name: strip whitespace, fix "UB-XXXX: UB-XXXX" redundancy
@@ -145,6 +152,23 @@ class Workstream:
     @property
     def is_active(self) -> bool:
         return not self.archived
+
+    @property
+    def auto_resume_eta(self) -> str:
+        """Compact 'in 2h' for `auto_resume_at`, or '' when not parked.
+
+        Shared by the list badge and `orch auto status` so both phrase a
+        quota park the same way.
+        """
+        if not self.auto_resume_at:
+            return ""
+        from datetime import datetime as _dt
+        from usage import format_eta
+        try:
+            when = _dt.fromisoformat(self.auto_resume_at)
+        except ValueError:
+            return ""
+        return format_eta(when)
 
     @property
     def auto_pid_alive(self) -> bool:
@@ -237,6 +261,9 @@ class Workstream:
         d.setdefault("auto_coord_sid", "")
         d.setdefault("auto_impl_sids", [])
         d.setdefault("auto_cancel_requested", False)
+        d.setdefault("auto_paused", False)
+        d.setdefault("auto_pause_reason", "")
+        d.setdefault("auto_resume_at", "")
         todos = []
         for t in d["todos"]:
             if isinstance(t, dict):

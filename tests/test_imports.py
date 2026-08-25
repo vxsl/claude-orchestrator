@@ -20,6 +20,7 @@ MODULES = [
     "state",
     "thread_namer",
     "threads",
+    "usage",
     "widgets",
     "workstream_synthesizer",
 ]

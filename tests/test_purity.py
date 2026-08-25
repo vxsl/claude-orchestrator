@@ -26,6 +26,7 @@ PURE_MODULES = [
     "models",
     "config",
     "auto_mode",
+    "usage",
     "notifications",
     "cleanup",
     "session_launch",

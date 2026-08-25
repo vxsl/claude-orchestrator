@@ -528,15 +528,22 @@ def _render_ws_option(
             parts.append(f"[{C_DIM}]solve:{_rich_escape(solve_status)}[/{C_DIM}]")
 
     # Auto-mode badge — visible from any orch instance, not just the owner.
-    # "auto iter N" while running; "auto stale" if the owner pid is dead
-    # (orch crashed without clearing auto_running) so the user can clear
-    # it by pressing the auto-mode key to start a fresh loop.
+    # "auto iter N" while running; "auto paused ↻2h" while parked on a
+    # spent Claude quota; "auto stale" if the owner pid is dead (orch
+    # crashed without clearing auto_running) so the user can clear it by
+    # pressing the auto-mode key to start a fresh loop.
     if ws.auto_running:
-        if ws.auto_pid_alive:
+        if not ws.auto_pid_alive:
+            parts.append(f"[{C_RED}]auto:stale[/{C_RED}]")
+        elif ws.auto_paused:
+            # Parked on a spent Claude quota — reads as waiting, not wedged.
+            eta = ws.auto_resume_eta.removeprefix("in ")  # "in 2h" → "↻2h"
+            parts.append(
+                f"[{C_YELLOW}]auto paused{f' ↻{eta}' if eta else ''}[/{C_YELLOW}]"
+            )
+        else:
             iter_part = f" iter {ws.auto_iteration}" if ws.auto_iteration else ""
             parts.append(f"[{C_BLUE}]auto{iter_part}[/{C_BLUE}]")
-        else:
-            parts.append(f"[{C_RED}]auto:stale[/{C_RED}]")
 
     wt_text, wt_color = _worktree_styled(ws)
     if wt_text:
