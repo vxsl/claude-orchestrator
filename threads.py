@@ -466,7 +466,7 @@ def _discover_threads_from_db(
     already cached at the same generation level, so a cache hit here costs ~0µs.
     """
     global _threads_cache, _threads_cache_generation
-    from sessions import _get_rust_db
+    from sessions import _get_rust_db, read_db_generation
     _t0 = _time.monotonic() if _PERF_ENABLED else 0
     conn = _get_rust_db()
     if conn is None:
@@ -475,11 +475,8 @@ def _discover_threads_from_db(
     # Check generation — if unchanged, return the previously built Thread objects.
     # This is safe because the session objects they reference are also cached at
     # the same generation (sessions._sessions_cache_generation == ours).
-    try:
-        row = conn.execute("SELECT value FROM meta WHERE key='generation'").fetchone()
-        current_gen = int(row[0]) if row else -1
-    except Exception:
-        current_gen = -1
+    gen = read_db_generation(conn)
+    current_gen = gen if gen is not None else -1
     _t_gen = _time.monotonic() if _PERF_ENABLED else 0
 
     if _threads_cache is not None and current_gen == _threads_cache_generation and current_gen != -1:

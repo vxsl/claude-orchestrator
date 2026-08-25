@@ -16,6 +16,7 @@ import os
 import re
 import shutil
 import sqlite3
+import threading
 import time
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -77,7 +78,13 @@ def _default_db_path() -> Path:
     return Path(cache) / "claude-orchestrator" / "orch-sessions.db"
 
 
-_rust_db_conn: Optional[sqlite3.Connection] = None
+# One connection per thread. A single shared connection is NOT safe here even
+# with check_same_thread=False: pysqlite caches prepared statements per
+# connection and keys them by SQL text, so two threads running the same query
+# can end up stepping/resetting the same sqlite3_stmt. Columns read from a
+# statement another thread just reset come back NULL — which is how a
+# `TEXT NOT NULL` meta.value showed up as None and crashed the poll worker.
+_rust_db_local = threading.local()
 _rust_db_generation: int = -1
 
 # Session cache: keyed by DB generation counter.
@@ -92,28 +99,46 @@ _SESSION_CACHE_TTL_S: float = 5.0  # fallback TTL — only used if generation ch
 def _get_rust_db() -> Optional[sqlite3.Connection]:
     """Get a read-only connection to the Rust engine's SQLite DB, or None.
 
-    Uses check_same_thread=False so the cached connection can be reused
-    across worker threads and the main thread (for the generation gate).
-    Safe because we open in query_only mode and SQLite's serialized mode
-    handles concurrent reads.
+    The connection is cached per calling thread: the main thread (generation
+    gate) and the poll workers each get their own, so they never share a
+    prepared-statement cache. Opened query_only, so concurrent readers are
+    just concurrent WAL readers.
     """
-    global _rust_db_conn
     db_path = _default_db_path()
     if not db_path.exists():
-        _rust_db_conn = None
+        _rust_db_local.conn = None
         return None
-    if _rust_db_conn is not None:
-        return _rust_db_conn
+    conn = getattr(_rust_db_local, "conn", None)
+    if conn is not None:
+        return conn
     try:
         conn = sqlite3.connect(str(db_path), timeout=1.0, check_same_thread=False)
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("PRAGMA query_only=ON")
         # Verify table exists
         conn.execute("SELECT 1 FROM sessions LIMIT 1")
-        _rust_db_conn = conn
+        _rust_db_local.conn = conn
         return conn
     except (sqlite3.Error, sqlite3.OperationalError):
-        _rust_db_conn = None
+        _rust_db_local.conn = None
+        return None
+
+
+def read_db_generation(conn: sqlite3.Connection) -> Optional[int]:
+    """Read meta.generation off `conn`, or None if it can't be read as an int.
+
+    Tolerates a missing row and a NULL/garbage value rather than raising:
+    callers treat None as "unknown", which falls back to a full re-read.
+    """
+    try:
+        row = conn.execute("SELECT value FROM meta WHERE key='generation'").fetchone()
+    except (sqlite3.Error, sqlite3.ProgrammingError):
+        return None
+    if not row or row[0] is None:
+        return None
+    try:
+        return int(row[0])
+    except (TypeError, ValueError):
         return None
 
 
@@ -127,11 +152,7 @@ def get_rust_db_generation() -> Optional[int]:
     conn = _get_rust_db()
     if conn is None:
         return None
-    try:
-        row = conn.execute("SELECT value FROM meta WHERE key='generation'").fetchone()
-        return int(row[0]) if row else None
-    except (sqlite3.Error, sqlite3.ProgrammingError, ValueError):
-        return None
+    return read_db_generation(conn)
 
 
 def _rust_db_changed() -> bool:
@@ -140,15 +161,10 @@ def _rust_db_changed() -> bool:
     conn = _get_rust_db()
     if conn is None:
         return False
-    try:
-        row = conn.execute("SELECT value FROM meta WHERE key='generation'").fetchone()
-        if row:
-            gen = int(row[0])
-            if gen != _rust_db_generation:
-                _rust_db_generation = gen
-                return True
-    except sqlite3.Error:
-        pass
+    gen = read_db_generation(conn)
+    if gen is not None and gen != _rust_db_generation:
+        _rust_db_generation = gen
+        return True
     return False
 
 
@@ -227,18 +243,15 @@ def _discover_sessions_from_db(
 
     if use_cache and _sessions_cache is not None:
         # Fast path: check if generation changed (single cheap query)
-        try:
-            row = conn.execute("SELECT value FROM meta WHERE key='generation'").fetchone()
-            if row and int(row[0]) == _sessions_cache_generation:
-                if _PERF_ENABLED:
-                    _perf_log.warning(
-                        "_discover_sessions_from_db: cache_hit %.1fms (gen=%d, n=%d)",
-                        (time.monotonic() - _t0) * 1000,
-                        _sessions_cache_generation, len(_sessions_cache),
-                    )
-                return _sessions_cache  # data unchanged — skip full read
-        except sqlite3.Error:
-            pass
+        gen = read_db_generation(conn)
+        if gen is not None and gen == _sessions_cache_generation:
+            if _PERF_ENABLED:
+                _perf_log.warning(
+                    "_discover_sessions_from_db: cache_hit %.1fms (gen=%d, n=%d)",
+                    (time.monotonic() - _t0) * 1000,
+                    _sessions_cache_generation, len(_sessions_cache),
+                )
+            return _sessions_cache  # data unchanged — skip full read
         # Fallback: TTL check if generation unavailable
         age = time.monotonic() - _sessions_cache_time
         if age < _SESSION_CACHE_TTL_S:
@@ -264,10 +277,12 @@ def _discover_sessions_from_db(
             query += f" LIMIT {limit}"
 
         _t_q0 = time.monotonic() if _PERF_ENABLED else 0
-        conn.row_factory = sqlite3.Row
-        cursor = conn.execute(query, params)
+        # row_factory goes on the cursor, not the connection: no global toggle
+        # to leave dangling if this returns early.
+        cursor = conn.cursor()
+        cursor.row_factory = sqlite3.Row
+        cursor.execute(query, params)
         rows = cursor.fetchall()
-        conn.row_factory = None
         _t_q1 = time.monotonic() if _PERF_ENABLED else 0
         sessions = [_hydrate_session(dict(row)) for row in rows]
         _t_h = time.monotonic() if _PERF_ENABLED else 0
@@ -275,12 +290,9 @@ def _discover_sessions_from_db(
         if use_cache:
             _sessions_cache = sessions
             _sessions_cache_time = time.monotonic()
-            try:
-                row = conn.execute("SELECT value FROM meta WHERE key='generation'").fetchone()
-                if row:
-                    _sessions_cache_generation = int(row[0])
-            except sqlite3.Error:
-                pass
+            gen = read_db_generation(conn)
+            if gen is not None:
+                _sessions_cache_generation = gen
 
         if _PERF_ENABLED:
             _perf_log.warning(

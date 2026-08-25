@@ -6,6 +6,8 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from unittest.mock import patch
 
+_MISSING = object()
+
 from sessions import (
     ClaudeSession,
     _decode_project_dir,
@@ -598,3 +600,119 @@ class TestFindSession:
         with patch("sessions.CLAUDE_PROJECTS_DIR", projects_dir):
             session = find_session("zzz-nonexistent")
             assert session is None
+
+
+class TestReadDbGeneration:
+    """meta.generation is read from several threads; it must never raise.
+
+    The crash this guards against: a concurrent reader on a shared connection
+    observed a NULL value for a `TEXT NOT NULL` column, and `int(None)` blew up
+    the session-poll worker.
+    """
+
+    @staticmethod
+    def _make_db(tmp_path, value):
+        import sqlite3
+        db = tmp_path / "gen.db"
+        conn = sqlite3.connect(db)
+        conn.execute("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT)")
+        if value is not _MISSING:
+            conn.execute("INSERT INTO meta VALUES ('generation', ?)", (value,))
+        conn.commit()
+        return conn
+
+    def test_reads_int(self, tmp_path):
+        from sessions import read_db_generation
+        assert read_db_generation(self._make_db(tmp_path, "42")) == 42
+
+    def test_null_value_returns_none(self, tmp_path):
+        from sessions import read_db_generation
+        assert read_db_generation(self._make_db(tmp_path, None)) is None
+
+    def test_garbage_value_returns_none(self, tmp_path):
+        from sessions import read_db_generation
+        assert read_db_generation(self._make_db(tmp_path, "not-a-number")) is None
+
+    def test_missing_row_returns_none(self, tmp_path):
+        from sessions import read_db_generation
+        assert read_db_generation(self._make_db(tmp_path, _MISSING)) is None
+
+    def test_missing_table_returns_none(self, tmp_path):
+        import sqlite3
+        from sessions import read_db_generation
+        conn = sqlite3.connect(tmp_path / "empty.db")
+        assert read_db_generation(conn) is None
+
+
+class TestRustDbConnectionIsThreadLocal:
+    def test_each_thread_gets_its_own_connection(self, tmp_path, monkeypatch):
+        """Threads must not share a connection — pysqlite's statement cache
+        is per-connection and races when two threads run the same SQL."""
+        import sqlite3
+        import threading
+        import sessions
+
+        db = tmp_path / "orch-sessions.db"
+        conn = sqlite3.connect(db)
+        conn.execute("CREATE TABLE sessions (session_id TEXT)")
+        conn.execute("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+        conn.execute("INSERT INTO meta VALUES ('generation', '7')")
+        conn.commit()
+        conn.close()
+
+        monkeypatch.setattr(sessions, "_default_db_path", lambda: db)
+        monkeypatch.setattr(sessions, "_rust_db_local", threading.local())
+
+        seen = []
+        seen.append(sessions._get_rust_db())
+        assert sessions._get_rust_db() is seen[0], "same thread should reuse"
+
+        def other_thread():
+            seen.append(sessions._get_rust_db())
+
+        t = threading.Thread(target=other_thread)
+        t.start()
+        t.join()
+
+        assert len(seen) == 2
+        assert seen[1] is not None
+        assert seen[1] is not seen[0]
+
+    def test_concurrent_generation_reads_never_return_none(self, tmp_path, monkeypatch):
+        """Hammer the exact query from many threads; every read must be an int."""
+        import sqlite3
+        import threading
+        import sessions
+
+        db = tmp_path / "orch-sessions.db"
+        conn = sqlite3.connect(db)
+        # WAL up front, as the daemon leaves it: otherwise the 8 readers below
+        # race to convert the journal mode and some lose on a write lock.
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("CREATE TABLE sessions (session_id TEXT)")
+        conn.execute("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+        conn.execute("INSERT INTO meta VALUES ('generation', '7')")
+        conn.commit()
+        conn.close()
+
+        monkeypatch.setattr(sessions, "_default_db_path", lambda: db)
+        monkeypatch.setattr(sessions, "_rust_db_local", threading.local())
+
+        results = []
+        lock = threading.Lock()
+
+        def reader():
+            local = []
+            for _ in range(200):
+                local.append(sessions.get_rust_db_generation())
+            with lock:
+                results.extend(local)
+
+        threads = [threading.Thread(target=reader) for _ in range(8)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        assert len(results) == 1600
+        assert all(r == 7 for r in results), f"bad reads: {set(results)}"
