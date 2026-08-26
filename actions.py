@@ -761,6 +761,12 @@ def discover_worktrees(repo_paths: list[str]) -> list[dict]:
     seen_paths: set[str] = set()
 
     for repo in repo_paths:
+        # Every worktree of a repo reports the same `worktree list`, and orch
+        # tracks each of them as its own repo path — so asking all 251 ul.*
+        # worktrees spawns 251 identical gits per cycle. Once a path has shown
+        # up in an earlier listing we already have its whole family.
+        if repo.rstrip("/") in seen_paths:
+            continue
         worktrees = get_worktree_list(repo)
         for wt in worktrees:
             path = wt.get("path", "")

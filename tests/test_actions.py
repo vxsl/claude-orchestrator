@@ -607,6 +607,33 @@ class TestDiscoverWorktrees:
         assert results[0]["branch"] == "feature-x"
 
     @patch("actions.get_worktree_list")
+    def test_repo_already_listed_is_not_asked_again(self, mock_wt):
+        """A repo path that showed up in an earlier listing shares that family.
+
+        Every worktree of a repo reports the same `worktree list`, and orch
+        tracks each of them as its own repo path — asking all of them spawns
+        one identical git per worktree, every poll cycle.
+        """
+        mock_wt.return_value = [
+            {"path": "/repo", "branch": "main"},
+            {"path": "/repo.wt", "branch": "feature-a"},
+        ]
+        results = discover_worktrees(["/repo", "/repo.wt"])
+        assert mock_wt.call_count == 1  # /repo.wt came back in /repo's listing
+        assert [r["path"] for r in results] == ["/repo", "/repo.wt"]
+        assert {r["repo_path"] for r in results} == {"/repo"}
+
+    @patch("actions.get_worktree_list")
+    def test_unrelated_repos_are_each_asked(self, mock_wt):
+        mock_wt.side_effect = [
+            [{"path": "/a", "branch": "feature-a"}],
+            [{"path": "/b", "branch": "feature-b"}],
+        ]
+        results = discover_worktrees(["/a-repo", "/b-repo"])
+        assert mock_wt.call_count == 2
+        assert [r["path"] for r in results] == ["/a", "/b"]
+
+    @patch("actions.get_worktree_list")
     def test_deduplicates_paths(self, mock_wt):
         mock_wt.return_value = [
             {"path": "/home/user/dev/wt1", "branch": "feature-a"},
