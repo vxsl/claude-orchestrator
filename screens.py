@@ -1223,11 +1223,10 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
                     yield Static(f"[{C_DIM}]Empty[/{C_DIM}]", id="detail-no-archived")
 
             with Horizontal(id="detail-lower"):
-                tig_hide = "" if self._sidebar_enabled else " panel-hidden"
-                body_hide = " panel-hidden" if self._sidebar_enabled else ""
                 if self._git_available:
-                    with Vertical(id="detail-tig-status-wrap",
-                                  classes="detail-tig-wrap" + tig_hide):
+                    tig_cls = "detail-tig-wrap" + (
+                        "" if self._sidebar_enabled else " panel-hidden")
+                    with Vertical(id="detail-tig-status-wrap", classes=tig_cls):
                         yield TerminalWidget(
                             command="tig status",
                             env=self._tig_env,
@@ -1235,8 +1234,7 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
                             passthrough_keys={"ctrl+j", "ctrl+k", "ctrl+h", "backspace"},
                             id="detail-tig-status",
                         )
-                    with Vertical(id="detail-tig-log-wrap",
-                                  classes="detail-tig-wrap" + tig_hide):
+                    with Vertical(id="detail-tig-log-wrap", classes=tig_cls):
                         yield TerminalWidget(
                             command="tig",
                             env=self._tig_env,
@@ -1244,12 +1242,13 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
                             passthrough_keys={"ctrl+j", "ctrl+k", "ctrl+h", "backspace"},
                             id="detail-tig-log",
                         )
-                    with VerticalScroll(id="detail-scroll",
-                                        classes=body_hide.strip()):
-                        yield Static(self._render_body(), id="detail-body")
-                else:
-                    with VerticalScroll(id="detail-scroll"):
-                        yield Static(self._render_body(), id="detail-body")
+                # Always composed: it's what the lower panel shows once the tig
+                # panes are off, and F8 must not need a remount to reveal it.
+                with VerticalScroll(
+                    id="detail-scroll",
+                    classes="panel-hidden" if self._sidebar_enabled else "",
+                ):
+                    yield Static(self._render_body(), id="detail-body")
                 # Feed pane kept in DOM but hidden — notifications now inline in session list
                 with Vertical(id="detail-feed-pane"):
                     yield Static(self._render_feed_label(), id="detail-feed-label", classes="detail-feed-label")
@@ -1296,7 +1295,7 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         try:
             self.query_one("#detail-body", Static).update(self._render_body())
         except Exception:
-            pass  # body not present when tig sidebar is active
+            pass
         if self._sidebar_enabled:
             self._start_tig_panes()
         self._update_pane_labels()
