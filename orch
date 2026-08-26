@@ -44,9 +44,19 @@ export TEXTUAL_COLOR_SYSTEM=truecolor
 export TEXTUAL_ESCAPE_DELAY=0.02
 ORCH_CRASH_LOG=$(mktemp /tmp/orch-crash-XXXXXX.log)
 export ORCH_CRASH_LOG
+# A --json run is machine output: its stdout belongs to the payload and
+# nobody is at the keyboard to answer "Press Enter". Same for a piped
+# stdout. Both skip the crash-hold below, which would otherwise emit
+# terminal control bytes into the stream and then block forever.
+HOLD_ON_CRASH=1
+[ -t 1 ] || HOLD_ON_CRASH=0
+for _arg in "$@"; do
+    [ "$_arg" = "--json" ] && HOLD_ON_CRASH=0
+done
+
 python3 "$SCRIPT_DIR/orch.py" "$@"
 EXIT_CODE=$?
-if [ $EXIT_CODE -ne 0 ]; then
+if [ $EXIT_CODE -ne 0 ] && [ $HOLD_ON_CRASH -eq 1 ]; then
     # Textual renders the crash inside the alt-screen buffer which is lost on exit.
     # Switch back to the normal screen, then show our saved traceback.
     tput rmcup 2>/dev/null || true
@@ -61,3 +71,5 @@ if [ $EXIT_CODE -ne 0 ]; then
     read -r
 fi
 rm -f "$ORCH_CRASH_LOG"
+# Propagate the real status — a scripted caller checks it.
+exit $EXIT_CODE

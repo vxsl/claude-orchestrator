@@ -6,6 +6,7 @@ import fcntl
 import json
 import os
 import shutil
+import sys
 import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass, field, asdict
@@ -371,7 +372,8 @@ class Store:
             data = json.loads(self.path.read_text())
             self.workstreams = [Workstream.from_dict(w) for w in data.get("workstreams", [])]
         except (json.JSONDecodeError, KeyError, TypeError) as e:
-            print(f"Warning: could not load {self.path}: {e}")
+            # stdout may be a JSON payload (`orch list --json`) — warn on stderr.
+            print(f"Warning: could not load {self.path}: {e}", file=sys.stderr)
             self.workstreams = []
         self._known_todo_ids = {t.id for ws in self.workstreams for t in ws.todos}
         self._known_ws_ids = {ws.id for ws in self.workstreams}

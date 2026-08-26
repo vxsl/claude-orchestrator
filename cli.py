@@ -5,6 +5,7 @@ import argparse
 import json
 import os
 import re
+import shlex
 import subprocess
 import sys
 from datetime import datetime
@@ -86,6 +87,69 @@ def _resolve_ws(store: Store, ws_id: str) -> Workstream:
     return ws
 
 
+def _die(msg: str) -> None:
+    """Fail with a message on stderr — never on stdout."""
+    sys.stderr.write(f"  {msg}\n")
+    sys.exit(1)
+
+
+# ─── Machine-readable output ────────────────────────────────────
+#
+# `--json` is the one convention for scripting orch, and these helpers are
+# what makes it one: the payload is the only thing on stdout — no color,
+# no heading, no "N items" footer — and everything a human would read
+# goes to stderr via _die. Any verb that grows a --json flag routes
+# through here so a consumer can pipe straight into jq without first
+# stripping ANSI out of the stream.
+
+def _emit_json(payload) -> None:
+    """Print a JSON payload as the sole contents of stdout."""
+    json.dump(payload, sys.stdout, indent=2, default=str)
+    sys.stdout.write("\n")
+
+
+def _clip(text: str, limit: int) -> str:
+    """Collapse whitespace and clip — JSON carries no newlines mid-field."""
+    return " ".join((text or "").split())[:limit]
+
+
+def _session_json(s) -> dict:
+    """The scriptable view of a discovered Claude session."""
+    return {
+        "session_id": s.session_id,
+        "title": s.display_name,
+        "project_path": s.project_path,
+        "git_branch": s.git_branch,
+        "is_live": bool(s.is_live),
+        "last_activity": s.last_activity,
+        "message_count": s.message_count,
+        "last_assistant_message_text": _clip(s.last_assistant_message_text, 300),
+    }
+
+
+def _ws_json(ws: Workstream) -> dict:
+    """The scriptable view of a workstream."""
+    # Archived todos are neither pending nor done — they left the board.
+    live = [t for t in ws.todos if not t.archived]
+    return {
+        "id": ws.id,
+        "name": ws.name,
+        "category": ws.category.value,
+        "archived": ws.archived,
+        "repo_path": ws.repo_path,
+        "links": [
+            {"kind": lnk.kind, "label": lnk.label, "value": lnk.value}
+            for lnk in ws.links
+        ],
+        "todos": {
+            "pending": sum(1 for t in live if not t.done),
+            "done": sum(1 for t in live if t.done),
+        },
+        "auto_running": ws.auto_running,
+        "auto_current_todo_id": ws.auto_current_todo_id,
+    }
+
+
 # ─── Commands ────────────────────────────────────────────────────────
 
 def cmd_add(args):
@@ -120,6 +184,10 @@ def cmd_list(args):
 
     sort_by = getattr(args, "sort", "updated") or "updated"
     streams = store.sorted(streams, sort_by)
+
+    if getattr(args, "json", False):
+        _emit_json([_ws_json(w) for w in streams])
+        return
 
     if not streams:
         print(_c("dim", "  No workstreams."))
@@ -377,6 +445,10 @@ def cmd_sessions(args):
         min_messages=1,
     )
 
+    if getattr(args, "json", False):
+        _emit_json([_session_json(s) for s in sessions])
+        return
+
     if not sessions:
         print(_c("dim", "  No sessions found."))
         return
@@ -426,6 +498,165 @@ def cmd_resume(args):
         )
     else:
         os.execvp("claude", ["claude", "--resume", session_id])
+
+
+# ─── `orch open` — attach to a session's terminal ────────────────────
+#
+# `resume` above can only follow a claude-session link, and the auto-linker
+# deliberately skips those, so in practice it fires for almost nobody.
+# `open` goes to the session store instead: any session orch can see is
+# openable by id or unique prefix. Sessions orch spawned live on the
+# orch-sessions tmux socket (term_host.TerminalHost.TMUX_SOCKET); one whose
+# tmux died but whose transcript survived is revived with `claude --resume`
+# on that same socket first, so cold and live converge on the same attach.
+
+TMUX_SOCKET = "orch-sessions"
+
+
+def _session_label(s) -> str:
+    """tmux window name for a session — its title, clipped to 20."""
+    return _clip(s.display_name, 20) or s.session_id[:8]
+
+
+def _resolve_session(prefix: str):
+    """Resolve a session by id or unique prefix, or exit explaining why not."""
+    from sessions import discover_sessions, find_session
+
+    pref = (prefix or "").strip()
+    if not pref:
+        _die("No session id given.")
+
+    sessions = discover_sessions(limit=0, min_messages=0)
+    exact = next((s for s in sessions if s.session_id == pref), None)
+    if exact:
+        return exact
+
+    matches = [s for s in sessions if s.session_id.startswith(pref)]
+    if not matches:
+        # A resumed session keeps its original id inside the JSONL while the
+        # file is named for the new one — match the ids the transcript knows.
+        matches = [s for s in sessions
+                   if any(sid.startswith(pref) for sid in s.all_session_ids)]
+    if len(matches) > 1:
+        sys.stderr.write(f"  Ambiguous prefix {pref!r} — {len(matches)} sessions match:\n")
+        for s in matches[:10]:
+            sys.stderr.write(f"    {s.session_id}  {_clip(s.display_name, 50)}\n")
+        sys.exit(1)
+    if matches:
+        return matches[0]
+
+    # The store is engine-backed and can lag a session created seconds ago;
+    # the transcript on disk is the fallback authority.
+    found = find_session(pref)
+    if found:
+        return found
+    _die(f"No session matching {pref!r}.")
+
+
+def _tmux(run, argv: list[str], timeout: float = 10, **kw):
+    """Speak to tmux through the injected runner — the one seam tests stub."""
+    return run(argv, capture_output=True, text=True, timeout=timeout, **kw)
+
+
+def _tmux_alive(run, session_id: str) -> bool:
+    try:
+        return _tmux(run, ["tmux", "-L", TMUX_SOCKET,
+                           "has-session", "-t", session_id], timeout=3).returncode == 0
+    except Exception:
+        return False
+
+
+def _revive_session(session, *, run) -> None:
+    """Restart a cold session with `claude --resume` on the orch tmux socket.
+
+    Mirrors session_launch.spawn_implementer_session's invocation — same
+    socket, same config, same geometry — so a revived session is
+    indistinguishable from one auto mode spawned, and the TUI can attach
+    to it the same way.
+    """
+    from term_host import TerminalHost
+
+    conf = TerminalHost._tmux_conf_path()
+    sid = session.session_id
+    inner = ("env TERM=xterm-256color COLORTERM=truecolor "
+             f"claude --resume {shlex.quote(sid)}")
+    argv = ["tmux", "-L", TMUX_SOCKET, "-f", conf,
+            "new-session", "-d", "-s", sid, "-x", "200", "-y", "50"]
+    cwd = session.project_path
+    if cwd and os.path.isdir(cwd):
+        # claude --resume resolves the transcript from the cwd's project
+        # dir, so the wrong cwd is the same as no session.
+        argv += ["-c", cwd]
+    else:
+        print(_c("yellow", f"  Project path is gone ({cwd or 'unknown'}) — "
+                           "resuming from the current directory."))
+    argv.append(inner)
+
+    env = os.environ.copy()
+    env.update(TERM="xterm-256color", COLORTERM="truecolor")
+    env.pop("TMUX", None)  # or tmux refuses to nest a server inside a client
+
+    result = _tmux(run, argv, env=env)
+    if result.returncode != 0:
+        err = (result.stderr or "").strip() or "(no stderr)"
+        _die(f"tmux new-session failed (rc={result.returncode}): {err}")
+    # `-f` only lands when tmux bootstraps the server; a server an earlier
+    # orch run started is still on whatever config it booted with.
+    _tmux(run, ["tmux", "-L", TMUX_SOCKET, "source-file", conf], timeout=2, env=env)
+
+
+def _attach_window(session_id: str, label: str, *, run) -> int:
+    """Open a tmux window attached to `session_id` on the orch socket."""
+    attach = f"tmux -L {TMUX_SOCKET} attach -t {shlex.quote(session_id)}"
+
+    if os.environ.get("TMUX"):
+        result = _tmux(run, ["tmux", "new-window", "-n", label, attach])
+        if result.returncode != 0:
+            _die(f"tmux new-window failed: {(result.stderr or '').strip()}")
+        print(f"  Opened {_c('bold', label)} in this tmux session.")
+        return 0
+
+    # Outside tmux the windows belong in the dashboard's own session, which
+    # lives on the default server rather than the orch-sessions one.
+    if _tmux(run, ["tmux", "-L", "default",
+                   "has-session", "-t", "orch"], timeout=3).returncode != 0:
+        print(_c("yellow", "  No 'orch' tmux session to open a window in."))
+        print(f"  Attach directly:  {_c('bold', attach)}")
+        return 0
+
+    result = _tmux(run, ["tmux", "-L", "default", "new-window",
+                         "-t", "orch:", "-n", label, attach])
+    if result.returncode != 0:
+        _die(f"tmux new-window failed: {(result.stderr or '').strip()}")
+    print(f"  Opened {_c('bold', label)} in the orch tmux session.")
+    return 0
+
+
+def open_session(session, *, run=None) -> int:
+    """Attach a window to `session`, reviving it first if its tmux is gone."""
+    run = run or subprocess.run
+
+    ids = [session.session_id]
+    ids += [sid for sid in session.all_session_ids if sid not in ids]
+    target = next((sid for sid in ids if _tmux_alive(run, sid)), "")
+
+    if not target:
+        if session.jsonl_path and not os.path.exists(session.jsonl_path):
+            _die(f"Session {session.session_id[:8]} has no live tmux and no transcript.")
+        print(f"  Session {_c('cyan', session.session_id[:8])} is cold \u2014 "
+              "reviving with claude --resume\u2026")
+        _revive_session(session, run=run)
+        target = session.session_id
+
+    return _attach_window(target, _session_label(session), run=run)
+
+
+def cmd_open(args):
+    """Open a tmux window attached to a Claude session (reviving it if cold)."""
+    session = _resolve_session(args.session)
+    rc = open_session(session)
+    if rc:
+        sys.exit(rc)
 
 
 def cmd_watch(args):
@@ -1006,7 +1237,7 @@ _orch_completions() {
     cur="${COMP_WORDS[COMP_CWORD]}"
     prev="${COMP_WORDS[COMP_CWORD-1]}"
 
-    commands="tui dash add list ls show brain link note archive unarchive history sessions resume watch spawn export import seed completions"
+    commands="tui dash add list ls show brain link note archive unarchive history sessions resume open watch spawn export import seed completions"
 
     case "$prev" in
         orch)
@@ -1038,9 +1269,9 @@ _orch_completions() {
         local opts="-h --help"
         case "${COMP_WORDS[1]}" in
             add)  opts="-h -d --description -c --category -l --link --archived" ;;
-            list|ls)  opts="-h -c --category -S --sort --search --archived" ;;
+            list|ls)  opts="-h -c --category -S --sort --search --archived --json" ;;
             link) opts="-h -l --label" ;;
-            sessions) opts="-h -p --project -n --limit" ;;
+            sessions) opts="-h -p --project -n --limit --json" ;;
             export) opts="-h -o --output" ;;
             brain) opts="-h -y --yes" ;;
             import) opts="-h -y --yes" ;;
@@ -1076,6 +1307,7 @@ _orch() {
         'history:Show archived workstreams'
         'sessions:Discover Claude sessions'
         'resume:Resume a linked Claude session'
+        'open:Attach a tmux window to a Claude session'
         'watch:Open a tmux window for a workstream worktree'
         'spawn:Spawn a new Claude session for a workstream'
         'export:Export active workstreams as markdown'
@@ -1110,7 +1342,8 @@ _orch() {
                         '-c[Category]:category:($categories)' \\
                         '-S[Sort]:sort:($sorts)' \\
                         '--search[Search]:query:' \\
-                        '--archived[Show archived]'
+                        '--archived[Show archived]' \\
+                        '--json[Machine-readable output]'
                     ;;
                 show|link|note|archive|unarchive|resume|watch|spawn)
                     _arguments '1:id:'
@@ -1124,7 +1357,8 @@ _orch() {
                 sessions)
                     _arguments \\
                         '-p[Project filter]:project:' \\
-                        '-n[Limit]:limit:'
+                        '-n[Limit]:limit:' \\
+                        '--json[Machine-readable output]'
                     ;;
                 export)
                     _arguments '-o[Output file]:file:_files'
@@ -1156,6 +1390,8 @@ quick start:
   orch add "fix auth bug" -c work      Add a new workstream
   orch brain "fix auth, review MR"     Parse brain dump into workstreams
   orch sessions                        Discover Claude sessions
+  orch open 511de923                   Attach a window to a Claude session
+  orch list --json | jq                Machine-readable output
 
 use 'orch <command> --help' for detailed help on each command.
 """,
@@ -1197,6 +1433,12 @@ examples:
   orch list --search "auth"            Search by name/description
   orch list --archived                 Show archived items
   orch list -c work -S category        Work items sorted by category
+  orch list --json | jq '.[].name'     Machine-readable output
+
+--json writes a JSON array and nothing else to stdout \u2014 no color, no
+footer \u2014 with any error on stderr. Fields: id, name, category,
+archived, repo_path, links[], todos{pending,done}, auto_running,
+auto_current_todo_id.
 """)
     p_list.add_argument("-c", "--category", choices=[c.value for c in Category],
                        help="Filter by category")
@@ -1204,6 +1446,8 @@ examples:
                        default="updated", help="Sort order (default: updated)")
     p_list.add_argument("--search", help="Search by name/description")
     p_list.add_argument("--archived", action="store_true", help="Show archived items instead")
+    p_list.add_argument("--json", action="store_true",
+                       help="Emit a JSON array on stdout (no color, no footer); errors on stderr")
 
     # show
     p_show = sub.add_parser("show", help="Show full details of a workstream",
@@ -1289,13 +1533,21 @@ examples:
   orch sessions                        Show recent sessions
   orch sessions -n 5                   Show last 5 sessions
   orch sessions -p orchestrator        Filter by project name
+  orch sessions --json | jq '.[0]'     Machine-readable output
 
 scans ~/.claude/projects/ for JSONL session files. shows token usage,
 token usage, message count, and last activity.
+
+--json writes a JSON array and nothing else to stdout \u2014 no color, no
+footer \u2014 with any error on stderr. Fields: session_id, title,
+project_path, git_branch, is_live, last_activity, message_count,
+last_assistant_message_text (clipped to 300 chars).
 """)
     p_sessions.add_argument("-p", "--project", help="Filter by project path substring")
     p_sessions.add_argument("-n", "--limit", type=int, default=20,
                            help="Max sessions to show (default: 20)")
+    p_sessions.add_argument("--json", action="store_true",
+                           help="Emit a JSON array on stdout (no color, no footer); errors on stderr")
 
     # resume
     p_resume = sub.add_parser("resume", help="Resume a linked Claude session",
@@ -1307,6 +1559,25 @@ link a session first with: orch link <id> claude-session:<session-id>
 in tmux: opens a new window. outside tmux: replaces current process.
 """)
     p_resume.add_argument("id", help="Workstream ID (or prefix)")
+
+    # open
+    p_open = sub.add_parser("open", help="Attach a tmux window to a Claude session",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""\
+examples:
+  orch open 511de923                   By session ID prefix
+  orch open 511de923-3d67-44ed-8c5e-46c8ef8bd09f
+
+resolves the id against the session store; a unique prefix is enough.
+sessions orch spawned live on the 'orch-sessions' tmux socket \u2014 if the
+session's tmux is gone but its transcript survives, it is first revived
+there with `claude --resume`.
+
+in tmux: opens a window in the current session. outside tmux: opens one
+in the default server's 'orch' session, or prints the attach command if
+there is no such session.
+""")
+    p_open.add_argument("session", help="Claude session ID (or unique prefix)")
 
     # watch
     p_watch = sub.add_parser("watch", help="Open a tmux window for a workstream's worktree",
@@ -1509,6 +1780,7 @@ examples:
         "history": cmd_history,
         "sessions": cmd_sessions,
         "resume": cmd_resume,
+        "open": cmd_open,
         "watch": cmd_watch,
         "spawn": cmd_spawn,
         "distill": cmd_distill,
@@ -1528,10 +1800,21 @@ examples:
             handler(args)
         except KeyboardInterrupt:
             print()
+        except BrokenPipeError:
+            # `orch list --json | head` closes the pipe mid-write. That is
+            # the consumer's prerogative, not an error — and redirecting
+            # stdout to devnull keeps the interpreter from complaining
+            # about it again on the way out.
+            os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
+            sys.exit(0)
         except SystemExit:
             raise
         except Exception as e:
-            print(f"\n  {_c('red', 'Error:')} {e}")
+            if getattr(args, "json", False):
+                # stdout belongs to the payload, even when there isn't one.
+                sys.stderr.write(f"  Error: {e}\n")
+            else:
+                print(f"\n  {_c('red', 'Error:')} {e}")
             sys.exit(1)
     elif args.command is None:
         # No command given — launch TUI by default
