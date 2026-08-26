@@ -93,7 +93,7 @@ def _die(msg: str) -> None:
     sys.exit(1)
 
 
-# ─── Machine-readable output ────────────────────────────────────
+# ─── Machine-readable output ─────────────────────────────────────────
 #
 # `--json` is the one convention for scripting orch, and these helpers are
 # what makes it one: the payload is the only thing on stdout — no color,
