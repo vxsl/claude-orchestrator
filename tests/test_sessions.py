@@ -716,3 +716,136 @@ class TestRustDbConnectionIsThreadLocal:
 
         assert len(results) == 1600
         assert all(r == 7 for r in results), f"bad reads: {set(results)}"
+
+
+# ─── Engine liveness / self-heal ─────────────────────────────────────
+
+class TestEngineLiveness:
+    """A crashed daemon leaves its FIFO behind, so the pipe is not proof
+    of life. Trusting it froze the SQLite DB for hours while 26 sessions
+    on disk stayed invisible to the UI."""
+
+    def test_stale_pipe_alone_does_not_mean_running(self, tmp_path, monkeypatch):
+        import sessions as S
+        pipe = tmp_path / "engine.pipe"
+        pipe.write_text("")
+        monkeypatch.setattr(S, "engine_pipe_path", lambda: str(pipe))
+        monkeypatch.setattr(S, "_engine_daemon_pids", lambda *a, **k: [])
+        assert S.is_rust_engine_running() is False
+
+    def test_live_process_means_running(self, tmp_path, monkeypatch):
+        import sessions as S
+        monkeypatch.setattr(S, "_engine_daemon_pids", lambda *a, **k: [4242])
+        assert S.is_rust_engine_running() is True
+
+    def test_ensure_skips_spawn_when_process_alive(self, monkeypatch):
+        import sessions as S
+        monkeypatch.setattr(S.shutil, "which", lambda _: "/usr/bin/orch-session-engine")
+        monkeypatch.setattr(S, "is_rust_engine_running", lambda: True)
+        spawned = []
+        monkeypatch.setattr(
+            "subprocess.Popen", lambda *a, **k: spawned.append(a) or object()
+        )
+        assert S.ensure_rust_engine_running() is True
+        assert spawned == []
+
+    def test_ensure_spawns_when_only_a_stale_pipe_remains(self, monkeypatch):
+        import sessions as S
+        monkeypatch.setattr(S.shutil, "which", lambda _: "/usr/bin/orch-session-engine")
+        monkeypatch.setattr(S, "is_rust_engine_running", lambda: False)
+        spawned = []
+        monkeypatch.setattr(
+            "subprocess.Popen", lambda *a, **k: spawned.append(a) or object()
+        )
+        assert S.ensure_rust_engine_running() is True
+        assert len(spawned) == 1
+
+
+class TestEngineHealthGate:
+    """_engine_is_healthy() gates the SQLite fast path: unhealthy means the
+    caller must parse the JSONLs instead of serving whatever the dead daemon
+    last wrote."""
+
+    @pytest.fixture(autouse=True)
+    def _reset(self, monkeypatch):
+        import sessions as S
+        monkeypatch.setattr(S, "_engine_heal_last", 0.0)
+        monkeypatch.setattr(S, "_engine_heal_healthy", True)
+        monkeypatch.setattr(S, "_engine_resync_from_gen", None)
+        monkeypatch.setattr(S, "CLAUDE_PROJECTS_DIR", Path.home() / ".claude" / "projects")
+        monkeypatch.delenv("ORCH_NO_ENGINE_HEAL", raising=False)
+
+    def test_healthy_when_daemon_alive(self, monkeypatch):
+        import sessions as S
+        monkeypatch.setattr(S, "is_rust_engine_running", lambda: True)
+        assert S._engine_is_healthy() is True
+
+    def test_unhealthy_and_restarts_when_daemon_dead(self, monkeypatch):
+        import sessions as S
+        calls = []
+        monkeypatch.setattr(S, "is_rust_engine_running", lambda: False)
+        monkeypatch.setattr(S, "ensure_rust_engine_running",
+                            lambda: calls.append(1) or True)
+        monkeypatch.setattr(S, "get_rust_db_generation", lambda: 7)
+        # A spawn is not a resync: the rows on disk are still the dead
+        # daemon's until the generation moves.
+        assert S._engine_is_healthy() is False
+        assert calls == [1]
+
+    def test_stays_unhealthy_until_generation_advances(self, monkeypatch):
+        import sessions as S
+        alive = [False]
+        gen = [7]
+        monkeypatch.setattr(S, "is_rust_engine_running", lambda: alive[0])
+        monkeypatch.setattr(S, "ensure_rust_engine_running", lambda: True)
+        monkeypatch.setattr(S, "get_rust_db_generation", lambda: gen[0])
+
+        assert S._engine_is_healthy() is False   # dead → spawn, record gen 7
+        alive[0] = True
+        monkeypatch.setattr(S, "_engine_heal_last", 0.0)  # defeat the throttle
+        assert S._engine_is_healthy() is False   # up, but gen still 7
+        gen[0] = 8
+        monkeypatch.setattr(S, "_engine_heal_last", 0.0)
+        assert S._engine_is_healthy() is True    # initial sync landed
+
+    def test_unhealthy_when_daemon_cannot_be_started(self, monkeypatch):
+        import sessions as S
+        monkeypatch.setattr(S, "is_rust_engine_running", lambda: False)
+        monkeypatch.setattr(S, "ensure_rust_engine_running", lambda: False)
+        assert S._engine_is_healthy() is False
+
+    def test_no_spawn_when_projects_dir_is_patched(self, tmp_path, monkeypatch):
+        import sessions as S
+        monkeypatch.setattr(S, "CLAUDE_PROJECTS_DIR", tmp_path / "projects")
+        monkeypatch.setattr(S, "is_rust_engine_running",
+                            lambda: pytest.fail("must not probe under a patched dir"))
+        assert S._engine_is_healthy() is True
+
+    def test_disabled_by_env(self, monkeypatch):
+        import sessions as S
+        monkeypatch.setenv("ORCH_NO_ENGINE_HEAL", "1")
+        monkeypatch.setattr(S, "is_rust_engine_running",
+                            lambda: pytest.fail("must not probe when disabled"))
+        assert S._engine_is_healthy() is True
+
+
+class TestSessionBridgeAvailability:
+    def test_unavailable_when_pipe_is_orphaned(self, tmp_path, monkeypatch):
+        import sessions as S
+        from session_bridge import SessionBridge
+        pipe = tmp_path / "engine.pipe"
+        pipe.write_text("")
+        monkeypatch.setattr(S, "is_rust_engine_running", lambda: False)
+        assert SessionBridge(pipe_path=str(pipe)).available is False
+
+    def test_available_when_daemon_alive(self, tmp_path, monkeypatch):
+        import sessions as S
+        from session_bridge import SessionBridge
+        pipe = tmp_path / "engine.pipe"
+        pipe.write_text("")
+        monkeypatch.setattr(S, "is_rust_engine_running", lambda: True)
+        assert SessionBridge(pipe_path=str(pipe)).available is True
+
+    def test_unavailable_when_pipe_missing(self, tmp_path, monkeypatch):
+        from session_bridge import SessionBridge
+        assert SessionBridge(pipe_path=str(tmp_path / "nope.pipe")).available is False

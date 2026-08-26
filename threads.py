@@ -579,7 +579,12 @@ def discover_threads(min_messages: int = 1) -> list[Thread]:
     # Fast path: Rust-precomputed thread clusters.
     # An empty result with non-empty sessions means a session/DB mismatch
     # (e.g. test fixtures or a stale DB) — fall back to Python in that case.
-    db_threads = _discover_threads_from_db(sessions, last_seen)
+    # The health gate matters as much as the emptiness check: a dead daemon
+    # leaves rows behind that still cluster, so this path would keep returning
+    # threads that omit every session created since the daemon died — even
+    # after discover_sessions() correctly fell back to parsing the JSONLs.
+    from sessions import _engine_is_healthy
+    db_threads = _discover_threads_from_db(sessions, last_seen) if _engine_is_healthy() else None
     if db_threads:
         if _PERF_ENABLED:
             _t_db = _time.monotonic()

@@ -37,8 +37,21 @@ class SessionBridge:
 
     @property
     def available(self) -> bool:
-        """True if the notification pipe exists (daemon is running)."""
-        return os.path.exists(self.pipe_path)
+        """True if the daemon is running AND its notification pipe exists.
+
+        The pipe alone is not enough. The daemon mkfifo()s it at startup and
+        never unlinks it, so it outlives a crash — and a bridge attached to
+        that orphaned FIFO waits forever on notifications nobody will send,
+        while the caller skips the watchdog fallback because `available` said
+        yes. Ask whether the process is actually alive.
+        """
+        if not os.path.exists(self.pipe_path):
+            return False
+        try:
+            from sessions import is_rust_engine_running
+        except ImportError:
+            return True  # can't tell — keep the old behaviour
+        return is_rust_engine_running()
 
     def start(self, callback: Callable[[], None]) -> bool:
         """Start listening for notifications in a background thread.

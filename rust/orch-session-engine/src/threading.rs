@@ -87,6 +87,26 @@ fn parse_tz_offset_secs(s: &str) -> i64 {
     sign * (h * 3600 + m * 60)
 }
 
+/// Longest prefix of `s` within `max` bytes that ends on a char boundary.
+///
+/// Naked `&s[..max]` panics when `max` lands inside a multi-byte character,
+/// and a panic here is not cosmetic: it aborts the daemon mid-sync, so the
+/// `threads` table stops being written and every later start dies the same
+/// way. That is what a first user message opening with a box-drawing frame
+/// (`╭───…`, byte 47 inside a '─') did — the SQLite DB froze, and the UI,
+/// which had no way to tell a dead daemon from a quiet one, served hours of
+/// stale rows while new sessions simply did not appear.
+fn char_safe_prefix(s: &str, max: usize) -> &str {
+    if s.len() <= max {
+        return s;
+    }
+    let mut end = max;
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    &s[..end]
+}
+
 // ─── Clustering helpers ───────────────────────────────────────────────────────
 
 fn is_default_branch(b: &str) -> bool {
@@ -147,7 +167,7 @@ fn derive_thread_name(cluster: &[&Session]) -> String {
     if branches.len() == 1 {
         let branch = *branches.iter().next().unwrap();
         if branch.len() > 30 {
-            let truncated = &branch[..30];
+            let truncated = char_safe_prefix(branch, 30);
             // Trim at last '-'
             return truncated
                 .rsplitn(2, '-')
@@ -164,7 +184,7 @@ fn derive_thread_name(cluster: &[&Session]) -> String {
             let first_line = msg.lines().next().unwrap_or("").trim();
             let first_line = first_line.trim_start_matches('#').trim();
             if first_line.len() > 50 {
-                return format!("{}...", &first_line[..47]);
+                return format!("{}...", char_safe_prefix(first_line, 47));
             }
             return first_line.to_string();
         }
@@ -384,5 +404,35 @@ mod tests {
         assert_eq!(t0.session_ids.len(), 1);
         let t1 = threads.iter().find(|t| t.session_ids.contains(&"s1".to_string())).unwrap();
         assert_eq!(t1.session_ids.len(), 2);
+    }
+
+    #[test]
+    fn test_thread_name_from_multibyte_first_message() {
+        // A first user message opening with a box-drawing frame put byte 47
+        // inside a '─' and panicked the daemon mid-sync, which froze the
+        // whole SQLite DB. The name must be truncated on a char boundary.
+        let sessions = vec![Session {
+            session_id: "s1".into(),
+            project_path: "/home/user/proj".into(),
+            started_at: "2024-01-01T00:00:00Z".into(),
+            last_activity: "2024-01-01T00:10:00Z".into(),
+            message_count: 2,
+            first_message: "╭───────────────────────────────────────────────────────────────── Task".into(),
+            ..Default::default()
+        }];
+        let threads = compute_threads(&sessions);
+        assert_eq!(threads.len(), 1);
+        assert!(threads[0].name.ends_with("..."));
+        assert!(threads[0].name.starts_with('╭'));
+    }
+
+    #[test]
+    fn test_char_safe_prefix_never_splits_a_character() {
+        let s = "╭───────────────────────────────────────────────────────────────── Task";
+        for max in 0..s.len() {
+            let got = char_safe_prefix(s, max);   // must not panic
+            assert!(got.len() <= max);
+        }
+        assert_eq!(char_safe_prefix("abc", 10), "abc");
     }
 }

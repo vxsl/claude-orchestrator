@@ -308,20 +308,70 @@ def _discover_sessions_from_db(
         return None
 
 
+def engine_pipe_path() -> str:
+    """Path of the daemon's notification FIFO."""
+    return f"/tmp/orch-session-engine.{os.getuid()}.pipe"
+
+
+def _engine_daemon_pids(binary_name: str = "orch-session-engine") -> list[int]:
+    """PIDs of running orch-session-engine processes, by /proc exe scan.
+
+    Matched on the exe symlink's basename so a daemon still serving a binary
+    that `cargo install` has since replaced ("<path> (deleted)") still counts.
+    Returns [] on systems without /proc — callers must treat that as "unknown",
+    not "dead" (see is_rust_engine_running).
+    """
+    proc_root = Path("/proc")
+    if not proc_root.exists():
+        return []
+    pids: list[int] = []
+    for entry in proc_root.iterdir():
+        if not entry.name.isdigit():
+            continue
+        try:
+            exe = os.readlink(entry / "exe")
+        except (OSError, PermissionError):
+            continue
+        if exe.endswith(" (deleted)"):
+            exe = exe[: -len(" (deleted)")]
+        if os.path.basename(exe) == binary_name:
+            try:
+                pids.append(int(entry.name))
+            except ValueError:
+                continue
+    return pids
+
+
+def is_rust_engine_running() -> bool:
+    """True when a session-engine daemon process is actually alive.
+
+    The FIFO is NOT proof of life: the daemon mkfifo()s it at startup and
+    never unlinks it, so a crashed daemon leaves the pipe behind forever.
+    Trusting the pipe is how a daemon that died at 16:34 kept every caller
+    reading a frozen SQLite DB for hours — 26 sessions on disk simply did
+    not exist as far as the UI was concerned. Check the process instead.
+
+    Falls back to the pipe check only where /proc is unavailable (non-Linux),
+    where we have no better signal.
+    """
+    if not Path("/proc").exists():
+        return os.path.exists(engine_pipe_path())
+    return bool(_engine_daemon_pids())
+
+
 def ensure_rust_engine_running() -> bool:
-    """Start the Rust session engine daemon if not already running.
+    """Start the Rust session engine daemon if it isn't actually running.
 
     Returns True if the daemon is (now) running.
     """
     engine = shutil.which("orch-session-engine")
     if engine is None:
         return False
-    # Check if daemon is already running by looking for its pipe
-    uid = os.getuid()
-    pipe_path = f"/tmp/orch-session-engine.{uid}.pipe"
-    if os.path.exists(pipe_path):
+    if is_rust_engine_running():
         return True
-    # Start daemon in background
+    # Start daemon in background. The existing FIFO (if any) is deliberately
+    # left in place: the new daemon's setup_pipe() reuses that same inode, so
+    # a SessionBridge already listening on it keeps receiving notifications.
     import subprocess
     try:
         subprocess.Popen(
@@ -333,6 +383,61 @@ def ensure_rust_engine_running() -> bool:
         return True
     except OSError:
         return False
+
+
+# Self-heal throttle. discover_sessions() is called from several poll threads;
+# the lock keeps two of them from racing to spawn two daemons onto one DB.
+# The interval drops while we're waiting on a restarted daemon's initial sync,
+# so recovery costs one or two slow reads rather than a quarter minute of them.
+_ENGINE_HEAL_INTERVAL_S: float = 15.0
+_ENGINE_RESYNC_POLL_S: float = 2.0
+_engine_heal_lock = threading.Lock()
+_engine_heal_last: float = 0.0
+_engine_heal_healthy: bool = True
+# Generation observed when we (re)spawned the daemon; None when not waiting.
+_engine_resync_from_gen: Optional[int] = None
+
+
+def _engine_is_healthy() -> bool:
+    """Throttled liveness check that restarts a dead daemon.
+
+    Returns False whenever the SQLite DB cannot be trusted — either the daemon
+    is down and could not be started, or it has just been restarted and has not
+    yet written its initial sync, so the rows still on disk are the dead
+    daemon's. Callers must fall back to parsing the JSONLs in that window;
+    serving the frozen DB instead is precisely the bug this guards.
+    """
+    global _engine_heal_last, _engine_heal_healthy, _engine_resync_from_gen
+    # Never spawn a daemon when the projects dir has been patched out from
+    # under us (tests) or when explicitly disabled.
+    if CLAUDE_PROJECTS_DIR != Path.home() / ".claude" / "projects":
+        return True
+    if os.environ.get("ORCH_NO_ENGINE_HEAL"):
+        return True
+    now = time.monotonic()
+    with _engine_heal_lock:
+        interval = (_ENGINE_RESYNC_POLL_S if _engine_resync_from_gen is not None
+                    else _ENGINE_HEAL_INTERVAL_S)
+        if now - _engine_heal_last < interval:
+            return _engine_heal_healthy
+        _engine_heal_last = now
+
+        if not is_rust_engine_running():
+            started = ensure_rust_engine_running()
+            # Spawning proves nothing about the data: the DB still holds
+            # whatever the dead daemon left. Wait for the generation to move.
+            _engine_resync_from_gen = get_rust_db_generation() if started else None
+            _engine_heal_healthy = False
+        elif _engine_resync_from_gen is not None:
+            gen = get_rust_db_generation()
+            if gen is not None and gen != _engine_resync_from_gen:
+                _engine_resync_from_gen = None  # initial sync landed
+                _engine_heal_healthy = True
+            else:
+                _engine_heal_healthy = False
+        else:
+            _engine_heal_healthy = True
+        return _engine_heal_healthy
 
 
 def _newest_source_mtime(rust_src: Path) -> float:
@@ -368,30 +473,15 @@ def _kill_stale_daemons(binary_path: str) -> int:
     suffix and compare basenames.
     """
     import signal as _signal
-    proc_root = Path("/proc")
-    if not proc_root.exists():
-        return 0
     killed = 0
-    target_name = os.path.basename(binary_path)
-    for entry in proc_root.iterdir():
-        if not entry.name.isdigit():
-            continue
+    for pid in _engine_daemon_pids(os.path.basename(binary_path)):
         try:
-            exe = os.readlink(entry / "exe")
-        except (OSError, PermissionError):
-            continue
-        # Strip "(deleted)" marker that the kernel appends after unlink.
-        if exe.endswith(" (deleted)"):
-            exe = exe[: -len(" (deleted)")]
-        if os.path.basename(exe) != target_name:
-            continue
-        try:
-            os.kill(int(entry.name), _signal.SIGTERM)
+            os.kill(pid, _signal.SIGTERM)
             killed += 1
         except (OSError, ProcessLookupError):
             pass
     # Remove the pipe so ensure_rust_engine_running spawns a fresh daemon.
-    pipe = Path(f"/tmp/orch-session-engine.{os.getuid()}.pipe")
+    pipe = Path(engine_pipe_path())
     try:
         pipe.unlink()
     except FileNotFoundError:
@@ -1414,7 +1504,12 @@ def discover_sessions(
     # Fast path: read from Rust engine's SQLite DB.
     # Only use when CLAUDE_PROJECTS_DIR is the real default (not patched in tests).
     _real_projects = Path.home() / ".claude" / "projects"
-    if CLAUDE_PROJECTS_DIR == _real_projects:
+    # A dead daemon stops maintaining the DB but leaves it readable, so the
+    # fast path would happily serve frozen data forever. Confirm the daemon is
+    # alive (restarting it if not) before trusting the DB; when it can't be
+    # revived, fall through to the slower Python parse of the JSONLs, which is
+    # at least correct.
+    if CLAUDE_PROJECTS_DIR == _real_projects and _engine_is_healthy():
         db_sessions = _discover_sessions_from_db(limit, project_filter, min_messages)
         if db_sessions is not None:
             # The DB's is_live field may be stale if the daemon isn't running.
