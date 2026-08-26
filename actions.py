@@ -580,6 +580,10 @@ def get_worktree_git_status(path: str) -> WorktreeStatus:
         result = subprocess.run(
             ["git", "-C", path, "status", "--porcelain=v1", "--branch"],
             capture_output=True, text=True, timeout=5,
+            # No opportunistic index rewrite: this is a read-only poll, and
+            # letting it take the index lock makes it fight tig and the user's
+            # own git in the same worktree.
+            env={**os.environ, "GIT_OPTIONAL_LOCKS": "0"},
         )
         if result.returncode != 0:
             status.error = result.stderr.strip()[:100]

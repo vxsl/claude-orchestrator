@@ -60,7 +60,7 @@ def _option_list_cursor_down(self) -> None:
 OptionList.action_cursor_up = _option_list_cursor_up
 OptionList.action_cursor_down = _option_list_cursor_down
 
-from config import build_app_bindings
+from config import build_app_bindings, git_status_config
 from models import (
     Category, Link, Store, Workstream,
     _relative_time,
@@ -613,6 +613,7 @@ class OrchestratorApp(App):
             try:
                 self._refresh_preview_sessions()
                 self._sync_tab_bar()
+                self._poll_git_status()
             except Exception:
                 pass
 
@@ -729,8 +730,15 @@ class OrchestratorApp(App):
             self._throbber_paused = False
 
     def _start_git_polling(self):
+        cfg = git_status_config()
+        if not cfg["enabled"]:
+            return  # [git_status] enabled = false / ORCH_GIT_STATUS=0
+        poller = self.state.git_status_poller
+        poller.budget_s = cfg["budget_seconds"]
+        poller.max_batch = cfg["max_batch"]
+        poller.min_interval_s = max(1.0, cfg["interval"] - 5.0)
         self._poll_git_status()
-        self.set_interval(30, self._poll_git_status)
+        self.set_interval(cfg["interval"], self._poll_git_status)
 
     def _start_worktree_polling(self):
         self._poll_worktrees()
@@ -3253,7 +3261,7 @@ class OrchestratorApp(App):
         if cmd:
             with self.suspend():
                 subprocess.run(cmd, cwd=cwd)
-            self._poll_git_status()
+            self._poll_git_status(ws.repo_path)
 
     def action_ticket(self, query: str = ""):
         """Open ticket picker — browse Jira tickets from cache."""
@@ -3415,7 +3423,7 @@ class OrchestratorApp(App):
         success, msg = run_git_action(action_name, cwd)
         if success:
             self.notify(msg, timeout=2)
-            self._poll_git_status()
+            self._poll_git_status(ws.repo_path)
         else:
             self.notify(msg, severity="error", timeout=3)
 
@@ -3478,37 +3486,47 @@ class OrchestratorApp(App):
 
     # ── Git status polling ──
 
-    def _poll_git_status(self):
+    def _poll_git_status(self, *invalidate: str):
+        """Run a poll cycle. Named paths jump the min-interval gate — use that
+        after an action that just changed a tree (ship, commit, branch switch)."""
+        self.state.git_status_poller.invalidate(*(p for p in invalidate if p))
         self._do_git_status_check()
+
+    def _watched_repo_paths(self) -> set[str]:
+        """Repo paths the user is actually looking at — open tabs + the cursor.
+
+        These skip the poller's round-robin queue, so the rows on screen stay
+        fresh even though a cycle only covers a slice of the tracked paths.
+        """
+        watched: set[str] = set()
+        for tab in self.tabs.tabs:
+            ws = self.state.get_ws(tab.ws_id) if tab.ws_id else None
+            if ws is not None and ws.repo_path:
+                watched.add(ws.repo_path)
+        try:
+            cursor_ws = self._selected_ws()
+        except Exception:
+            cursor_ws = None
+        if cursor_ws is not None and cursor_ws.repo_path:
+            watched.add(cursor_ws.repo_path)
+        return watched
 
     @work(thread=True, exclusive=True, group="git_status")
     def _do_git_status_check(self):
         from actions import get_worktree_git_status
-        # Collect all unique repo paths
-        repo_paths: set[str] = set()
-        for ws in self.state.store.active:
-            if ws.repo_path:
-                repo_paths.add(ws.repo_path)
-
-        new_cache: dict[str, object] = {}
-        for path in repo_paths:
-            new_cache[path] = get_worktree_git_status(path)
-
-        # Check if anything changed
-        old_keys = set(self.state.git_status_cache.keys())
-        if old_keys != set(new_cache.keys()) or any(
-            getattr(new_cache.get(k), 'is_dirty', None) != getattr(self.state.git_status_cache.get(k), 'is_dirty', None)
-            or getattr(new_cache.get(k), 'branch', None) != getattr(self.state.git_status_cache.get(k), 'branch', None)
-            or getattr(new_cache.get(k), 'ahead', None) != getattr(self.state.git_status_cache.get(k), 'ahead', None)
-            or getattr(new_cache.get(k), 'behind', None) != getattr(self.state.git_status_cache.get(k), 'behind', None)
-            for k in new_cache
-        ):
-            self.call_from_thread(self._apply_git_status, new_cache)
+        if not self._ui_visible:
+            return  # nobody can see the dirty badges; don't pay for them
+        tracked = self.state.tracked_repo_paths()
+        priority = self.state.hot_repo_paths() | self._watched_repo_paths()
+        fresh = self.state.git_status_poller.poll(
+            tracked, get_worktree_git_status, priority)
+        if fresh or set(self.state.git_status_cache) - tracked:
+            self.call_from_thread(self._apply_git_status, fresh, tracked)
 
     @perf_trace()
-    def _apply_git_status(self, new_cache: dict):
-        self.state.git_status_cache = new_cache
-        self._refresh_ws_table_debounced()
+    def _apply_git_status(self, fresh: dict, tracked: set[str] | None = None):
+        if self.state.apply_git_status(fresh, tracked):
+            self._refresh_ws_table_debounced()
 
     # ── Worktree discovery polling ──
 

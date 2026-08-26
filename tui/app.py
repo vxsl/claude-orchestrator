@@ -311,6 +311,14 @@ class App:
         if visible and not was:
             self._painter.invalidate()
             self._paint()  # catch-up
+            self.on_became_visible()
+
+    def on_became_visible(self) -> None:
+        """Hook: the terminal came back on screen after being hidden.
+
+        Subclasses catch up on whatever their ticks skipped while hidden.
+        The engine itself has already repainted by this point.
+        """
 
     # ── terminal-pane ticker ──────────────────────────────────────
 

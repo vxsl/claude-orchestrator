@@ -254,6 +254,97 @@ COMMAND_REGISTRY: list[CommandDef] = [
 ]
 
 
+# ─── Git-status poll budget ──────────────────────────────────────────
+# A `git status` on a large worktree costs 0.4-2.5s of CPU, and orch tracks
+# every worktree it has ever seen — hundreds of them here. Refreshing all of
+# them every tick asks for minutes of CPU per 30s cycle: the pass never
+# finishes before the next one starts, and on the Textual engine (where an
+# exclusive thread worker cannot be cancelled mid-subprocess) the passes pile
+# up until several `git status` processes run at once. So the poller spends a
+# wall-clock budget per cycle instead of trying to cover everything.
+
+GIT_STATUS_BUDGET_S: float = 1.5   # wall-clock spent per cycle
+GIT_STATUS_MAX_BATCH: int = 24     # ceiling for cheap repos, where the budget never binds
+GIT_STATUS_MIN_INTERVAL_S: float = 25.0  # don't re-ask a path sooner than this
+GIT_STATUS_HOT_LIMIT: int = 8      # most-recently-touched workstreams that skip the queue
+
+
+class GitStatusPoller:
+    """Bounded, priority-first scheduling for the repo git-status poller.
+
+    Each cycle: refresh the paths the caller flags as worth watching (the open
+    tabs, the cursor, the most recently touched workstreams), then work
+    through everyone else least-recently-polled first, stopping when the
+    wall-clock budget or the batch ceiling is hit. Paths not reached keep
+    their previous cached status rather than disappearing, so the cost is
+    staleness on rows nobody is looking at — not a pinned core.
+
+    At least one path is always polled, so a budget too small for even a
+    single repo still makes progress instead of stalling forever.
+    """
+
+    def __init__(
+        self,
+        budget_s: float = GIT_STATUS_BUDGET_S,
+        max_batch: int = GIT_STATUS_MAX_BATCH,
+        min_interval_s: float = GIT_STATUS_MIN_INTERVAL_S,
+        clock=_time.monotonic,
+    ) -> None:
+        self.budget_s = budget_s
+        self.max_batch = max_batch
+        self.min_interval_s = min_interval_s
+        self.clock = clock
+        self._last_polled: dict[str, float] = {}
+
+    def order(self, paths, priority=(), now: float | None = None) -> list[str]:
+        """Paths worth asking about this cycle, most deserving first."""
+        now = self.clock() if now is None else now
+        priority = set(priority)
+        hot: list[str] = []
+        cold: list[str] = []
+        for path in paths:
+            if not path:
+                continue
+            last = self._last_polled.get(path)
+            if last is not None and now - last < self.min_interval_s:
+                continue  # asked recently enough; nothing new to say yet
+            (hot if path in priority else cold).append(path)
+        # Never-polled first (-inf), then oldest; path breaks ties so the
+        # order is stable across cycles instead of set-iteration random.
+        key = lambda p: (self._last_polled.get(p, float("-inf")), p)
+        hot.sort(key=key)
+        cold.sort(key=key)
+        return hot + cold
+
+    def poll(self, paths, fetch, priority=()) -> dict:
+        """Run `fetch(path)` over a budgeted batch. Returns what it gathered."""
+        start = self.clock()
+        gathered: dict = {}
+        for path in self.order(paths, priority, now=start):
+            gathered[path] = fetch(path)
+            self._last_polled[path] = self.clock()
+            if (len(gathered) >= self.max_batch
+                    or self.clock() - start >= self.budget_s):
+                break
+        self.forget_except(paths)
+        return gathered
+
+    def invalidate(self, *paths: str) -> None:
+        """Forget when these paths were last polled, so the next cycle re-asks.
+
+        For "I just changed this tree" moments (a commit, a ship, a branch
+        switch): without it the min-interval gate would hold the stale answer.
+        """
+        for path in paths:
+            self._last_polled.pop(path, None)
+
+    def forget_except(self, paths) -> None:
+        """Drop bookkeeping for paths we no longer track (archived, deleted)."""
+        tracked = set(paths)
+        for gone in [p for p in self._last_polled if p not in tracked]:
+            del self._last_polled[gone]
+
+
 def git_panes_enabled(owner) -> bool:
     """The "show embedded tig panes" preference, read off a screen/view's app.
 
@@ -813,6 +904,9 @@ class AppState:
         self._thread_by_id: dict[str, Thread] = {}
         self._sessions_by_id: dict[str, ClaudeSession] = {}
         self.git_status_cache: dict[str, object] = {}  # path -> WorktreeStatus
+        # Merged into, never replaced: a cycle only refreshes a budgeted slice
+        # of the tracked paths (see GitStatusPoller).
+        self.git_status_poller = GitStatusPoller()
         self.sessions_loaded: bool = False  # True after first session discovery completes
         # Global session content-search state (cross-workstream search from home).
         # search_mode toggles the home '/' input between filtering workstreams
@@ -1030,6 +1124,48 @@ class AppState:
                 if _isdir_cached(expanded):
                     dirs.add(expanded)
         return dirs
+
+    # ── Git status ───────────────────────────────────────────────────
+
+    def tracked_repo_paths(self) -> set[str]:
+        """Every repo path the git-status poller is responsible for."""
+        return {ws.repo_path for ws in self.store.active if ws.repo_path}
+
+    def hot_repo_paths(self, limit: int = GIT_STATUS_HOT_LIMIT) -> set[str]:
+        """Repo paths of the most recently touched workstreams.
+
+        These are the trees most likely to be changing under us, so they skip
+        the round-robin queue and get refreshed every cycle. The engines union
+        this with whatever the user is actually looking at (open tabs, cursor).
+        """
+        recent = sorted(
+            self.store.active, key=lambda w: w.updated_at or "", reverse=True
+        )[:max(0, limit)]
+        return {ws.repo_path for ws in recent if ws.repo_path}
+
+    def apply_git_status(self, fresh: dict, tracked=None) -> bool:
+        """Merge a poll's results into the cache. Returns True if anything moved.
+
+        Merges rather than replaces because a cycle only covers a slice; the
+        untouched entries are still the best answer we have. Paths no longer
+        tracked are pruned so the cache can't outlive its workstreams.
+        """
+        cache = self.git_status_cache
+        changed = False
+        for path, status in fresh.items():
+            old = cache.get(path)
+            if old is None or any(
+                getattr(status, attr, None) != getattr(old, attr, None)
+                for attr in ("is_dirty", "has_staged", "has_unstaged",
+                             "branch", "ahead", "behind")
+            ):
+                changed = True
+            cache[path] = status
+        if tracked is not None:
+            for gone in [p for p in cache if p not in tracked]:
+                del cache[gone]
+                changed = True
+        return changed
 
     def known_repos(self) -> list[str]:
         """Unique repo paths from session history + workstream repo_path values.

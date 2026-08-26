@@ -766,6 +766,140 @@ class TestUnifiedItems:
         assert len(items) == 6
 
 
+# ─── Git-status poll budget ──────────────────────────────────────────
+
+class FakeClock:
+    def __init__(self):
+        self.t = 1000.0
+
+    def __call__(self):
+        return self.t
+
+    def advance(self, dt):
+        self.t += dt
+
+
+class TestGitStatusPoller:
+    def _poller(self, **kw):
+        from state import GitStatusPoller
+        clock = FakeClock()
+        kw.setdefault("min_interval_s", 25.0)
+        return GitStatusPoller(clock=clock, **kw), clock
+
+    def test_budget_caps_a_cycle(self):
+        """A pass stops at the budget instead of walking every path."""
+        poller, clock = self._poller(budget_s=1.0)
+        paths = [f"/r{i}" for i in range(100)]
+
+        def fetch(path):
+            clock.advance(0.4)  # a big worktree
+            return path
+
+        got = poller.poll(paths, fetch)
+        # 0.4 + 0.4 + 0.4 crosses 1.0s on the third, so three then stop.
+        assert len(got) == 3
+        assert set(got) <= set(paths)
+
+    def test_max_batch_caps_cheap_repos(self):
+        """Where the budget never binds, the batch ceiling still does."""
+        poller, _ = self._poller(budget_s=10.0, max_batch=5)
+        got = poller.poll([f"/r{i}" for i in range(100)], lambda p: p)
+        assert len(got) == 5
+
+    def test_always_polls_at_least_one(self):
+        """A budget too small for a single repo must still make progress."""
+        poller, clock = self._poller(budget_s=0.0)
+
+        def fetch(path):
+            clock.advance(5.0)
+            return path
+
+        assert len(poller.poll(["/a", "/b", "/c"], fetch)) == 1
+
+    def test_round_robin_covers_everything(self):
+        """Successive cycles work through the queue rather than re-asking."""
+        poller, clock = self._poller(budget_s=10.0, max_batch=2)
+        paths = ["/a", "/b", "/c", "/d"]
+        seen = set()
+        for _ in range(2):
+            seen |= set(poller.poll(paths, lambda p: p))
+            clock.advance(30)  # past min_interval
+        assert seen == set(paths)
+
+    def test_priority_paths_go_first(self):
+        poller, clock = self._poller(budget_s=10.0, max_batch=1)
+        paths = ["/a", "/b", "/c"]
+        assert list(poller.poll(paths, lambda p: p, priority={"/c"})) == ["/c"]
+        clock.advance(30)
+        # /c is priority again, and least-recently-polled ties are broken by
+        # path, so a second cycle re-asks /c rather than starving it.
+        assert list(poller.poll(paths, lambda p: p, priority={"/c"})) == ["/c"]
+
+    def test_min_interval_skips_a_just_polled_path(self):
+        poller, clock = self._poller(budget_s=10.0, max_batch=10, min_interval_s=25.0)
+        assert set(poller.poll(["/a"], lambda p: p)) == {"/a"}
+        clock.advance(5)
+        assert poller.poll(["/a"], lambda p: p) == {}
+        clock.advance(25)
+        assert set(poller.poll(["/a"], lambda p: p)) == {"/a"}
+
+    def test_invalidate_beats_the_min_interval(self):
+        poller, clock = self._poller(budget_s=10.0, max_batch=10)
+        poller.poll(["/a"], lambda p: p)
+        clock.advance(1)
+        assert poller.poll(["/a"], lambda p: p) == {}
+        poller.invalidate("/a")
+        assert set(poller.poll(["/a"], lambda p: p)) == {"/a"}
+
+    def test_untracked_paths_are_forgotten(self):
+        poller, _ = self._poller(budget_s=10.0, max_batch=10)
+        poller.poll(["/a", "/b"], lambda p: p)
+        poller.poll(["/a"], lambda p: p)  # /b no longer tracked
+        assert set(poller._last_polled) == {"/a"}
+
+    def test_falsy_paths_are_skipped(self):
+        poller, _ = self._poller(budget_s=10.0, max_batch=10)
+        assert poller.poll(["", None, "/a"], lambda p: p) == {"/a": "/a"}
+
+
+class TestApplyGitStatus:
+    def test_merge_keeps_unpolled_entries(self, state):
+        """A cycle covers a slice; the rest must not vanish from the cache."""
+        from actions import WorktreeStatus
+        state.git_status_cache = {
+            "/a": WorktreeStatus(path="/a", branch="main"),
+            "/b": WorktreeStatus(path="/b", branch="topic"),
+        }
+        fresh = {"/a": WorktreeStatus(path="/a", branch="main", is_dirty=True)}
+        assert state.apply_git_status(fresh, {"/a", "/b"}) is True
+        assert set(state.git_status_cache) == {"/a", "/b"}
+        assert state.git_status_cache["/a"].is_dirty is True
+        assert state.git_status_cache["/b"].branch == "topic"
+
+    def test_unchanged_status_is_not_a_change(self, state):
+        """An identical result must not trigger a table rebuild."""
+        from actions import WorktreeStatus
+        first = {"/a": WorktreeStatus(path="/a", branch="main")}
+        assert state.apply_git_status(first, {"/a"}) is True
+        same = {"/a": WorktreeStatus(path="/a", branch="main")}
+        assert state.apply_git_status(same, {"/a"}) is False
+
+    def test_untracked_paths_are_pruned(self, state):
+        from actions import WorktreeStatus
+        state.apply_git_status(
+            {"/a": WorktreeStatus(path="/a"), "/b": WorktreeStatus(path="/b")},
+            {"/a", "/b"},
+        )
+        assert state.apply_git_status({}, {"/a"}) is True
+        assert set(state.git_status_cache) == {"/a"}
+
+    def test_tracked_none_leaves_the_cache_alone(self, state):
+        from actions import WorktreeStatus
+        state.apply_git_status({"/a": WorktreeStatus(path="/a")}, {"/a"})
+        state.apply_git_status({}, None)
+        assert set(state.git_status_cache) == {"/a"}
+
+
 # ─── View toggles ────────────────────────────────────────────────────
 
 class TestGitPanesToggle:

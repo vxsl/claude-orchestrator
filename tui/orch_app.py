@@ -21,6 +21,7 @@ import time
 from pathlib import Path
 
 from actions import ui_is_visible, ws_working_dir
+from config import git_status_config
 from models import Store
 from session_bridge import SessionBridge
 from session_launch import auto_link_session, claude_jsonl_path
@@ -132,7 +133,14 @@ class OrchApp(App):
 
         # Staggered 30s pollers (5/10/15/20s offsets, port of on_mount).
         self.every(30, self._do_tmux_check, thread=True)
-        self.every(30, self._do_git_status_check, thread=True, jitter_start=5)
+        git_cfg = git_status_config()
+        if git_cfg["enabled"]:
+            poller = self.state.git_status_poller
+            poller.budget_s = git_cfg["budget_seconds"]
+            poller.max_batch = git_cfg["max_batch"]
+            poller.min_interval_s = max(1.0, git_cfg["interval"] - 5.0)
+            self.every(git_cfg["interval"], self._do_git_status_check,
+                       thread=True, jitter_start=5)
         self.every(30, self._do_worktree_check, thread=True, jitter_start=10)
         self.every(30, self._do_poll_sessions, thread=True, jitter_start=15)
         # Liveness backstop goes through the same rate limiter as watcher
@@ -627,22 +635,45 @@ class OrchApp(App):
         if self.state.update_tmux_status(paths, names):
             self._data_changed()
 
+    def on_became_visible(self) -> None:
+        """Back on screen: refresh the git badges the hidden ticks skipped."""
+        if self._bg_started:
+            self._run_in_thread("git_status", self._do_git_status_check)
+
+    def _watched_repo_paths(self) -> set[str]:
+        """Repo paths the user is actually looking at — open tabs + the cursor.
+
+        These skip the poller's round-robin queue, so the rows on screen stay
+        fresh even though a cycle only covers a slice of the tracked paths.
+        """
+        watched: set[str] = set()
+        for tab in self.tabs.tabs:
+            ws = self.state.get_ws(tab.ws_id) if tab.ws_id else None
+            if ws is not None and ws.repo_path:
+                watched.add(ws.repo_path)
+        try:
+            cursor_ws = self.home._selected_ws()
+        except Exception:
+            cursor_ws = None
+        if cursor_ws is not None and cursor_ws.repo_path:
+            watched.add(cursor_ws.repo_path)
+        return watched
+
     def _do_git_status_check(self) -> None:
         from actions import get_worktree_git_status
 
-        repo_paths = {ws.repo_path for ws in self.state.store.active if ws.repo_path}
-        new_cache = {path: get_worktree_git_status(path) for path in repo_paths}
-        old = self.state.git_status_cache
-        if set(old.keys()) != set(new_cache.keys()) or any(
-            getattr(new_cache.get(k), attr, None) != getattr(old.get(k), attr, None)
-            for k in new_cache
-            for attr in ("is_dirty", "branch", "ahead", "behind")
-        ):
-            self.call_from_thread(self._apply_git_status, new_cache)
+        if not self.ui_visible:
+            return  # nobody can see the dirty badges; don't pay for them
+        tracked = self.state.tracked_repo_paths()
+        priority = self.state.hot_repo_paths() | self._watched_repo_paths()
+        fresh = self.state.git_status_poller.poll(
+            tracked, get_worktree_git_status, priority)
+        if fresh or set(self.state.git_status_cache) - tracked:
+            self.call_from_thread(self._apply_git_status, fresh, tracked)
 
-    def _apply_git_status(self, new_cache: dict) -> None:
-        self.state.git_status_cache = new_cache
-        self._data_changed()
+    def _apply_git_status(self, fresh: dict, tracked: set[str] | None = None) -> None:
+        if self.state.apply_git_status(fresh, tracked):
+            self._data_changed()
 
     def _do_worktree_check(self) -> None:
         changed = self.state.discover_and_enrich_worktrees()

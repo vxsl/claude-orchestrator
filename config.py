@@ -167,6 +167,63 @@ AUTO_QUOTA_DEFAULTS: dict = {
 }
 
 
+# ── Git-status poller ─────────────────────────────────────────────────
+# `git status` on a large worktree costs real CPU and orch tracks every
+# worktree it has seen, so the poller works through them on a per-cycle
+# wall-clock budget (see state.GitStatusPoller). Configure under
+# [git_status] in config.toml:
+#
+#   [git_status]
+#   enabled = true          # false stops the poller entirely (no dirty badges)
+#   interval = 30           # seconds between cycles
+#   budget_seconds = 1.5    # wall-clock spent per cycle
+#   max_batch = 24          # ceiling for cheap repos, where the budget never binds
+#
+# ORCH_GIT_STATUS=0/1 overrides `enabled` for a single run.
+
+GIT_STATUS_DEFAULTS: dict = {
+    "enabled": True,
+    "interval": 30.0,
+    # Duplicated as plain data so config stays importable without state.py.
+    "budget_seconds": 1.5,
+    "max_batch": 24,
+}
+
+
+def git_status_config() -> dict:
+    """Resolved poller settings: {'enabled', 'interval', 'budget_seconds', 'max_batch'}.
+
+    Precedence: ORCH_GIT_STATUS env var > [git_status] in config.toml >
+    GIT_STATUS_DEFAULTS. A malformed or non-positive value falls back to the
+    default rather than raising — a typo must not stop orch from starting, and
+    must not turn the budget into "poll nothing" or "poll everything".
+    """
+    import os
+
+    section = load_config().get("git_status", {})
+    if not isinstance(section, dict):
+        section = {}
+
+    enabled = bool(section.get("enabled", GIT_STATUS_DEFAULTS["enabled"]))
+    env = os.environ.get("ORCH_GIT_STATUS")
+    if env is not None and env.strip() != "":
+        enabled = env.strip().lower() not in ("0", "false", "no", "off")
+
+    def _positive(key, cast):
+        try:
+            value = cast(section.get(key, GIT_STATUS_DEFAULTS[key]))
+        except (TypeError, ValueError):
+            return cast(GIT_STATUS_DEFAULTS[key])
+        return value if value > 0 else cast(GIT_STATUS_DEFAULTS[key])
+
+    return {
+        "enabled": enabled,
+        "interval": _positive("interval", float),
+        "budget_seconds": _positive("budget_seconds", float),
+        "max_batch": _positive("max_batch", int),
+    }
+
+
 def auto_quota_config() -> dict:
     """Resolved quota-gate settings: {'enabled', 'percent', 'kinds'}.
 
