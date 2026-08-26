@@ -24,7 +24,7 @@ from textual.message import Message
 from textual.screen import Screen
 from textual.widgets import Input, OptionList, Static
 
-from config import get_session_key, key_label, key_set
+from config import get_key, get_session_key, key_label, key_set
 from models import Link, Store, Workstream
 from rendering import (
     BG_RAISED, BG_BASE, BG_CHROME, BG_SURFACE,
@@ -47,7 +47,9 @@ from widgets import FuzzyPicker
 # reaches claude as a plain yank.
 _AUTO_MODE_KEYS = get_session_key("toggle_auto_mode")
 _AUTO_MODE_LABEL = key_label(_AUTO_MODE_KEYS)
-_GIT_PANES_KEYS = get_session_key("toggle_git_panes")
+# Not a SESSION_KEYS entry: toggle_git_panes is an app-level action (home
+# binds it too), it just also has to reach us past the PTY.
+_GIT_PANES_KEYS = get_key("toggle_git_panes")
 _GIT_PANES_LABEL = key_label(_GIT_PANES_KEYS)
 
 # Keys that pass through the TerminalWidget to the screen for panel navigation

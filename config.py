@@ -77,9 +77,6 @@ SESSION_KEYS: dict[str, tuple[str, str]] = {
     # plus implementer sessions, and ctrl+y is muscle-memory yank inside
     # claude's input line — it was being hit by accident.
     "toggle_auto_mode": ("f9", "Auto mode"),
-    # Same key as the app-level binding (config.DEFAULT_KEYS) so one
-    # override in config.toml moves it on every surface.
-    "toggle_git_panes": ("f8", "Git panes"),
 }
 
 
