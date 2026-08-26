@@ -59,6 +59,9 @@ DEFAULT_KEYS: dict[str, tuple[str, str, bool, bool]] = {
     "command_palette": ("colon", ":", True, False),
     # Other
     "toggle_preview": ("p", "", False, False),
+    # Embedded tig panes. f8 rather than a letter: it also has to work on the
+    # session screen, where letters go to claude.
+    "toggle_git_panes": ("f8", "", False, False),
     "refresh": ("R", "", False, False),
     "help": ("question_mark", "?", True, False),
     "quit": ("q", "Quit", True, False),
@@ -74,6 +77,9 @@ SESSION_KEYS: dict[str, tuple[str, str]] = {
     # plus implementer sessions, and ctrl+y is muscle-memory yank inside
     # claude's input line — it was being hit by accident.
     "toggle_auto_mode": ("f9", "Auto mode"),
+    # Same key as the app-level binding (config.DEFAULT_KEYS) so one
+    # override in config.toml moves it on every surface.
+    "toggle_git_panes": ("f8", "Git panes"),
 }
 
 

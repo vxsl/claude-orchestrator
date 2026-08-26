@@ -67,8 +67,12 @@ from actions import (
 )
 from terminal import TerminalWidget
 from notifications import Notification, dismiss_notification, dismiss_all_for_dirs
-from state import fuzzy_match, fuzzy_match_positions, content_search, SessionSearchResult
+from state import (
+    fuzzy_match, fuzzy_match_positions, content_search, SessionSearchResult,
+    git_panes_enabled,
+)
 from widgets import FuzzyPicker, FuzzyPickerScreen
+from config import get_key, key_label
 from profile_app import perf_trace
 
 
@@ -232,6 +236,8 @@ class HelpScreen(FuzzyPickerScreen):
             K("flt-search", "/", "Search session content"),
             K("cmd-palette", ":", "Command palette"),
             K("help", "?", "This help"),
+            H("Panels"),
+            K("ws-gitpanes", "F8", "Toggle the git (tig) panes — off stops their polling"),
         ]
 
     @classmethod
@@ -247,6 +253,7 @@ class HelpScreen(FuzzyPickerScreen):
             K("sess-back", "Ctrl+H", "Detach and go back (session keeps running)"),
             K("sess-back2", "Ctrl+\\", "Detach and go back (alternate)"),
             K("sess-panel", "Ctrl+J / K", "Cycle between terminal and tig panels"),
+            K("sess-gitpanes", "F8", "Toggle the git (tig) panes — off stops their polling"),
             K("sess-zoom", "Ctrl+Z", "Zoom current panel full-screen"),
             K("sess-archive", "Ctrl+Space", "Archive session and go back"),
             H("Session"),
@@ -953,6 +960,7 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         Binding("x", "close_tab", "Close"),
         Binding("u", "archive", "Archive"),
         Binding("p", "peek_session", "Peek", priority=True),
+        Binding(get_key("toggle_git_panes"), "toggle_git_panes", "Git panes", show=False),
         Binding("h", "go_back", show=False),
         Binding("enter,l", "select_session", show=False),
         Binding("y", "yank_resume_cmd", "Yank cmd"),
@@ -1104,6 +1112,9 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         color: {C_DIM};
         dock: bottom;
     }}
+    .panel-hidden {{
+        display: none;
+    }}
     """
 
     _option_list_id = "detail-sessions"
@@ -1144,8 +1155,12 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         self._cwd = ws_working_dir(ws)
         self._tigrc_path: str | None = None
         self._tig_env: dict[str, str] = {}
-        self._sidebar_enabled = self._detect_git_sidebar()
-        if self._sidebar_enabled:
+        # Two flags, not one: _git_available says the workstream *could* show
+        # tig, _sidebar_enabled says it currently does. The panes are composed
+        # whenever they're available so F8 can reveal them without a remount.
+        self._git_available = self._detect_git_sidebar()
+        self._sidebar_enabled = self._git_available and git_panes_enabled(self)
+        if self._git_available:
             self._tigrc_path = generate_tig_tigrc(subtle=True)
             self._tig_env = {"TIGRC_USER": self._tigrc_path, "GIT_OPTIONAL_LOCKS": "0"}
 
@@ -1208,8 +1223,11 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
                     yield Static(f"[{C_DIM}]Empty[/{C_DIM}]", id="detail-no-archived")
 
             with Horizontal(id="detail-lower"):
-                if self._sidebar_enabled:
-                    with Vertical(id="detail-tig-status-wrap", classes="detail-tig-wrap"):
+                tig_hide = "" if self._sidebar_enabled else " panel-hidden"
+                body_hide = " panel-hidden" if self._sidebar_enabled else ""
+                if self._git_available:
+                    with Vertical(id="detail-tig-status-wrap",
+                                  classes="detail-tig-wrap" + tig_hide):
                         yield TerminalWidget(
                             command="tig status",
                             env=self._tig_env,
@@ -1217,7 +1235,8 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
                             passthrough_keys={"ctrl+j", "ctrl+k", "ctrl+h", "backspace"},
                             id="detail-tig-status",
                         )
-                    with Vertical(id="detail-tig-log-wrap", classes="detail-tig-wrap"):
+                    with Vertical(id="detail-tig-log-wrap",
+                                  classes="detail-tig-wrap" + tig_hide):
                         yield TerminalWidget(
                             command="tig",
                             env=self._tig_env,
@@ -1225,6 +1244,9 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
                             passthrough_keys={"ctrl+j", "ctrl+k", "ctrl+h", "backspace"},
                             id="detail-tig-log",
                         )
+                    with VerticalScroll(id="detail-scroll",
+                                        classes=body_hide.strip()):
+                        yield Static(self._render_body(), id="detail-body")
                 else:
                     with VerticalScroll(id="detail-scroll"):
                         yield Static(self._render_body(), id="detail-body")
@@ -1276,11 +1298,7 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         except Exception:
             pass  # body not present when tig sidebar is active
         if self._sidebar_enabled:
-            for tw in self.query(TerminalWidget):
-                try:
-                    tw.start()
-                except Exception:
-                    pass
+            self._start_tig_panes()
         self._update_pane_labels()
         olist = self.query_one("#detail-sessions", OptionList)
         if olist.option_count > 0 and olist.highlighted is None:
@@ -1294,6 +1312,9 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
             return  # on_mount handles first activation
         # Refresh workstream data (may have changed while screen was suspended)
         self.ws = self.store.get(self.ws.id) or self.ws
+        # The preference may have been flipped on another screen while we were
+        # covered — a tab kept mounted must not come back with stale panes.
+        self.sync_git_panes()
         # Fast synchronous work: update the title from current ws data and focus.
         # The session list is already rendered from the last visit (at most 1s stale)
         # so we skip _load_detail_sessions here and defer it to the next frame.
@@ -1335,12 +1356,13 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
             self._refresh_timer = None
 
     def on_unmount(self):
-        if self._sidebar_enabled:
-            for tw in self.query(TerminalWidget):
-                try:
-                    tw.stop()
-                except Exception:
-                    pass
+        # Unconditional: a pane toggled off mid-session is already stopped and
+        # stop() is a no-op, but a pane toggled back on must not outlive us.
+        for tw in self.query(TerminalWidget):
+            try:
+                tw.stop()
+            except Exception:
+                pass
         if self._tigrc_path:
             try:
                 os.unlink(self._tigrc_path)
@@ -2300,6 +2322,93 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
         self._session_notifications.clear()
         self._load_detail_sessions()
 
+    # ── Embedded tig panes (F8) ──
+
+    _TIG_WIDGET_IDS = ("#detail-tig-status", "#detail-tig-log")
+
+    def _start_tig_panes(self) -> None:
+        for wid in self._TIG_WIDGET_IDS:
+            try:
+                self.query_one(wid, TerminalWidget).start()
+            except Exception:
+                pass
+
+    def _stop_tig_panes(self) -> None:
+        for wid in self._TIG_WIDGET_IDS:
+            try:
+                self.query_one(wid, TerminalWidget).stop()
+            except Exception:
+                pass
+
+    def action_toggle_git_panes(self) -> None:
+        """Show/hide the tig panes, killing their processes when hidden.
+
+        Hiding is the point: two tig children per open detail tab re-run git
+        on a timer, so a CSS-only hide would keep burning the CPU that made
+        this toggle worth having. The preference lives on AppState so every
+        other detail tab picks it up too, and ui_state.py persists it.
+        """
+        if not self._git_available:
+            self.app.notify("No git repo for this workstream", timeout=2)
+            return
+        state = getattr(self.app, "state", None)
+        if state is not None:
+            enabled = state.set_git_panes()
+        else:
+            enabled = not self._sidebar_enabled
+        self.sync_git_panes(enabled)
+        self.app.notify(f"Git panes {'on' if enabled else 'off'}", timeout=2)
+
+    def sync_git_panes(self, enabled: bool | None = None) -> None:
+        """Match the panes to the preference (read from AppState when None).
+
+        Called by the toggle and by the app when the palette flipped the
+        flag, so the two entry points can't drift apart.
+        """
+        if not self._git_available:
+            return
+        if enabled is None:
+            enabled = git_panes_enabled(self)
+        if enabled == self._sidebar_enabled:
+            return
+        self._sidebar_enabled = enabled
+        self._apply_git_pane_visibility()
+        if enabled:
+            self._start_tig_panes()
+        else:
+            self._stop_tig_panes()
+
+    def _apply_git_pane_visibility(self) -> None:
+        """Swap the lower panel between the tig wraps and the body scroll."""
+        shown = self._sidebar_enabled
+        for wid, visible in (
+            ("#detail-tig-status-wrap", shown),
+            ("#detail-tig-log-wrap", shown),
+            ("#detail-scroll", not shown),
+        ):
+            try:
+                w = self.query_one(wid)
+            except Exception:
+                continue
+            w.set_class(not visible, "panel-hidden")
+        if not shown:
+            try:
+                self.query_one("#detail-body", Static).update(self._render_body())
+            except Exception:
+                pass
+        try:
+            self.query_one("#detail-help", Static).update(self._render_help())
+        except Exception:
+            pass
+        # Focus can't stay on a pane that just disappeared.
+        if self._active_pane not in self._panel_ids_as_names():
+            self.action_focus_sessions()
+        else:
+            self._update_pane_labels()
+
+    def _panel_ids_as_names(self) -> set[str]:
+        return {self._PANEL_ID_TO_NAME.get(pid, "") for pid in self._panel_ids()}
+
     # ── Panel navigation (Ctrl+j/k) ──
 
     def _panel_ids(self) -> list[str]:
@@ -2532,6 +2641,9 @@ class DetailScreen(_VimOptionListMixin, ModalScreen[None]):
             ("^j/^k", "panels"), ("/", "search"), ("\\", "titles"),
             ("^H", "back"),
         ]
+        if self._git_available:
+            pairs.insert(-1, (key_label(get_key("toggle_git_panes")),
+                              "git panes off" if self._sidebar_enabled else "git panes on"))
         return "  ".join(f"[{C_YELLOW}]{k}[/{C_YELLOW}] {v}" for k, v in pairs)
 
     # ── Content search ──

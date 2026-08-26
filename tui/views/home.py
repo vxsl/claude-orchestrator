@@ -240,6 +240,7 @@ class HomeView(View):
             "rr": stub(STUB_DEV_WORKFLOW),
             "command_palette": self._action_command_palette,
             "toggle_preview": self._toggle_preview,
+            "toggle_git_panes": self._toggle_git_panes,
             "refresh": self._action_refresh,
             "help": self._action_help,
             "quit": self._action_quit,
@@ -290,6 +291,15 @@ class HomeView(View):
 
     def _toggle_preview(self) -> None:
         self.state.preview_visible = not self.state.preview_visible
+
+    def _toggle_git_panes(self) -> None:
+        """Home has no tig panes — flip the preference for the views that do.
+
+        Detail and session views bind the same key themselves (they own live
+        tig children to stop); here the choice just sticks and gets persisted.
+        """
+        enabled = self.state.set_git_panes()
+        self._toast(f"Git panes {'on' if enabled else 'off'}")
 
     def _action_quit(self) -> None:
         if self.app is not None:

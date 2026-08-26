@@ -237,3 +237,35 @@ def test_full_cycle_capture_save_load_restore(state, tmp_path):
     assert ui.home_ws_id == b.id
     assert [t.ws_id for t in new_tabs.tabs if t.ws_id] == [a.id, b.id]
     assert new_tabs.active_tab.ws_id == a.id
+
+
+# ── git panes preference ──
+
+def test_git_panes_round_trips(tmp_path):
+    path = tmp_path / "ui-state.json"
+    assert save_ui_state(UiState(git_panes_visible=False), path) is True
+    assert load_ui_state(path).git_panes_visible is False
+
+
+def test_git_panes_defaults_on(tmp_path):
+    """An older state file has no key — the panes stay on, as they always were."""
+    path = tmp_path / "ui-state.json"
+    path.write_text(json.dumps({"filter_mode": "stale"}))
+    assert load_ui_state(path).git_panes_visible is True
+
+
+def test_git_panes_wrong_type_is_ignored(tmp_path):
+    path = tmp_path / "ui-state.json"
+    path.write_text(json.dumps({"git_panes_visible": "off"}))
+    assert load_ui_state(path).git_panes_visible is True
+
+
+def test_git_panes_captured_and_applied(state):
+    state.git_panes_visible = False
+    ui = capture_ui_state(state, TabManager(), None)
+    assert ui.git_panes_visible is False
+
+    fresh = AppState(state.store)
+    assert fresh.git_panes_visible is True
+    apply_ui_state(ui, fresh)
+    assert fresh.git_panes_visible is False

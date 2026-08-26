@@ -3,8 +3,9 @@
 orch used to reopen cold: home tab, cursor on the first row, filter/sort back
 to defaults, every workstream tab you had open gone.  This module persists the
 small set of UI choices that make a relaunch feel like resuming — filter mode,
-sort mode, preview visibility, the highlighted workstream, the open tab set plus
-which tab was active, and the claude session each tab had open — to
+sort mode, preview visibility, whether the embedded git (tig) panes are on, the
+highlighted workstream, the open tab set plus which tab was active, and the
+claude session each tab had open — to
 ~/.cache/claude-orchestrator/ui-state.json.
 
 Engine-neutral (no Textual, no tui imports): both engines capture and apply
@@ -43,6 +44,10 @@ class UiState:
     filter_mode: str = "all"
     sort_mode: str = "updated"
     preview_visible: bool = True
+    # Embedded tig panes (Detail lower panel, session sidebar). Off is a
+    # real preference, not a fallback: two tig children per screen poll git
+    # every few seconds, which is visible CPU on a big repo.
+    git_panes_visible: bool = True
     home_ws_id: str | None = None
     tab_ws_ids: list[str] = field(default_factory=list)
     active_tab_id: str = HOME_TAB
@@ -56,6 +61,7 @@ class UiState:
             "filter_mode": self.filter_mode,
             "sort_mode": self.sort_mode,
             "preview_visible": self.preview_visible,
+            "git_panes_visible": self.git_panes_visible,
             "home_ws_id": self.home_ws_id,
             "tab_ws_ids": list(self.tab_ws_ids),
             "active_tab_id": self.active_tab_id,
@@ -80,6 +86,10 @@ class UiState:
         preview = data.get("preview_visible")
         if isinstance(preview, bool):
             ui.preview_visible = preview
+
+        git_panes = data.get("git_panes_visible")
+        if isinstance(git_panes, bool):
+            ui.git_panes_visible = git_panes
 
         home_ws_id = data.get("home_ws_id")
         if isinstance(home_ws_id, str) and home_ws_id:
@@ -167,6 +177,7 @@ def capture_ui_state(
         filter_mode=app_state.filter_mode,
         sort_mode=app_state.sort_mode,
         preview_visible=app_state.preview_visible,
+        git_panes_visible=app_state.git_panes_visible,
         home_ws_id=home_ws_id,
         tab_ws_ids=open_ws_ids,
         active_tab_id=(active.ws_id or active.id) if active else HOME_TAB,
@@ -189,6 +200,7 @@ def apply_ui_state(ui: UiState, app_state) -> None:
     app_state.filter_mode = ui.filter_mode
     app_state.sort_mode = ui.sort_mode
     app_state.preview_visible = ui.preview_visible
+    app_state.git_panes_visible = ui.git_panes_visible
 
 
 def restorable_tabs(ui: UiState, app_state) -> list:

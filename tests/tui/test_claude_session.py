@@ -25,10 +25,12 @@ from tui.orch_app import OrchApp
 from tui.termpane import TerminalPane
 from tui.testing import Headless, make_key_event
 from tui.views.claude_session import (
-    _AUTO_MODE_KEYS, _PASSTHROUGH_KEYS, ClaudeSessionView, WsSessionList,
+    _AUTO_MODE_KEYS, _GIT_PANES_KEYS, _PASSTHROUGH_KEYS, ClaudeSessionView,
+    WsSessionList,
 )
 
 AUTO_KEY = _AUTO_MODE_KEYS.split(",")[0]
+GIT_PANES_KEY = _GIT_PANES_KEYS.split(",")[0]
 
 
 @pytest.fixture(autouse=True)
@@ -515,6 +517,70 @@ class TestZoom:
             lay = view._layout(view._rect)
             assert lay["claude"] is None and lay["header"] is None
             assert lay["tig_status"].w == view._rect.w
+
+
+# ─── git panes toggle (F8) ───────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+class TestGitPanesToggle:
+    async def test_f8_stops_the_tig_children_and_drops_them_from_layout(self, cs_app):
+        async with Headless(cs_app, size=(140, 40)) as h:
+            view, _ = await push_view(h)
+            assert ("tig status", "start") in cs_app.lifecycle
+            await h.press(GIT_PANES_KEY)
+            assert view._git_panes_on is False
+            assert cs_app.state.git_panes_visible is False
+            assert ("tig status", "stop") in cs_app.lifecycle
+            assert ("tig", "stop") in cs_app.lifecycle
+            lay = view._layout(view._rect)
+            assert lay["tig_status"] is None and lay["tig_log"] is None
+            assert "tig_status" not in view._panel_ids()
+
+    async def test_f8_restarts_them(self, cs_app):
+        async with Headless(cs_app, size=(140, 40)) as h:
+            view, _ = await push_view(h)
+            await h.press(GIT_PANES_KEY)
+            cs_app.lifecycle.clear()
+            await h.press(GIT_PANES_KEY)
+            assert view._git_panes_on is True
+            assert ("tig status", "start") in cs_app.lifecycle
+            assert view._layout(view._rect)["tig_log"] is not None
+
+    async def test_focus_leaves_a_pane_that_disappears(self, cs_app):
+        async with Headless(cs_app, size=(140, 40)) as h:
+            view, _ = await push_view(h)
+            await h.press("ctrl+j")
+            assert view._active_panel == "tig_status"
+            await h.press(GIT_PANES_KEY)
+            assert view._active_panel == "claude"
+
+    async def test_sidebar_keeps_the_sibling_list_when_tig_is_off(self, cs_app):
+        async with Headless(cs_app, size=(140, 40)) as h:
+            view, _ = await push_view(h)
+            view._on_items_changed(True)
+            await h.press(GIT_PANES_KEY)
+            lay = view._layout(view._rect)
+            assert lay["sessions"] is not None
+            assert lay["claude"].w < view._rect.w  # sidebar still there
+
+    async def test_sidebar_collapses_when_nothing_is_left_in_it(self, cs_app):
+        async with Headless(cs_app, size=(140, 40)) as h:
+            view, _ = await push_view(h)
+            view._on_items_changed(False)
+            await h.press(GIT_PANES_KEY)
+            lay = view._layout(view._rect)
+            assert lay["sessions"] is None
+            assert lay["claude"].w == view._rect.w  # claude takes the width
+
+    async def test_view_opened_with_the_pref_off_never_starts_tig(self, cs_app):
+        cs_app.state.git_panes_visible = False
+        async with Headless(cs_app, size=(140, 40)) as h:
+            view, _ = await push_view(h)
+            assert view._git_panes_on is False
+            starts = [e for e in cs_app.lifecycle if e[0].startswith("tig")]
+            assert starts == []
+            assert view._layout(view._rect)["tig_status"] is None
 
 
 # ─── header worker ───────────────────────────────────────────────────

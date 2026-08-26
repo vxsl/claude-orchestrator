@@ -766,6 +766,52 @@ class TestUnifiedItems:
         assert len(items) == 6
 
 
+# ─── View toggles ────────────────────────────────────────────────────
+
+class TestGitPanesToggle:
+    def test_flip_and_explicit_set(self, state):
+        assert state.git_panes_visible is True
+        assert state.set_git_panes() is False
+        assert state.set_git_panes() is True
+        assert state.set_git_panes(False) is False
+        assert state.set_git_panes(False) is False  # explicit, not a flip
+        assert state.git_panes_visible is False
+
+    def test_parse_on_off(self):
+        from state import parse_on_off
+        assert parse_on_off("on") is True
+        assert parse_on_off(" OFF ") is False
+        assert parse_on_off("") is None
+        assert parse_on_off("perhaps") is None
+
+    def test_git_panes_enabled_reads_the_apps_state(self, state):
+        from state import git_panes_enabled
+
+        class Screen:
+            def __init__(self, app):
+                self.app = app
+
+        class App:
+            def __init__(self, st):
+                self.state = st
+
+        state.git_panes_visible = False
+        assert git_panes_enabled(Screen(App(state))) is False
+        state.git_panes_visible = True
+        assert git_panes_enabled(Screen(App(state))) is True
+
+    def test_git_panes_enabled_defaults_on_without_an_app(self):
+        from state import git_panes_enabled
+
+        class Detached:
+            @property
+            def app(self):
+                raise RuntimeError("no active app")
+
+        assert git_panes_enabled(Detached()) is True
+        assert git_panes_enabled(object()) is True
+
+
 # ─── Command Execution ───────────────────────────────────────────────
 
 class TestCommandExecution:
@@ -791,6 +837,25 @@ class TestCommandExecution:
         result = state.execute_command("search hello")
         assert result["action"] == "refresh"
         assert state.search_text == "hello"
+
+    def test_git_panes_command_toggles(self, state):
+        assert state.git_panes_visible is True
+        result = state.execute_command("git-panes")
+        assert result["action"] == "git_panes"
+        assert result["enabled"] is False
+        assert state.git_panes_visible is False
+        assert state.execute_command("tig")["enabled"] is True
+
+    def test_git_panes_command_explicit_on_off(self, state):
+        assert state.execute_command("git-panes off")["enabled"] is False
+        # Setting off twice stays off — an explicit value is not a flip.
+        assert state.execute_command("git-panes off")["enabled"] is False
+        assert state.execute_command("git-panes on")["enabled"] is True
+
+    def test_git_panes_command_rejects_junk_argument(self, state):
+        result = state.execute_command("git-panes maybe")
+        assert result["action"] == "error"
+        assert state.git_panes_visible is True  # untouched
 
     def test_unknown_command(self, state):
         result = state.execute_command("foobar")

@@ -235,6 +235,7 @@ COMMAND_REGISTRY: list[CommandDef] = [
     CommandDef("help", ["?"], "Keyboard reference"),
     CommandDef("refresh", [], "Reload data and sessions"),
     CommandDef("export", [], "Export workstreams to markdown"),
+    CommandDef("git-panes", ["tig", "gitpanes"], "Toggle the embedded git (tig) panes"),
     # Filtering & sorting
     CommandDef("search", [], "Fuzzy search workstreams"),
     CommandDef("filter", ["f"], "Set filter (all/work/personal/active/stale/archived)"),
@@ -251,6 +252,34 @@ COMMAND_REGISTRY: list[CommandDef] = [
     CommandDef("restage", [], "Unstage last 2 WIP commits", requires_ws=True),
     CommandDef("trash", [], "View trash (deleted sessions)"),
 ]
+
+
+def git_panes_enabled(owner) -> bool:
+    """The "show embedded tig panes" preference, read off a screen/view's app.
+
+    Screens read it in __init__ (before mount) and again on every toggle, in
+    both engines, so the lookup is guarded: a screen built outside a running
+    app has no usable `.app` at all. Anything unknown reads as on, which is
+    the default.
+    """
+    try:
+        return bool(owner.app.state.git_panes_visible)
+    except Exception:
+        return True
+
+
+def parse_on_off(arg: str) -> bool | None:
+    """Read an on/off argument for a toggle command. None means "flip it".
+
+    Blank flips; anything unrecognised also returns None, so callers that
+    care about a typo check `arg` themselves before treating None as a flip.
+    """
+    token = arg.strip().lower()
+    if token in ("on", "yes", "true", "1", "show"):
+        return True
+    if token in ("off", "no", "false", "0", "hide"):
+        return False
+    return None
 
 
 def get_command_items(has_ws: bool = False) -> list[tuple[str, str]]:
@@ -763,6 +792,11 @@ class AppState:
         self.threads: list[Thread] = []
         self.discovered_ws: list[Workstream] = []  # deprecated, kept for compat
         self.preview_visible: bool = True
+        # Embedded tig panes (Detail lower panel + session sidebar). Each
+        # screen that shows them runs two tig children that re-poll git on a
+        # timer, so this is a CPU dial as much as a layout one. Restored from
+        # ui_state.py on startup; toggled with `toggle_git_panes`.
+        self.git_panes_visible: bool = True
         self.tmux_paths: set[str] = set()
         self.tmux_names: set[str] = set()
         self.throbber_frame: int = 0
@@ -799,6 +833,19 @@ class AppState:
 
     def set_search(self, text: str):
         self.search_text = text
+
+    # ── View toggles ──
+
+    def set_git_panes(self, enabled: bool | None = None) -> bool:
+        """Turn the embedded tig panes on/off (None flips). Returns the new value.
+
+        Only the flag lives here — each screen that owns tig children reads it
+        to decide whether to spawn/stop them, and ui_state.py persists it.
+        """
+        self.git_panes_visible = (
+            not self.git_panes_visible if enabled is None else bool(enabled)
+        )
+        return self.git_panes_visible
 
     def get_filtered_streams(self) -> list[Workstream]:
         """Apply current filter, search, and sort to manual workstreams."""
@@ -1867,6 +1914,18 @@ class AppState:
         # Export
         elif cmd == "export":
             return {"action": "export", "path": arg}
+
+        # Git panes (embedded tig) — `git-panes` toggles, `git-panes on|off` sets
+        elif cmd in ("git-panes", "tig", "gitpanes"):
+            want = parse_on_off(arg)
+            if want is None and arg:
+                return {"action": "error", "msg": "Usage: git-panes [on|off]"}
+            enabled = self.set_git_panes(want)
+            return {
+                "action": "git_panes",
+                "enabled": enabled,
+                "msg": f"Git panes {'on' if enabled else 'off'}",
+            }
 
         # Brain
         elif cmd in ("brain", "braindump"):

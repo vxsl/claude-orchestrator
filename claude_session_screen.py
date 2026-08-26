@@ -36,6 +36,7 @@ from rendering import (
 )
 from models import _relative_time
 from sessions import ClaudeSession, extract_user_prompts, parse_session
+from state import git_panes_enabled
 from terminal import TerminalWidget
 from thread_namer import get_session_title
 from threads import ThreadActivity, session_activity
@@ -46,9 +47,11 @@ from widgets import FuzzyPicker
 # reaches claude as a plain yank.
 _AUTO_MODE_KEYS = get_session_key("toggle_auto_mode")
 _AUTO_MODE_LABEL = key_label(_AUTO_MODE_KEYS)
+_GIT_PANES_KEYS = get_session_key("toggle_git_panes")
+_GIT_PANES_LABEL = key_label(_GIT_PANES_KEYS)
 
 # Keys that pass through the TerminalWidget to the screen for panel navigation
-_PASSTHROUGH_KEYS = {"ctrl+j", "ctrl+k", "ctrl+shift+j", "ctrl+shift+k", "ctrl+e", "ctrl+h", "ctrl+z", "ctrl+backslash", "ctrl+b", "ctrl+x", "ctrl+@", "ctrl+r"} | key_set(_AUTO_MODE_KEYS)
+_PASSTHROUGH_KEYS = {"ctrl+j", "ctrl+k", "ctrl+shift+j", "ctrl+shift+k", "ctrl+e", "ctrl+h", "ctrl+z", "ctrl+backslash", "ctrl+b", "ctrl+x", "ctrl+@", "ctrl+r"} | key_set(_AUTO_MODE_KEYS) | key_set(_GIT_PANES_KEYS)
 
 # Spawn/bookkeeping helpers moved verbatim to session_launch.py so the tui
 # engine can use them without importing Textual (sanctioned import-redirect,
@@ -308,6 +311,7 @@ class SessionFooterWidget(Static):
         left_parts.append(f"[{C_YELLOW}]C-j/k[/] [{C_DIM}]panels[/]")
         left_parts.append(f"[{C_YELLOW}]C-z[/] [{C_DIM}]zoom[/]")
         left_parts.append(f"[{C_YELLOW}]{_AUTO_MODE_LABEL}[/] [{C_DIM}]auto[/]")
+        left_parts.append(f"[{C_YELLOW}]{_GIT_PANES_LABEL}[/] [{C_DIM}]git[/]")
 
         left = "  ".join(left_parts)
         flag = "--session-id" if self._is_new else "--resume"
@@ -652,6 +656,7 @@ class ClaudeSessionScreen(Screen):
     BINDINGS = [
         Binding("ctrl+e", "extract_todo", "Extract todo", priority=True),
         Binding(_AUTO_MODE_KEYS, "toggle_auto_mode", "Auto mode", priority=True),
+        Binding(_GIT_PANES_KEYS, "toggle_git_panes", "Git panes", priority=True),
         Binding("ctrl+backslash", "go_back", "C-\\ back", priority=True),
         Binding("ctrl+r", "jump_to_message", "Jump to msg", priority=True),
         Binding("ctrl+shift+j", "next_session", "Next session", priority=True),
@@ -772,6 +777,9 @@ class ClaudeSessionScreen(Screen):
         self._git_branch = self._detect_git_branch()
         self._jsonl = self._jsonl_path()
         self._sidebar_enabled = not os.environ.get("ORCH_NO_SIDEBAR")
+        # ORCH_NO_SIDEBAR drops the sidebar entirely; _git_panes_on is the
+        # runtime toggle within it (the two tig children are the CPU cost).
+        self._git_panes_on = self._sidebar_enabled and git_panes_enabled(self)
         self._has_other_sessions = False
 
 
@@ -874,8 +882,10 @@ class ClaudeSessionScreen(Screen):
                     id="cs-terminal",
                 )
             if self._sidebar_enabled:
-                with Vertical(id="cs-sidebar"):
-                    with Vertical(id="cs-tig-status-wrap", classes="cs-tig-wrap"):
+                sidebar_cls = "" if self._git_panes_on else "panel-hidden"
+                tig_cls = "cs-tig-wrap" + ("" if self._git_panes_on else " panel-hidden")
+                with Vertical(id="cs-sidebar", classes=sidebar_cls):
+                    with Vertical(id="cs-tig-status-wrap", classes=tig_cls):
                         yield TerminalWidget(
                             command="tig status",
                             env=self._tig_env,
@@ -883,7 +893,7 @@ class ClaudeSessionScreen(Screen):
                             passthrough_keys=_PASSTHROUGH_KEYS,
                             id="cs-tig-status",
                         )
-                    with Vertical(id="cs-tig-log-wrap", classes="cs-tig-wrap"):
+                    with Vertical(id="cs-tig-log-wrap", classes=tig_cls):
                         yield TerminalWidget(
                             command="tig",
                             env=self._tig_env,
@@ -930,13 +940,8 @@ class ClaudeSessionScreen(Screen):
             claude_tw.attach_persistent(self._session_id)
         else:
             claude_tw.start_persistent(self._session_id)
-        if self._sidebar_enabled:
-            for tw in self.query(TerminalWidget):
-                if tw.id != "cs-terminal":
-                    try:
-                        tw.start()
-                    except Exception:
-                        pass
+        if self._git_panes_on:
+            self._start_tig_panes()
         claude_tw.focus()
         self._update_pane_focus()
 
@@ -1036,7 +1041,9 @@ class ClaudeSessionScreen(Screen):
     def _panel_ids(self) -> list[str]:
         if not self._sidebar_enabled:
             return ["cs-terminal"]
-        ids = ["cs-terminal", "cs-tig-status", "cs-tig-log"]
+        ids = ["cs-terminal"]
+        if self._git_panes_on:
+            ids += ["cs-tig-status", "cs-tig-log"]
         if self._has_other_sessions:
             ids.append("cs-other-sessions")
         return ids
@@ -1204,6 +1211,84 @@ class ClaudeSessionScreen(Screen):
         except Exception:
             pass
 
+    # ── embedded tig panes (F8) ───────────────────────────────────
+
+    _TIG_WIDGET_IDS = ("#cs-tig-status", "#cs-tig-log")
+
+    def _start_tig_panes(self) -> None:
+        for wid in self._TIG_WIDGET_IDS:
+            try:
+                self.query_one(wid, TerminalWidget).start()
+            except Exception:
+                pass
+
+    def _stop_tig_panes(self) -> None:
+        for wid in self._TIG_WIDGET_IDS:
+            try:
+                self.query_one(wid, TerminalWidget).stop()
+            except Exception:
+                pass
+
+    def action_toggle_git_panes(self) -> None:
+        """Show/hide the tig panes, killing their processes when hidden.
+
+        Hiding has to kill: `tig status` and `tig` re-run git on a timer, and
+        a session screen per tab multiplies that. The preference lives on
+        AppState so other screens pick it up on their next mount, and
+        ui_state.py persists it across restarts.
+        """
+        if not self._sidebar_enabled:
+            return  # ORCH_NO_SIDEBAR — nothing was composed to toggle
+        state = getattr(self.app, "state", None)
+        enabled = state.set_git_panes() if state is not None else not self._git_panes_on
+        self.sync_git_panes(enabled)
+        self.app.notify(f"Git panes {'on' if enabled else 'off'}", timeout=2)
+
+    def sync_git_panes(self, enabled: bool | None = None) -> None:
+        """Match the panes to the preference (read from AppState when None).
+
+        Called by the toggle and by the app when the palette flipped the
+        flag, so the two entry points can't drift apart.
+        """
+        if not self._sidebar_enabled:
+            return
+        if enabled is None:
+            enabled = git_panes_enabled(self)
+        if enabled == self._git_panes_on:
+            return
+        self._git_panes_on = enabled
+        self._apply_git_pane_visibility()
+        if enabled:
+            self._start_tig_panes()
+        else:
+            self._stop_tig_panes()
+
+    def _apply_git_pane_visibility(self) -> None:
+        """Sync the tig wraps — and the whole sidebar — to _git_panes_on.
+
+        With tig off and no sibling sessions there is nothing left in the
+        sidebar, so it collapses and claude gets the full width.
+        """
+        for wid in ("#cs-tig-status-wrap", "#cs-tig-log-wrap"):
+            try:
+                self.query_one(wid).set_class(not self._git_panes_on, "panel-hidden")
+            except Exception:
+                pass
+        try:
+            sidebar = self.query_one("#cs-sidebar")
+            empty = not self._git_panes_on and not self._has_other_sessions
+            sidebar.set_class(empty, "panel-hidden")
+        except Exception:
+            pass
+        # Focus can't stay on a pane that just disappeared.
+        if self._active_panel not in self._panel_ids:
+            self._active_panel = "cs-terminal"
+            try:
+                self.query_one("#cs-terminal").focus()
+            except Exception:
+                pass
+        self._update_pane_focus()
+
     # ── auto mode (coordinator/implementer loop) ──────────────────
 
     def action_toggle_auto_mode(self) -> None:
@@ -1227,6 +1312,13 @@ class ClaudeSessionScreen(Screen):
             wrap.remove_class("panel-hidden")
         else:
             wrap.add_class("panel-hidden")
+        try:
+            self.query_one("#cs-sidebar").set_class(
+                not self._git_panes_on and not event.has_items, "panel-hidden"
+            )
+        except Exception:
+            pass
+        if not event.has_items:
             # Don't leave focus stranded on the now-hidden panel
             if self._active_panel == "cs-other-sessions":
                 self._active_panel = "cs-terminal"

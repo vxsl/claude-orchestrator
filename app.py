@@ -1193,6 +1193,16 @@ class OrchestratorApp(App):
         self.state.preview_visible = not self.state.preview_visible
         pane.display = self.state.preview_visible
 
+    def action_toggle_git_panes(self):
+        """F8 from home: flip the embedded-tig preference for new screens.
+
+        The detail and session screens bind the same key themselves (they own
+        live tig children to stop); this is the fallback for surfaces that
+        have none, so the choice still sticks and is still persisted.
+        """
+        enabled = self.state.set_git_panes()
+        self.notify(f"Git panes {'on' if enabled else 'off'}", timeout=2)
+
     def _on_rust_engine_update(self):
         """Callback from the Rust session engine's notification pipe.
 
@@ -3187,6 +3197,15 @@ class OrchestratorApp(App):
                 self._do_brain(text)
             else:
                 self.action_brain_dump()
+        elif action == "git_panes":
+            # state.execute_command already flipped the flag; re-sync any
+            # screen that has live tig children rather than toggling twice.
+            for screen in self.screen_stack:
+                syncer = getattr(screen, "sync_git_panes", None)
+                if callable(syncer):
+                    syncer()
+            if msg:
+                self.notify(msg, timeout=2)
         elif action == "close":
             self.action_close_tab()
         elif action == "help":

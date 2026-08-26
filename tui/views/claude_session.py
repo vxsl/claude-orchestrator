@@ -50,6 +50,7 @@ from session_launch import (
     build_session_env, claude_jsonl_path, log_session_exit,
 )
 from sessions import extract_user_prompts, parse_session
+from state import git_panes_enabled
 from threads import ThreadActivity, session_activity
 
 from ..layout import Rect, split_cols, split_rows
@@ -64,6 +65,8 @@ from .modals import draw_border
 # reaches claude as a plain yank.
 _AUTO_MODE_KEYS = get_session_key("toggle_auto_mode")
 _AUTO_MODE_LABEL = key_label(_AUTO_MODE_KEYS)
+_GIT_PANES_KEYS = get_session_key("toggle_git_panes")
+_GIT_PANES_LABEL = key_label(_GIT_PANES_KEYS)
 
 # Keys that pass through the claude/tig panes to the view for panel
 # navigation and app-level tab keys (claude_session_screen.py:44).
@@ -71,7 +74,7 @@ _PASSTHROUGH_KEYS = {
     "ctrl+j", "ctrl+k", "ctrl+shift+j", "ctrl+shift+k", "ctrl+e", "ctrl+h",
     "ctrl+z", "ctrl+backslash", "ctrl+b", "ctrl+x", "ctrl+@",
     "ctrl+r",
-} | key_set(_AUTO_MODE_KEYS)
+} | key_set(_AUTO_MODE_KEYS) | key_set(_GIT_PANES_KEYS)
 
 _SIDEBAR_W = 36
 _SESSIONS_MAX_H = 12  # other-sessions wrap max-height (incl. border)
@@ -618,6 +621,9 @@ class ClaudeSessionView(View):
         self._git_branch = self._detect_git_branch()
         self._jsonl = str(claude_jsonl_path(self._cwd, self.session_id))
         self._sidebar_enabled = not os.environ.get("ORCH_NO_SIDEBAR")
+        # ORCH_NO_SIDEBAR drops the sidebar entirely; _git_panes_on is the
+        # runtime toggle within it (the two tig children are the CPU cost).
+        self._git_panes_on = self._sidebar_enabled and git_panes_enabled(self)
 
         self.claude_pane = self._make_pane(self._claude_command, env=self._env,
                                            cwd=self._cwd)
@@ -737,6 +743,10 @@ class ClaudeSessionView(View):
                 self.set_interval(0.3, self._tick_throbber)
         if not self._started:
             self._started = True
+            # The git-panes preference lives on the app, and a View only has
+            # one once it's pushed — so this is the first point we can read it.
+            self._git_panes_on = self._sidebar_enabled and git_panes_enabled(self)
+            self._layout_cache = None
             self._size_panes()  # size before spawn: tmux -x/-y from pane dims
             self._start_terminals()
         self._refresh_header()  # populate immediately, don't wait 5s
@@ -778,10 +788,22 @@ class ClaudeSessionView(View):
             self.app.notify(f"Session launch failed: {e}", timeout=6)
             self.set_timer(0, lambda: self.dismiss(None))
             return
+        if self._git_panes_on:
+            self._start_tig_panes()
+
+    def _start_tig_panes(self) -> None:
         for pane in (self.tig_status, self.tig_log):
             if pane is not None:
                 try:
                     pane.start()
+                except Exception:
+                    pass
+
+    def _stop_tig_panes(self) -> None:
+        for pane in (self.tig_status, self.tig_log):
+            if pane is not None:
+                try:
+                    pane.stop()
                 except Exception:
                     pass
 
@@ -886,6 +908,8 @@ class ClaudeSessionView(View):
         }
         for key in key_set(_AUTO_MODE_KEYS):
             keymap[key] = self._action_toggle_auto_mode
+        for key in key_set(_GIT_PANES_KEYS):
+            keymap[key] = self._action_toggle_git_panes
         return keymap
 
     def on_key(self, ev) -> bool:
@@ -941,7 +965,9 @@ class ClaudeSessionView(View):
     def _panel_ids(self) -> list[str]:
         if not self._sidebar_enabled:
             return ["claude"]
-        ids = ["claude", "tig_status", "tig_log"]
+        ids = ["claude"]
+        if self._git_panes_on:
+            ids += ["tig_status", "tig_log"]
         if self._has_other_sessions:
             ids.append("sessions")
         return ids
@@ -964,6 +990,43 @@ class ClaudeSessionView(View):
             self._active_panel = "claude"  # don't strand focus
         if not has_items and self._zoomed_panel == "sessions":
             self._zoomed_panel = None
+        self.request_paint()
+
+    def _action_toggle_git_panes(self) -> None:
+        """Show/hide the tig panes, killing their processes when hidden.
+
+        Hiding has to kill: `tig status` and `tig` re-run git on a timer, and
+        a session view per tab multiplies that. The preference lives on
+        AppState so other views pick it up, and ui_state.py persists it.
+        """
+        if not self._sidebar_enabled:
+            return  # ORCH_NO_SIDEBAR — no sidebar to toggle
+        state = getattr(self.app, "state", None)
+        enabled = state.set_git_panes() if state is not None else not self._git_panes_on
+        self.sync_git_panes(enabled)
+        if self.app is not None:
+            self.app.notify(f"Git panes {'on' if enabled else 'off'}", timeout=2)
+
+    def sync_git_panes(self, enabled: bool | None = None) -> None:
+        """Match the panes to the preference (read from AppState when None)."""
+        if not self._sidebar_enabled:
+            return
+        if enabled is None:
+            enabled = git_panes_enabled(self)
+        if enabled == self._git_panes_on:
+            return
+        self._git_panes_on = enabled
+        self._layout_cache = None
+        if enabled:
+            self._size_panes()  # size before spawn, as _start_terminals does
+            self._start_tig_panes()
+        else:
+            self._stop_tig_panes()
+        if self._active_panel not in self._panel_ids():
+            self._active_panel = "claude"
+        if self._zoomed_panel in ("tig_status", "tig_log") and not enabled:
+            self._zoomed_panel = None
+        self._size_panes()
         self.request_paint()
 
     def _action_zoom_panel(self) -> None:
@@ -1066,8 +1129,8 @@ class ClaudeSessionView(View):
         """Rect for every region; hidden regions are None. Memoized on its
         inputs — recomputed dozens of times a second while streaming."""
         key = (rect, self._zoomed_panel, self._sidebar_enabled,
-               len(self.header.lines), self._has_other_sessions,
-               len(self.sessions_list.rows))
+               self._git_panes_on, len(self.header.lines),
+               self._has_other_sessions, len(self.sessions_list.rows))
         if self._layout_cache is not None and self._layout_cache[0] == key:
             return self._layout_cache[1]
         lay = self._compute_layout(rect)
@@ -1084,7 +1147,10 @@ class ClaudeSessionView(View):
         if zoom in ("tig_status", "tig_log", "sessions"):
             lay[zoom] = body  # zoomed sidebar panel takes the whole body
             return lay
-        if self._sidebar_enabled and zoom is None:
+        # A sidebar with tig off and no sibling sessions has nothing left to
+        # show, so it collapses and claude takes the full width.
+        sidebar_useful = self._git_panes_on or self._has_other_sessions
+        if self._sidebar_enabled and sidebar_useful and zoom is None:
             main, sidebar = split_cols(body, 1.0, _SIDEBAR_W)
         else:
             main, sidebar = body, None  # claude zoom hides the sidebar
@@ -1092,7 +1158,7 @@ class ClaudeSessionView(View):
         header, claude = split_rows(main, header_h, 1.0)
         lay["header"] = header
         lay["claude"] = claude
-        if sidebar is not None:
+        if sidebar is not None and self._git_panes_on:
             sess_h = 0
             if self._has_other_sessions:
                 sess_h = min(_SESSIONS_MAX_H, 2 * len(self.sessions_list.rows) + 2,
@@ -1101,6 +1167,11 @@ class ClaudeSessionView(View):
             lay["tig_status"] = tig_s
             lay["tig_log"] = tig_l
             lay["sessions"] = sess if sess_h > 0 else None
+        elif sidebar is not None:
+            # tig off: the sibling list is the only thing left in the column,
+            # so it takes all of it (sidebar_useful kept us out of here if the
+            # list is empty too).
+            lay["sessions"] = sidebar
         return lay
 
     def _pane_content(self, frame, rect: Rect, focused: bool) -> Rect:
@@ -1142,6 +1213,7 @@ class ClaudeSessionView(View):
 
     def _render_sessions(self, frame, rect: Rect) -> None:
         focused = self._active_panel == "sessions" and not self._picker_active
+        frame.fill(rect, f"on {BG_RAISED}")  # rows may not reach the bottom
         c = self._pane_content(frame, rect, focused)
         if c.w <= 2 or c.h <= 0:
             return
@@ -1167,6 +1239,7 @@ class ClaudeSessionView(View):
             left_parts.append(f"[{C_YELLOW}]C-j/k[/] [{C_DIM}]panels[/]")
             left_parts.append(f"[{C_YELLOW}]C-z[/] [{C_DIM}]zoom[/]")
             left_parts.append(f"[{C_YELLOW}]{_AUTO_MODE_LABEL}[/] [{C_DIM}]auto[/]")
+            left_parts.append(f"[{C_YELLOW}]{_GIT_PANES_LABEL}[/] [{C_DIM}]git[/]")
             left = "  ".join(left_parts)
             flag = "--session-id" if self._is_new else "--resume"
             right = f"[{C_DIM}]claude {flag} {self.session_id}[/]"

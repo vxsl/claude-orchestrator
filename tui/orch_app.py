@@ -455,6 +455,15 @@ class OrchApp(App):
                 home._do_brain(text)
             else:
                 home._action_brain_dump()
+        elif action == "git_panes":
+            # state.execute_command already flipped the flag; re-sync every
+            # view that owns tig children rather than toggling twice.
+            for view, _ in self._stack:
+                syncer = getattr(view, "sync_git_panes", None)
+                if callable(syncer):
+                    syncer()
+            if msg:
+                self.notify(msg)
         elif action == "close":
             self.action_close_tab()
         elif action == "help":

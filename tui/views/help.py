@@ -159,6 +159,7 @@ class HelpView(FuzzyModalView):
             K("sess-back", "Ctrl+H", "Detach and go back (session keeps running)"),
             K("sess-back2", "Ctrl+\\\\", "Detach and go back (alternate)"),
             K("sess-panel", "Ctrl+J / K", "Cycle between terminal and tig panels"),
+            K("sess-gitpanes", "F8", "Toggle the git (tig) panes — off stops their polling"),
             K("sess-zoom", "Ctrl+Z", "Zoom current panel full-screen"),
             K("sess-archive", "Ctrl+Space", "Archive session and go back"),
             H("Session"),
