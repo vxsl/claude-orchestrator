@@ -80,6 +80,7 @@ _PASSTHROUGH_KEYS = {
 
 _SIDEBAR_W = 36
 _SESSIONS_MAX_H = 12  # other-sessions wrap max-height (incl. border)
+_SESSIONS_MAX_AGE_H = 1  # quick-switch only lists sessions active this recently
 
 
 # ── markup helpers (ported from claude_session_screen.py) ─────────────
@@ -411,24 +412,31 @@ class WsSessionList:
         #      AWAITING_INPUT/RESPONSE_READY.
         #   2. The current session (so the user can see where they are).
         #   3. Recently viewed non-archived sessions, even if seen.
+        # Paths 1 and 3 are both gated on the session having been active
+        # within _SESSIONS_MAX_AGE_H; only the current session is exempt.
         order = {
             ThreadActivity.THINKING: 0,
             ThreadActivity.AWAITING_INPUT: 1,
             ThreadActivity.RESPONSE_READY: 2,
         }
-        view_cutoff = _recent_cutoff(hours=2)
+        cutoff = _recent_cutoff(hours=_SESSIONS_MAX_AGE_H)
         candidates = []
         for s in sessions:
             is_current = s.session_id == self._current_session_id
             act = session_activity(s, last_seen)
             seen = _is_session_seen(s, last_seen)
             seen_ts = last_seen.get(s.session_id, "")
-            recently_viewed = bool(seen_ts) and _iso_ts(seen_ts) >= view_cutoff
+            recently_viewed = bool(seen_ts) and _iso_ts(seen_ts) >= cutoff
+            gone_cold = _iso_ts(s.last_activity or s.started_at) < cutoff
 
             if is_current:
                 if act not in order:
                     act = ThreadActivity.AWAITING_INPUT  # placeholder
                 bucket = order.get(act, 1)
+            elif gone_cold:
+                # Nothing older than the cutoff is a quick-switch target,
+                # however bright its icon would otherwise be.
+                continue
             elif act == ThreadActivity.THINKING:
                 bucket = 0
             elif act in (ThreadActivity.AWAITING_INPUT, ThreadActivity.RESPONSE_READY) and not seen:

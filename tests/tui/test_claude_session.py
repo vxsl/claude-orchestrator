@@ -666,6 +666,19 @@ class TestWsSessionList:
         lst.refresh(cs_app.state)
         assert events == [True, False]
 
+    def test_stale_sessions_drop_out(self, cs_app):
+        """Anything last active over an hour ago is not a switch target,
+        even with a bright icon; the current session stays regardless."""
+        stale = thinking_session(SID_C)
+        stale.last_activity = _iso(90)
+        current = awaiting_session(SID)
+        current.last_activity = _iso(120)
+        cs_app.state.sessions_for_ws = (
+            lambda w, include_archived_sessions=False: [current, stale])
+        lst = WsSessionList(cs_app._ws.id, SID)
+        lst.refresh(cs_app.state)
+        assert [r[0] for r in lst.rows] == [SID]
+
     def test_render_marks_current_as_you(self, cs_app):
         lst = WsSessionList(cs_app._ws.id, SID)
         lst.refresh(cs_app.state)
