@@ -484,6 +484,36 @@ class TestSwitching:
             (_, kw), = cs_app.launched
             assert kw["session_id"] == target
 
+    async def test_sidebar_ctrl_space_archives_selected_and_stays(self, cs_app):
+        async with Headless(cs_app, size=(140, 40)) as h:
+            view, results = await push_view(h)
+            while view._active_panel != "sessions":
+                await h.press("ctrl+j")
+            for _ in range(4):  # move off the current session
+                if view.sessions_list.selected_sid != SID:
+                    break
+                await h.press("j")
+            target = view.sessions_list.selected_sid
+            assert target != SID
+            await h.feed_bytes(b"\x00")  # ctrl+space → ctrl+@
+            ws = cs_app.state.store.get(cs_app._ws.id)
+            assert target in ws.archived_sessions
+            assert SID not in ws.archived_sessions   # not the one we're viewing
+            assert not results                        # stayed in the session
+            assert target not in [r[0] for r in view.sessions_list.rows]
+            assert view.sessions_list.selected_sid != target
+
+    async def test_sidebar_ctrl_space_on_current_row_goes_back(self, cs_app):
+        async with Headless(cs_app, size=(140, 40)) as h:
+            view, results = await push_view(h)
+            while view._active_panel != "sessions":
+                await h.press("ctrl+j")
+            view.sessions_list.selected_sid = SID
+            await h.feed_bytes(b"\x00")
+            assert results and results[0]["detached"] is True
+            ws = cs_app.state.store.get(cs_app._ws.id)
+            assert SID in ws.archived_sessions
+
     async def test_switch_to_current_session_is_noop(self, cs_app):
         async with Headless(cs_app, size=(140, 40)) as h:
             view, results = await push_view(h)

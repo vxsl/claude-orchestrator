@@ -467,12 +467,17 @@ class WsSessionList:
         if self.selected_sid not in sids:
             self.selected_sid = sids[0] if sids else None
 
+        self._notify_items()
+        return changed
+
+    def _notify_items(self) -> None:
+        """Tell the view when the list gains or loses its last row — the
+        sidebar panel only exists while there are rows to show."""
         has_items = bool(self.rows)
         if has_items != self._last_had_items:
             self._last_had_items = has_items
             if self.on_items_changed is not None:
                 self.on_items_changed(has_items)
-        return changed
 
     def tick_throbber(self) -> bool:
         """Advance the throbber when anything is THINKING; True = repaint."""
@@ -565,6 +570,22 @@ class WsSessionList:
             return None
         target = sids[(idx + delta) % len(sids)]
         return target if target != anchor_sid else None
+
+    def drop(self, sid: str) -> None:
+        """Forget a row (its session was just archived) and leave the
+        selection on the row that slid up into its place, so archiving a
+        run of sessions doesn't send the cursor back to the top."""
+        sids = [r[0] for r in self.rows]
+        if sid not in sids:
+            return
+        idx = sids.index(sid)
+        self.rows = [r for r in self.rows if r[0] != sid]
+        self._rev += 1
+        if self.selected_sid == sid:
+            self.selected_sid = (
+                self.rows[min(idx, len(self.rows) - 1)][0] if self.rows else None
+            )
+        self._notify_items()
 
     def handle_key(self, ev) -> bool:
         key = ev.key
@@ -908,6 +929,23 @@ class ClaudeSessionView(View):
             self.store.update(ws)
         self.go_back()
 
+    def _archive_selected_session(self) -> None:
+        """Ctrl+Space with the sidebar focused: archive the highlighted
+        session and stay where we are. Only archiving the session we're
+        actually viewing detaches and goes back."""
+        from datetime import timezone
+        sid = self.sessions_list.selected_sid
+        if not sid or sid == self.session_id:
+            self._archive_and_go_back()
+            return
+        ws = self.store.get(self.ws.id) or self.ws
+        if sid not in ws.archived_sessions:
+            ws.archived_sessions[sid] = datetime.now(timezone.utc).isoformat()
+            self.store.update(ws)
+            self.state.invalidate_caches()
+        # Drop the row now; the 0.5s refresh reconciles with the store.
+        self.sessions_list.drop(sid)
+
     # ── keys ──────────────────────────────────────────────────────
 
     def _build_keymap(self) -> dict:
@@ -944,6 +982,10 @@ class ClaudeSessionView(View):
             key = "ctrl+h"
         elif ev.char == "\x00":
             key = "ctrl+@"
+        if key == "ctrl+@" and self._active_panel == "sessions":
+            self._archive_selected_session()
+            self.request_paint()
+            return True
         fn = self._keymap.get(key)
         if fn is not None:
             fn()

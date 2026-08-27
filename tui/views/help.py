@@ -162,6 +162,7 @@ class HelpView(FuzzyModalView):
             K("sess-gitpanes", "F8", "Toggle the git (tig) panes — off stops their polling"),
             K("sess-zoom", "Ctrl+Z", "Zoom current panel full-screen"),
             K("sess-archive", "Ctrl+Space", "Archive session and go back"),
+            D("(with the session list focused: archives the highlighted one, stays put)", 5),
             H("Session"),
             K("sess-extract", "Ctrl+E", "Extract a todo from the conversation"),
             K("sess-jump", "Ctrl+R", "Jump to a previous message"),
