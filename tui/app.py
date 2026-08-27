@@ -270,7 +270,15 @@ class App:
     def _paint(self) -> None:
         self._paint_pending = False
         if not self.ui_visible:
-            return  # caught up by _apply_visibility on the way back
+            # Skipping the paint must not let geometry drift. Panes learn
+            # their rect from render(), so without this a layout change while
+            # hidden (sidebar appearing, header growing) would be applied in
+            # one late jump on the way back — resizing the child's terminal
+            # while its output is already in flight at the old width, which
+            # lands as clamped, wrapped garbage in the scrollback.
+            for view, _ in self._stack:
+                view.sync_layout()
+            return  # painting itself is caught up by _apply_visibility
         w, h = self._size
         if w <= 0 or h <= 0:
             return

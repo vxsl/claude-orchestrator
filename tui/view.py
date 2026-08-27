@@ -94,6 +94,16 @@ class View:
     def on_resize(self, rect) -> None:
         pass
 
+    def sync_layout(self) -> None:
+        """Track geometry that changed without a resize, while hidden.
+
+        A view whose layout depends on its own state — a sidebar appearing, a
+        header growing — normally learns its new rects from render(). Nothing
+        renders while the UI is hidden, so anything that must stay in lockstep
+        with the real geometry (a terminal pane's PTY, say) syncs here instead.
+        Called on every skipped paint, so it must be cheap and idempotent.
+        """
+
     def on_show(self) -> None:
         for timer in self._timers:
             timer.resume()

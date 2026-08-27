@@ -553,6 +553,48 @@ async def test_watcher_factory_blowing_up_is_not_fatal():
         assert h.app.ui_visible is True
 
 
+class GeomView(View):
+    """A view whose geometry moves without a resize (sidebar, header growth)."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.syncs = 0
+
+    def sync_layout(self) -> None:
+        self.syncs += 1
+
+    def render(self, frame, rect) -> None:
+        frame.write_markup(0, 0, rect.w, "geom")
+
+
+@pytest.mark.asyncio
+async def test_skipped_paints_still_sync_layout():
+    # Panes learn their rect from render(). If hidden paints dropped that too,
+    # a layout change would be applied in one jump on the way back and resize
+    # the child mid-stream — garbled scrollback.
+    v = GeomView()
+    async with Headless(App(), size=(30, 6)) as h:
+        h.app.push(v)
+        await h.pause()
+        h.app._apply_visibility(False)
+        v.syncs = 0
+        h.app.request_paint()
+        await h.pause()
+        assert v.syncs >= 1
+
+
+@pytest.mark.asyncio
+async def test_visible_paints_do_not_need_the_sync_hook():
+    v = GeomView()
+    async with Headless(App(), size=(30, 6)) as h:
+        h.app.push(v)
+        await h.pause()
+        v.syncs = 0
+        h.app.request_paint()
+        await h.pause()
+        assert v.syncs == 0  # render() already carries the geometry
+
+
 @pytest.mark.asyncio
 async def test_shutdown_closes_the_watcher():
     w = PipeWatcher()

@@ -774,6 +774,13 @@ class ClaudeSessionView(View):
         if self._started:
             self._size_panes()
 
+    def sync_layout(self) -> None:
+        # The claude pane's rect moves with the sidebar and header, neither of
+        # which fires on_resize. While hidden nothing renders, so this is the
+        # only thing keeping the pane (and tmux behind it) at the real size.
+        if self._started:
+            self._size_panes()
+
     def _size_panes(self) -> None:
         if self._rect is None and self.app is not None and self.app._size != (0, 0):
             self._rect = Rect(0, 0, *self.app._size)
