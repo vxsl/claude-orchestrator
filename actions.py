@@ -32,11 +32,13 @@ def has_tmux() -> bool:
 def ui_is_visible() -> bool:
     """Best-effort check that orch's terminal is actually on screen.
 
-    Detects the two ways orch runs 24/7 without being looked at: on a Linux
-    VT the user has switched away from, and in a tmux session that is
-    detached / whose window is inactive / whose only attached clients sit on
-    an inactive VT. Unknown setups (X terminal emulators, ssh pts) count as
-    visible. Override with ORCH_ASSUME_VISIBLE=1 (useful for profiling).
+    Detects the three ways orch runs 24/7 without being looked at: on a Linux
+    VT the user has switched away from, in a tmux session that is detached /
+    whose window is inactive / whose only attached clients sit on an inactive
+    VT, and in an X terminal that the window manager has unmapped (an xmonad
+    scratchpad toggled off, or a window on a workspace that isn't showing).
+    Setups we can't resolve count as visible. Override with
+    ORCH_ASSUME_VISIBLE=1 (useful for profiling).
     """
     if os.environ.get("ORCH_ASSUME_VISIBLE"):
         return True
@@ -49,7 +51,9 @@ def ui_is_visible() -> bool:
         return _vt_is_active(name)
     if os.environ.get("TMUX"):
         return _tmux_pane_visible()
-    return True
+    # Bare terminal emulator — our own process tree owns the window.
+    mapped = _x_pids_mapped([os.getpid()])
+    return True if mapped is None else mapped
 
 
 def _vt_is_active(name: str) -> bool:
@@ -70,10 +74,19 @@ def _tmux_pane_visible() -> bool:
         attached, window_active, session_id = out.split(",")
         if attached == "0" or window_active == "0":
             return False
-        client_ttys = subprocess.run(
-            ["tmux", "list-clients", "-t", session_id, "-F", "#{client_tty}"],
+        clients = subprocess.run(
+            ["tmux", "list-clients", "-t", session_id,
+             "-F", "#{client_tty} #{client_pid}"],
             capture_output=True, text=True, timeout=1,
-        ).stdout.split()
+        ).stdout.splitlines()
+        client_ttys, client_pids = [], []
+        for line in clients:
+            parts = line.split()
+            if not parts:
+                continue
+            client_ttys.append(parts[0])
+            if len(parts) > 1:
+                client_pids.append(parts[1])
         vt_names = [
             t.removeprefix("/dev/")
             for t in client_ttys
@@ -83,9 +96,95 @@ def _tmux_pane_visible() -> bool:
             # Every attached client is itself on a VT — visible only if one
             # of those VTs is in the foreground.
             return any(_vt_is_active(n) for n in vt_names)
-        return True
+        # Clients live on pts — under X each one belongs to a terminal
+        # emulator window that the WM may have unmapped.
+        mapped = _x_pids_mapped(client_pids)
+        return True if mapped is None else mapped
     except Exception:
         return True
+
+
+# ─── X window mapping ───────────────────────────────────────────────
+#
+# A tmux client on a pts says nothing about whether anyone can see it: the
+# terminal emulator hosting it may be iconified (xmonad parks scratchpads and
+# non-visible workspaces that way). WM_STATE on the emulator's toplevel window
+# is the authority. The client pid is the tmux client itself, so walk up to
+# the ancestor that actually owns a managed window.
+
+_X_ANCESTOR_LIMIT = 6
+_x_window_cache: dict[int, list[int]] = {}
+
+
+def _ppid(pid: int) -> int | None:
+    """Parent of `pid`, read straight from /proc (comm may contain spaces)."""
+    try:
+        stat = Path(f"/proc/{pid}/stat").read_text()
+        return int(stat[stat.rindex(")") + 1:].split()[1])
+    except (OSError, ValueError, IndexError):
+        return None
+
+
+def _wm_state(win: int) -> str | None:
+    """WM_STATE of a window — 'Normal', 'Iconic', or None if unmanaged."""
+    try:
+        out = subprocess.run(
+            ["xprop", "-id", str(win), "WM_STATE"],
+            capture_output=True, text=True, timeout=1,
+        ).stdout
+    except (OSError, subprocess.SubprocessError):
+        return None
+    for line in out.splitlines():
+        if "window state:" in line:
+            return line.rsplit(":", 1)[1].strip()
+    return None
+
+
+def _managed_windows(pid: int) -> list[int]:
+    """Toplevel windows owned by `pid` or its nearest window-owning ancestor."""
+    cached = _x_window_cache.get(pid)
+    if cached is not None:
+        return cached
+    walk = pid
+    for _ in range(_X_ANCESTOR_LIMIT):
+        try:
+            found = subprocess.run(
+                ["xdotool", "search", "--pid", str(walk)],
+                capture_output=True, text=True, timeout=1,
+            ).stdout.split()
+        except (OSError, subprocess.SubprocessError):
+            return []
+        # xdotool also reports unmanaged children; only toplevels have WM_STATE.
+        wins = [w for w in (int(f) for f in found) if _wm_state(w) is not None]
+        if wins:
+            if len(_x_window_cache) > 32:
+                _x_window_cache.clear()
+            _x_window_cache[pid] = wins
+            return wins
+        parent = _ppid(walk)
+        if parent is None or parent <= 1:
+            break
+        walk = parent
+    return []  # not cached — the window may still be created later
+
+
+def _x_pids_mapped(pids: list[int] | list[str]) -> bool | None:
+    """True if any pid's terminal window is mapped, None if unresolvable."""
+    if not os.environ.get("DISPLAY"):
+        return None
+    resolved = False
+    for raw in pids:
+        try:
+            pid = int(raw)
+        except (TypeError, ValueError):
+            continue
+        wins = _managed_windows(pid)
+        if not wins:
+            continue
+        resolved = True
+        if any(_wm_state(w) == "Normal" for w in wins):
+            return True
+    return False if resolved else None
 
 
 def _ensure_worker_session() -> None:

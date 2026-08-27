@@ -3,6 +3,7 @@
 import pytest
 from unittest.mock import patch, MagicMock
 
+import actions
 from models import Category, Workstream
 from sessions import ClaudeSession
 from actions import (
@@ -641,3 +642,149 @@ class TestDiscoverWorktrees:
         # Same repo listed twice
         results = discover_worktrees(["/repo", "/repo"])
         assert len(results) == 1
+
+
+class TestXWindowMapping:
+    """A tmux client on a pts says nothing about whether anyone can see it —
+    the terminal emulator's WM_STATE does."""
+
+    @pytest.fixture(autouse=True)
+    def _clear_cache(self):
+        actions._x_window_cache.clear()
+        yield
+        actions._x_window_cache.clear()
+
+    def test_ppid_matches_the_real_parent(self):
+        import os
+        assert actions._ppid(os.getpid()) == os.getppid()
+
+    def test_ppid_survives_spaces_in_comm(self, monkeypatch):
+        # "tmux: server" has a space, so naive field-splitting picks the
+        # wrong column — parse after the last ')' instead.
+        class FakePath:
+            def __init__(self, *_):
+                pass
+
+            def read_text(self):
+                return "2352 (tmux: server) S 7 2352 2352 0 -1 4194560\n"
+
+        monkeypatch.setattr(actions, "Path", FakePath)
+        assert actions._ppid(2352) == 7
+
+    def test_ppid_of_missing_process_is_none(self):
+        assert actions._ppid(999999999) is None
+
+    def test_wm_state_parses_xprop(self, monkeypatch):
+        monkeypatch.setattr(actions.subprocess, "run", lambda *a, **k: MagicMock(
+            stdout="WM_STATE(WM_STATE):\n\t\twindow state: Iconic\n\t\ticon window: 0x0\n"
+        ))
+        assert actions._wm_state(1) == "Iconic"
+
+    def test_wm_state_of_unmanaged_window_is_none(self, monkeypatch):
+        monkeypatch.setattr(actions.subprocess, "run", lambda *a, **k: MagicMock(
+            stdout="WM_STATE:  not found.\n"
+        ))
+        assert actions._wm_state(1) is None
+
+    def test_managed_windows_walks_up_to_the_emulator(self, monkeypatch):
+        # The tmux client owns no window; its alacritty parent does.
+        monkeypatch.setattr(actions.subprocess, "run", lambda cmd, **k: MagicMock(
+            stdout="5\n" if cmd[-1] == "200" else ""
+        ))
+        monkeypatch.setattr(actions, "_ppid", lambda p: 200 if p == 100 else None)
+        monkeypatch.setattr(actions, "_wm_state", lambda w: "Normal")
+        assert actions._managed_windows(100) == [5]
+        assert actions._x_window_cache[100] == [5]
+
+    def test_unmanaged_children_are_skipped(self, monkeypatch):
+        monkeypatch.setattr(actions.subprocess, "run", lambda cmd, **k: MagicMock(
+            stdout="5\n6\n"
+        ))
+        monkeypatch.setattr(actions, "_wm_state", lambda w: "Normal" if w == 6 else None)
+        assert actions._managed_windows(100) == [6]
+
+    def test_unresolved_pid_is_not_cached(self, monkeypatch):
+        # The window may still be created later, so don't memoise the miss.
+        monkeypatch.setattr(actions.subprocess, "run", lambda *a, **k: MagicMock(stdout=""))
+        monkeypatch.setattr(actions, "_ppid", lambda p: None)
+        assert actions._managed_windows(100) == []
+        assert 100 not in actions._x_window_cache
+
+    def test_missing_xdotool_is_not_fatal(self, monkeypatch):
+        def boom(*a, **k):
+            raise FileNotFoundError("xdotool")
+
+        monkeypatch.setattr(actions.subprocess, "run", boom)
+        assert actions._managed_windows(100) == []
+
+    def test_no_display_is_unresolvable(self, monkeypatch):
+        monkeypatch.delenv("DISPLAY", raising=False)
+        assert actions._x_pids_mapped([1]) is None
+
+    def test_pid_without_a_window_is_unresolvable(self, monkeypatch):
+        monkeypatch.setenv("DISPLAY", ":0")
+        monkeypatch.setattr(actions, "_managed_windows", lambda p: [])
+        assert actions._x_pids_mapped([1]) is None
+
+    def test_iconified_terminal_is_hidden(self, monkeypatch):
+        monkeypatch.setenv("DISPLAY", ":0")
+        monkeypatch.setattr(actions, "_managed_windows", lambda p: [5])
+        monkeypatch.setattr(actions, "_wm_state", lambda w: "Iconic")
+        assert actions._x_pids_mapped(["4242"]) is False
+
+    def test_mapped_terminal_is_visible(self, monkeypatch):
+        monkeypatch.setenv("DISPLAY", ":0")
+        monkeypatch.setattr(actions, "_managed_windows", lambda p: [5])
+        monkeypatch.setattr(actions, "_wm_state", lambda w: "Normal")
+        assert actions._x_pids_mapped(["4242"]) is True
+
+    def test_any_mapped_client_counts_as_visible(self, monkeypatch):
+        monkeypatch.setenv("DISPLAY", ":0")
+        monkeypatch.setattr(actions, "_managed_windows", lambda p: [p])
+        monkeypatch.setattr(actions, "_wm_state", lambda w: "Normal" if w == 2 else "Iconic")
+        assert actions._x_pids_mapped([1, 2]) is True
+
+
+class TestTmuxPaneVisible:
+    def _tmux_replies(self, monkeypatch, *stdouts):
+        replies = list(stdouts)
+
+        def fake_run(cmd, **k):
+            return MagicMock(stdout=replies.pop(0) if replies else "")
+
+        monkeypatch.setattr(actions.subprocess, "run", fake_run)
+
+    def test_detached_session_is_hidden(self, monkeypatch):
+        self._tmux_replies(monkeypatch, "0,1,$0\n")
+        assert actions._tmux_pane_visible() is False
+
+    def test_inactive_window_is_hidden(self, monkeypatch):
+        self._tmux_replies(monkeypatch, "1,0,$0\n")
+        assert actions._tmux_pane_visible() is False
+
+    def test_vt_clients_still_use_the_vt_path(self, monkeypatch):
+        self._tmux_replies(monkeypatch, "1,1,$0\n", "/dev/tty2 999\n")
+        monkeypatch.setattr(actions, "_vt_is_active", lambda n: n == "tty2")
+        assert actions._tmux_pane_visible() is True
+
+    def test_pts_client_defers_to_x(self, monkeypatch):
+        self._tmux_replies(monkeypatch, "1,1,$0\n", "/dev/pts/15 4242\n")
+        seen = {}
+
+        def fake_mapped(pids):
+            seen["pids"] = list(pids)
+            return False
+
+        monkeypatch.setattr(actions, "_x_pids_mapped", fake_mapped)
+        assert actions._tmux_pane_visible() is False
+        assert seen["pids"] == ["4242"]
+
+    def test_pts_client_visible_when_window_mapped(self, monkeypatch):
+        self._tmux_replies(monkeypatch, "1,1,$0\n", "/dev/pts/15 4242\n")
+        monkeypatch.setattr(actions, "_x_pids_mapped", lambda pids: True)
+        assert actions._tmux_pane_visible() is True
+
+    def test_unresolvable_x_counts_as_visible(self, monkeypatch):
+        self._tmux_replies(monkeypatch, "1,1,$0\n", "/dev/pts/15 4242\n")
+        monkeypatch.setattr(actions, "_x_pids_mapped", lambda pids: None)
+        assert actions._tmux_pane_visible() is True
