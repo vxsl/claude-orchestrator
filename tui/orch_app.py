@@ -20,7 +20,7 @@ import subprocess
 import time
 from pathlib import Path
 
-from actions import ui_is_visible, ws_working_dir
+from actions import ui_is_visible, visibility_watcher, ws_working_dir
 from config import git_status_config
 from models import Store
 from session_bridge import SessionBridge
@@ -46,7 +46,8 @@ TOAST_SECS = 3.0
 
 class OrchApp(App):
     def __init__(self, store_path: str | Path | None = None, pollers: bool = True) -> None:
-        super().__init__(visibility_probe=ui_is_visible)
+        super().__init__(visibility_probe=ui_is_visible,
+                         visibility_watcher=visibility_watcher)
         if store_path is None:
             env_path = os.environ.get("ORCH_STORE_PATH")
             store_path = Path(env_path).expanduser() if env_path else None

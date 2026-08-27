@@ -29,12 +29,18 @@ VISIBILITY_POLL_SECS = 3.0
 
 
 class App:
-    def __init__(self, io=None, visibility_probe=None) -> None:
+    def __init__(self, io=None, visibility_probe=None, visibility_watcher=None) -> None:
         # visibility_probe: optional () -> bool, polled every 3s into
-        # ui_visible. Kept as an injected callable so the engine never
-        # imports app modules (orch wires actions.ui_is_visible).
+        # ui_visible. visibility_watcher: optional () -> watcher exposing
+        # fd/drain()/alive()/close(), which turns the hidden→visible edge into
+        # an event so the catch-up repaint doesn't wait for the next poll.
+        # Both are injected callables so the engine never imports app modules
+        # (orch wires actions.ui_is_visible / actions.visibility_watcher).
         self.io = io if io is not None else TermIO()
         self._visibility_probe = visibility_probe
+        self._visibility_watcher_factory = visibility_watcher
+        self._visibility_watcher = None
+        self._visibility_rearm = False
         self.ui_visible = True
         self.current_frame: Frame | None = None  # last-painted frame
 
@@ -83,6 +89,7 @@ class App:
             self._on_resize()  # initial size + first paint
             if self._visibility_probe is not None:
                 self._spawn(self._poll_visibility())
+                self._start_visibility_watcher()
             await self._done
             return self._result
         except Exception:
@@ -100,6 +107,7 @@ class App:
                 await asyncio.sleep(0)  # let cancelled tasks unwind
 
     def _shutdown(self, loop) -> None:
+        self._stop_visibility_watcher()
         if self._reader_fd is not None:
             with contextlib.suppress(Exception):
                 loop.remove_reader(self._reader_fd)
@@ -303,7 +311,54 @@ class App:
             except Exception:
                 visible = True
             self._apply_visibility(visible)
+            if self._visibility_rearm:
+                # The watcher died — usually the terminal emulator restarted,
+                # so its window id is gone. One retry; the poll is still
+                # correct on its own, just slower on the way back.
+                self._start_visibility_watcher()
             await asyncio.sleep(VISIBILITY_POLL_SECS)
+
+    def _start_visibility_watcher(self) -> None:
+        self._visibility_rearm = False
+        if self._visibility_watcher_factory is None or self._loop is None:
+            return
+        try:
+            watcher = self._visibility_watcher_factory()
+        except Exception:
+            watcher = None
+        if watcher is None:
+            return  # no X, no xprop, no window — the poll carries it alone
+        self._visibility_watcher = watcher
+        try:
+            self._loop.add_reader(watcher.fd, self._on_visibility_event)
+        except Exception:
+            self._stop_visibility_watcher()
+
+    def _stop_visibility_watcher(self) -> None:
+        watcher, self._visibility_watcher = self._visibility_watcher, None
+        if watcher is None:
+            return
+        if self._loop is not None:
+            with contextlib.suppress(Exception):
+                self._loop.remove_reader(watcher.fd)
+        with contextlib.suppress(Exception):
+            watcher.close()
+
+    def _on_visibility_event(self) -> None:
+        watcher = self._visibility_watcher
+        if watcher is None:
+            return
+        try:
+            visible = watcher.drain()
+        except Exception:
+            visible = None
+        if not watcher.alive():
+            # A dead pipe reads EOF forever, so unregister before it spins.
+            self._stop_visibility_watcher()
+            self._visibility_rearm = True
+            return
+        if visible is not None:
+            self._apply_visibility(visible)
 
     def _apply_visibility(self, visible: bool) -> None:
         was = self.ui_visible

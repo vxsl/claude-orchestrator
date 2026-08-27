@@ -788,3 +788,127 @@ class TestTmuxPaneVisible:
         self._tmux_replies(monkeypatch, "1,1,$0\n", "/dev/pts/15 4242\n")
         monkeypatch.setattr(actions, "_x_pids_mapped", lambda pids: None)
         assert actions._tmux_pane_visible() is True
+
+
+class TestVisibilityWatcher:
+    """The 3s poll is fine for noticing we're hidden; coming back needs an
+    event, or the terminal sits frozen until the next tick."""
+
+    def _watcher(self):
+        import os
+
+        r, w = os.pipe()
+
+        class FakeProc:
+            def __init__(self):
+                self.stdout = os.fdopen(r, "rb")
+                self.terminated = False
+
+            def poll(self):
+                return 0 if self.terminated else None
+
+            def terminate(self):
+                self.terminated = True
+
+            def wait(self, timeout=None):
+                return 0
+
+        proc = FakeProc()
+        return actions.VisibilityWatcher(proc), w, proc
+
+    def test_normal_means_mapped(self):
+        import os
+        wat, w, _ = self._watcher()
+        os.write(w, b"WM_STATE(WM_STATE):\n\t\twindow state: Normal\n\t\ticon window: 0x0\n")
+        assert wat.drain() is True
+
+    def test_iconic_means_hidden(self):
+        import os
+        wat, w, _ = self._watcher()
+        os.write(w, b"WM_STATE(WM_STATE):\n\t\twindow state: Iconic\n\t\ticon window: 0x0\n")
+        assert wat.drain() is False
+
+    def test_nothing_pending_is_none(self):
+        wat, _, _ = self._watcher()
+        assert wat.drain() is None
+
+    def test_partial_line_is_buffered_until_complete(self):
+        import os
+        wat, w, _ = self._watcher()
+        os.write(w, b"WM_STATE(WM_STATE):\n\t\twindow st")
+        assert wat.drain() is None
+        os.write(w, b"ate: Normal\n")
+        assert wat.drain() is True
+
+    def test_burst_collapses_to_the_latest_state(self):
+        # Intermediate states are already stale; repainting each is wasted work.
+        import os
+        wat, w, _ = self._watcher()
+        os.write(w, b"\t\twindow state: Normal\n\t\twindow state: Iconic\n")
+        assert wat.drain() is False
+
+    def test_eof_yields_none_and_shows_up_as_dead(self):
+        import os
+        wat, w, proc = self._watcher()
+        os.close(w)
+        assert wat.drain() is None
+        proc.terminated = True
+        assert wat.alive() is False
+
+    def test_close_terminates_the_spy(self):
+        wat, _, proc = self._watcher()
+        assert wat.alive() is True
+        wat.close()
+        assert proc.terminated is True
+
+
+class TestVisibilityWatcherFactory:
+    def test_no_display_yields_no_watcher(self, monkeypatch):
+        monkeypatch.delenv("DISPLAY", raising=False)
+        assert actions.visibility_watcher() is None
+
+    def test_unresolvable_window_yields_no_watcher(self, monkeypatch):
+        monkeypatch.setenv("DISPLAY", ":0")
+        monkeypatch.setattr(actions, "_orch_windows", lambda: [])
+        assert actions.visibility_watcher() is None
+
+    def test_window_cache_is_dropped_before_resolving(self, monkeypatch):
+        # A restarted terminal emulator has a new window id; the watcher is
+        # only ever recreated after one died, so never trust the old entry.
+        monkeypatch.delenv("DISPLAY", raising=False)
+        actions._x_window_cache[123] = [456]
+        actions.visibility_watcher()
+        assert actions._x_window_cache == {}
+
+    def test_outside_tmux_it_watches_our_own_window(self, monkeypatch):
+        import os
+        monkeypatch.setenv("DISPLAY", ":0")
+        monkeypatch.delenv("TMUX", raising=False)
+        monkeypatch.setattr(actions.os, "ttyname", lambda fd: "/dev/pts/9")
+        seen = []
+        monkeypatch.setattr(actions, "_managed_windows", lambda p: seen.append(p) or [7])
+        assert actions._orch_windows() == [7]
+        assert seen == [os.getpid()]
+
+    def test_under_tmux_it_watches_the_client_windows(self, monkeypatch):
+        monkeypatch.setenv("DISPLAY", ":0")
+        monkeypatch.setenv("TMUX", "/tmp/tmux-1000/default,1,0")
+        monkeypatch.setattr(actions.os, "ttyname", lambda fd: "/dev/pts/9")
+        replies = ["$3\n", "4242\n"]
+        monkeypatch.setattr(actions.subprocess, "run",
+                            lambda *a, **k: MagicMock(stdout=replies.pop(0)))
+        monkeypatch.setattr(actions, "_managed_windows", lambda p: [p * 2])
+        assert actions._orch_windows() == [8484]
+
+    def test_without_a_tty_there_is_nothing_to_watch(self, monkeypatch):
+        # Tests and pipes have no terminal window, and shelling out to tmux
+        # from them pollutes suites that patch subprocess globally.
+        monkeypatch.setenv("DISPLAY", ":0")
+
+        def no_tty(fd):
+            raise OSError("not a tty")
+
+        monkeypatch.setattr(actions.os, "ttyname", no_tty)
+        monkeypatch.setattr(actions, "_managed_windows",
+                            lambda p: pytest.fail("should not resolve windows"))
+        assert actions._orch_windows() == []

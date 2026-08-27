@@ -6,6 +6,8 @@ integration, suspend mode sequencing, visibility gate, crash contract.
 """
 
 import asyncio
+import contextlib
+import os
 import re
 
 import pytest
@@ -444,6 +446,120 @@ async def test_visibility_probe_is_polled():
     async with Headless(App(visibility_probe=probe)) as h:
         await h.pause(0.02)
         assert calls  # first poll happens at startup
+
+
+class PipeWatcher:
+    """Duck-typed visibility watcher over a pipe the test drives.
+
+    Matches the contract actions.VisibilityWatcher implements: fd, drain(),
+    alive(), close(). b"1" means mapped, b"0" hidden, EOF means the watcher
+    process died.
+    """
+
+    def __init__(self) -> None:
+        self._r, self.w = os.pipe()
+        os.set_blocking(self._r, False)
+        self._alive = True
+        self.closed = False
+
+    @property
+    def fd(self) -> int:
+        return self._r
+
+    def drain(self):
+        try:
+            chunk = os.read(self._r, 4096)
+        except BlockingIOError:
+            return None
+        if not chunk:
+            self._alive = False
+            return None
+        return chunk.strip().endswith(b"1")
+
+    def alive(self) -> bool:
+        return self._alive
+
+    def close(self) -> None:
+        self.closed = True
+        with contextlib.suppress(OSError):
+            os.close(self._r)
+
+
+@pytest.mark.asyncio
+async def test_watcher_wakes_without_waiting_for_the_next_poll():
+    # The poll is 3s; the whole point of the watcher is not paying it.
+    w = PipeWatcher()
+    app = App(visibility_probe=lambda: True, visibility_watcher=lambda: w)
+    async with Headless(app, size=(30, 6)) as h:
+        h.app.push(RowsView())
+        await h.pause()
+        h.app._apply_visibility(False)
+        mark = len(h.io.written)
+        await h.press("x")
+        assert len(h.io.written) == mark  # hidden: still not painting
+        os.write(w.w, b"1\n")  # WM_STATE went back to Normal
+        await h.pause(0.02)
+        assert h.app.ui_visible is True
+        assert len(h.io.written) > mark  # caught up on the event, not a poll
+        assert "counter: 1" in h.screen_text()
+
+
+@pytest.mark.asyncio
+async def test_watcher_reports_hidden_too():
+    w = PipeWatcher()
+    app = App(visibility_probe=lambda: True, visibility_watcher=lambda: w)
+    async with Headless(app) as h:
+        await h.pause(0.02)
+        os.write(w.w, b"0\n")
+        await h.pause(0.02)
+        assert h.app.ui_visible is False
+
+
+@pytest.mark.asyncio
+async def test_dead_watcher_is_unregistered_rather_than_spun_on():
+    # A dead pipe reads EOF forever, so leaving it registered burns a core.
+    w = PipeWatcher()
+    app = App(visibility_probe=lambda: True, visibility_watcher=lambda: w)
+    async with Headless(app) as h:
+        await h.pause(0.02)
+        assert h.app._visibility_watcher is w
+        os.close(w.w)  # xprop exited
+        await h.pause(0.02)
+        assert h.app._visibility_watcher is None
+        assert h.app._visibility_rearm is True
+        assert w.closed
+
+
+@pytest.mark.asyncio
+async def test_unavailable_watcher_falls_back_to_polling():
+    calls = []
+    app = App(visibility_probe=lambda: calls.append(1) or True,
+              visibility_watcher=lambda: None)
+    async with Headless(app) as h:
+        await h.pause(0.02)
+        assert h.app._visibility_watcher is None
+        assert calls  # the poll still runs on its own
+
+
+@pytest.mark.asyncio
+async def test_watcher_factory_blowing_up_is_not_fatal():
+    def boom():
+        raise RuntimeError("no display")
+
+    app = App(visibility_probe=lambda: True, visibility_watcher=boom)
+    async with Headless(app) as h:
+        await h.pause(0.02)
+        assert h.app._visibility_watcher is None
+        assert h.app.ui_visible is True
+
+
+@pytest.mark.asyncio
+async def test_shutdown_closes_the_watcher():
+    w = PipeWatcher()
+    app = App(visibility_probe=lambda: True, visibility_watcher=lambda: w)
+    async with Headless(app) as h:
+        await h.pause(0.02)
+    assert w.closed
 
 
 # ── crash contract ────────────────────────────────────────────────

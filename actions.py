@@ -5,6 +5,7 @@ No Textual dependency. Functions take explicit parameters instead of reaching in
 
 from __future__ import annotations
 
+import contextlib
 import os
 import subprocess
 from datetime import datetime
@@ -1035,3 +1036,114 @@ def run_git_action(action: str, cwd: str) -> tuple[bool, str]:
         return False, "restage tool not found"
 
     return False, f"Unknown git action: {action}"
+
+
+# ─── Instant wake ───────────────────────────────────────────────────
+#
+# Polling every 3s is fine for noticing we've been hidden — nothing is on
+# screen to be stale. Coming back is the other way round: the poll leaves up
+# to 3s of frozen terminal before the catch-up repaint fires. `xprop -spy`
+# blocks on X PropertyNotify and reports WM_STATE transitions as they happen,
+# so the wake is immediate and costs nothing while we wait.
+
+
+class VisibilityWatcher:
+    """A stream of mapped/unmapped transitions for orch's terminal window.
+
+    Wraps a long-lived `xprop -spy`. The caller registers `fd` with its event
+    loop and calls `drain()` when it fires. One window only — with several
+    tmux clients attached the 3s poll still covers the rest.
+    """
+
+    def __init__(self, proc) -> None:
+        self._proc = proc
+        self._buf = b""
+        with contextlib.suppress(OSError, ValueError):
+            os.set_blocking(self.fd, False)
+
+    @property
+    def fd(self) -> int:
+        return self._proc.stdout.fileno()
+
+    def alive(self) -> bool:
+        return self._proc.poll() is None
+
+    def drain(self) -> bool | None:
+        """Newest mapped-state in the stream, or None if no complete event.
+
+        Collapses a burst to its last value — intermediate states are stale by
+        the time we run, and repainting each one would be pointless work.
+        """
+        try:
+            chunk = os.read(self.fd, 65536)
+        except (BlockingIOError, InterruptedError):
+            return None
+        except (OSError, ValueError):
+            return None
+        if not chunk:
+            return None  # EOF; caller notices via alive() and unregisters
+        self._buf += chunk
+        *lines, self._buf = self._buf.split(b"\n")
+        state = None
+        for line in lines:
+            if b"window state:" in line:
+                state = line.rsplit(b":", 1)[1].strip() == b"Normal"
+        return state
+
+    def close(self) -> None:
+        with contextlib.suppress(Exception):
+            self._proc.terminate()
+        with contextlib.suppress(Exception):
+            self._proc.stdout.close()
+        with contextlib.suppress(Exception):
+            self._proc.wait(timeout=1)
+
+
+def _orch_windows() -> list[int]:
+    """Toplevel X windows hosting orch's terminal, freshest-first."""
+    if not os.environ.get("DISPLAY"):
+        return []
+    try:
+        os.ttyname(1)
+    except OSError:
+        return []  # not attached to a terminal (tests, pipes) — nothing to watch
+    if os.environ.get("TMUX"):
+        try:
+            session_id = subprocess.run(
+                ["tmux", "display-message", "-p", "-t",
+                 os.environ.get("TMUX_PANE", ""), "#{session_id}"],
+                capture_output=True, text=True, timeout=1,
+            ).stdout.strip()
+            raw = subprocess.run(
+                ["tmux", "list-clients", "-t", session_id, "-F", "#{client_pid}"],
+                capture_output=True, text=True, timeout=1,
+            ).stdout.split()
+        except (OSError, subprocess.SubprocessError):
+            return []
+        pids = [int(c) for c in raw if c.isdigit()]
+    else:
+        pids = [os.getpid()]
+    wins: list[int] = []
+    for pid in pids:
+        wins.extend(_managed_windows(pid))
+    return wins
+
+
+def visibility_watcher() -> VisibilityWatcher | None:
+    """Watch orch's terminal window, or None when X can't resolve one.
+
+    Called at startup and again whenever a watcher dies, so the cached window
+    ids are dropped first — a restarted terminal emulator gets a new window.
+    """
+    _x_window_cache.clear()
+    wins = _orch_windows()
+    if not wins:
+        return None
+    try:
+        proc = subprocess.Popen(
+            ["xprop", "-spy", "-id", str(wins[0]), "WM_STATE"],
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return VisibilityWatcher(proc)
