@@ -8,8 +8,11 @@ tests (spawn/resume argv) are actions-level and already covered in
 test_app_logic.py — not re-ported here.
 """
 
+from datetime import datetime, timedelta, timezone
+
 import pytest
 
+from sessions import ClaudeSession
 from tui.orch_app import OrchApp
 from tui.testing import Headless
 from tui.views.current_sessions import CurrentSessionsView
@@ -25,6 +28,33 @@ def home_app(populated_store):
 def ws_ids(app):
     """Enabled (main) row ids in display order."""
     return [rid for rid, _, disabled in app.home.ws_list.rows if not disabled]
+
+
+def make_session(n: int = 1, **kw) -> ClaudeSession:
+    now = datetime.now(timezone.utc)
+    defaults = dict(
+        session_id=f"ccccddd{n}-0000-0000-0000-00000000000{n}",
+        project_dir="-home-u-dev-proj",
+        project_path="/home/u/dev/proj",
+        title=f"Fake session {n}",
+        started_at=(now - timedelta(minutes=60 + n)).isoformat(),
+        last_activity=(now - timedelta(minutes=n)).isoformat(),
+        message_count=2,
+        assistant_message_count=1,
+        model="claude-sonnet-4",
+    )
+    defaults.update(kw)
+    return ClaudeSession(**defaults)
+
+
+async def finish_search(h, tries: int = 200) -> None:
+    """Wait for the global-search worker to drain (it runs in a thread)."""
+    for _ in range(tries):
+        if not h.app.home._gs_running:
+            await h.pause()  # let the scheduled repaint land
+            return
+        await h.pause(0.01)
+    raise AssertionError("global search never finished")
 
 
 # ─── startup / rendering ────────────────────────────────────────────
@@ -188,10 +218,23 @@ class TestSearch:
             await h.press("slash")
             assert h.app.home.search_active is True
 
+    async def test_slash_defaults_to_session_mode(self, home_app):
+        """'/' searches session content across all workstreams, as app.py."""
+        async with Headless(home_app) as h:
+            await h.press("slash")
+            assert h.app.state.search_mode == "sessions"
+
+    async def test_tab_toggles_search_mode(self, home_app):
+        async with Headless(home_app) as h:
+            await h.press("slash", "tab")
+            assert h.app.state.search_mode == "ws"
+            await h.press("tab")
+            assert h.app.state.search_mode == "sessions"
+
     async def test_search_narrows_rows_live(self, home_app):
         async with Headless(home_app) as h:
             assert len(ws_ids(h.app)) == 6
-            await h.press("slash")
+            await h.press("slash", "tab")  # ws-name filter mode
             await h.feed_bytes(b"personal")
             assert h.app.state.search_text == "personal"
             assert ws_ids(h.app) != []
@@ -200,7 +243,7 @@ class TestSearch:
 
     async def test_escape_cancels_search_and_restores(self, home_app):
         async with Headless(home_app) as h:
-            await h.press("slash")
+            await h.press("slash", "tab")
             await h.feed_bytes(b"personal")
             await h.press("escape")
             assert h.app.home.search_active is False
@@ -209,7 +252,7 @@ class TestSearch:
 
     async def test_enter_keeps_filter(self, home_app):
         async with Headless(home_app) as h:
-            await h.press("slash")
+            await h.press("slash", "tab")
             await h.feed_bytes(b"personal")
             await h.press("enter")
             assert h.app.home.search_active is False
@@ -218,11 +261,95 @@ class TestSearch:
 
     async def test_search_swallows_action_keys(self, home_app):
         async with Headless(home_app) as h:
-            await h.press("slash")
+            await h.press("slash", "tab")
             await h.feed_bytes(b"q3")  # would otherwise quit + filter
             assert h.app._done.done() is False
             assert h.app.state.filter_mode == "all"
             assert h.app.state.search_text == "q3"
+
+
+# ─── cross-workstream session content search ─────────────────────────
+
+
+@pytest.mark.asyncio
+class TestGlobalSessionSearch:
+    async def test_no_sessions_shows_hint(self, home_app):
+        async with Headless(home_app) as h:
+            await h.press("slash")
+            await h.feed_bytes(b"widget")
+            await finish_search(h)
+            assert "Sessions still loading" in h.screen_text()
+
+    async def test_no_match_shows_hint(self, home_app):
+        home_app.state.sessions = [make_session(1, title="Fixing the parser")]
+        async with Headless(home_app) as h:
+            await h.press("slash")
+            await h.feed_bytes(b"nonesuchterm")
+            await finish_search(h)
+            assert "No session matches" in h.screen_text()
+
+    async def test_matching_session_takes_over_the_list(self, home_app):
+        s = make_session(1, title="Widget refactor")
+        home_app.state.sessions = [s]
+        async with Headless(home_app) as h:
+            await h.press("slash")
+            await h.feed_bytes(b"widget")
+            await finish_search(h)
+            assert ws_ids(h.app) == [f"gs:{s.session_id}"]
+            text = h.screen_text()
+            assert "Widget refactor" in text
+            assert "1 session match" in text
+            assert "Active work item" not in text  # ws rows are gone
+
+    async def test_tab_back_to_ws_mode_restores_rows(self, home_app):
+        home_app.state.sessions = [make_session(1, title="Widget refactor")]
+        async with Headless(home_app) as h:
+            await h.press("slash")
+            await h.feed_bytes(b"personal")
+            await finish_search(h)
+            await h.press("tab")
+            assert h.app.state.search_mode == "ws"
+            assert "Personal project" in h.screen_text()
+            assert all(
+                not str(rid).startswith("gs:") for rid in ws_ids(h.app)
+            )
+
+    async def test_escape_clears_results(self, home_app):
+        home_app.state.sessions = [make_session(1, title="Widget refactor")]
+        async with Headless(home_app) as h:
+            await h.press("slash")
+            await h.feed_bytes(b"widget")
+            await finish_search(h)
+            await h.press("escape")
+            assert h.app.home._gs_results == []
+            assert len(ws_ids(h.app)) == 6
+
+    async def test_enter_on_hit_opens_owning_detail(self, home_app):
+        s = make_session(1, title="Widget refactor")
+        ws = home_app.state.store.active[2]
+        ws.add_link("claude-session", s.session_id, "session")
+        home_app.state.store.update(ws)
+        home_app.state.sessions = [s]
+        async with Headless(home_app) as h:
+            await h.press("slash")
+            await h.feed_bytes(b"widget")
+            await finish_search(h)
+            await h.press("enter")   # closes the input, keeps results
+            await h.press("enter")   # opens the hit
+            assert isinstance(h.top, DetailView)
+            assert h.top.ws.id == ws.id
+            assert h.app.state.search_text == ""  # search mode left behind
+
+    async def test_enter_on_orphan_hit_toasts(self, home_app):
+        home_app.state.sessions = [make_session(1, title="Widget refactor")]
+        async with Headless(home_app) as h:
+            await h.press("slash")
+            await h.feed_bytes(b"widget")
+            await finish_search(h)
+            await h.press("enter")
+            await h.press("enter")
+            assert not isinstance(h.top, DetailView)
+            assert "No workstream owns" in h.app.toast_text
 
 
 # ─── tabs & quit (full tab semantics live in test_detail.py) ─────────

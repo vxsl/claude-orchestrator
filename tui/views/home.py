@@ -14,16 +14,24 @@ through it), and multi-match 'r' resume now opens SessionPickerView.
 P4-C wired tabs: enter/l opens the workstream's DetailView tab,
 ctrl+b/ctrl+x cycle Home ↔ Sessions ↔ Detail tabs, 'x' closes; the
 palette moved to OrchApp (detail-aware). Remaining stubs: 'E' rename
-inline input, dev-workflow actions, global session content search.
+inline input, dev-workflow actions.
+
+'/' opens the cross-workstream session *content* search (the default
+mode, as in the Textual app); Tab flips it to the workstream-name
+filter and back. Results stream in from a thread worker on the
+"global_search" exclusive group and take over the workstream list;
+Enter on a hit opens the owning workstream's Detail tab with that
+session highlighted.
 
 Not in this phase (see MIGRATION.md): the two embedded tig panes that
 filled the lower half of the Textual home (P5/P6) — the lists own the
-whole body for now — and cross-workstream session *content* search
-(the home '/' filters workstream names/descriptions only).
+whole body for now.
 """
 
 from __future__ import annotations
 
+import asyncio
+import time as _time
 from typing import Any
 
 from rich.text import Text
@@ -34,7 +42,8 @@ from rendering import (
     C_BLUE, C_DIM, C_FAINT, C_GREEN, C_MID, C_RED, C_YELLOW,
     BG_BASE, BG_RAISED,
     _activity_icon, _any_session_today, _best_activity, _category_markup,
-    _is_session_seen, _is_today, _render_session_option, _render_ws_option,
+    _is_session_seen, _is_today, _render_global_search_result,
+    _render_session_option, _render_ws_option,
     _rich_escape, _token_color_markup,
 )
 from threads import ThreadActivity, session_activity
@@ -59,6 +68,11 @@ from .trash import TrashView
 
 STUB_RENAME = "Rename lands in P4"
 STUB_DEV_WORKFLOW = "Dev-workflow actions land in P4"
+
+GS_GROUP = "global_search"      # exclusive worker group for the '/' search
+GS_ROW_PREFIX = "gs:"           # ws_list row-id prefix for a session hit
+GS_HINT_ID = "__gs_hint__"      # the disabled "searching…"/"no match" row
+GS_POST_INTERVAL = 0.15         # seconds between streamed partial repaints
 
 
 def _markup_lines(content: Any) -> list[str]:
@@ -147,6 +161,11 @@ class HomeView(View):
         self.search.on_cancel = self._close_search
         self.search.on_submit = lambda _text: self._close_search(keep=True)
         self.search_active = False
+        # Cross-workstream session search (search_mode == "sessions").
+        self._gs_query: str | None = None   # query the cached results answer
+        self._gs_results: list = []         # ranked (SessionSearchResult, ws)
+        self._gs_running = False            # a worker is still streaming
+        self._gs_map: dict[str, Any] = {}   # session_id → owning workstream
         self._preview_ws_id: str | None = None
         self._preview_label = f"[bold {C_BLUE}]Sessions[/bold {C_BLUE}]"
         self._ws_count = 0  # blocks (workstreams) currently listed
@@ -249,7 +268,7 @@ class HomeView(View):
     def on_key(self, ev) -> bool:
         if self.search_active:
             if ev.key in ("tab", "shift+tab"):
-                self._toast("Session content search lands in P4")
+                self._toggle_search_mode()
             else:
                 self.search.handle_key(ev)
             self.request_paint()
@@ -306,10 +325,45 @@ class HomeView(View):
             self.app.exit()
 
     def _action_select_item(self) -> None:
-        """Enter/l: open the selected workstream's detail tab."""
+        """Enter/l: open the selected workstream's detail tab.
+
+        In session-search mode the rows are session hits, so route to the
+        owning workstream and hand Detail the session to highlight."""
+        sid = self._selected_search_session()
+        if sid is not None:
+            self._open_search_hit(sid)
+            return
         ws = self._selected_ws()
         if ws:
             self.app.open_detail(ws)
+
+    def _selected_search_session(self) -> str | None:
+        """session_id under the cursor while session-search rows are shown."""
+        if not self._global_search_shown():
+            return None
+        key = self.ws_list.highlighted_id
+        key = BlockList.block_key(key)
+        if isinstance(key, str) and key.startswith(GS_ROW_PREFIX):
+            return key[len(GS_ROW_PREFIX):]
+        return None
+
+    def _open_search_hit(self, sid: str) -> None:
+        ws = self._gs_map.get(sid)
+        if ws is None:
+            # Mapping lost (results rebuilt between render and Enter) — fall
+            # back to reverse-resolving the session's own workstream.
+            sess = next(
+                (s for s in self.state.sessions if s.session_id == sid), None
+            )
+            if sess is not None:
+                ws = self.state.find_ws_for_session(sess)
+        if ws is None:
+            self._toast("No workstream owns that session")
+            return
+        # Leave search mode first so backing out of Detail lands on the
+        # normal workstream list, as app.py does.
+        self._close_search()
+        self.app.open_detail(ws, highlight_session_id=sid)
 
     def _action_refresh(self) -> None:
         self.state.store.load()
@@ -581,11 +635,13 @@ class HomeView(View):
     # ── search ────────────────────────────────────────────────────
 
     def _open_search(self) -> None:
+        """'/' always starts a fresh query, keeping the last-used mode
+        (sessions by default; Tab flips to the workstream filter)."""
         self.search_active = True
         self.search.text = ""
         self.search.cursor = 0
-        self.state.search_mode = "ws"  # content search is a P4 gap
         self.state.search_text = ""
+        self._reset_global_search()
         self.refresh_rows()
 
     def _on_search_changed(self, text: str) -> None:
@@ -596,7 +652,125 @@ class HomeView(View):
         self.search_active = False
         if not keep:
             self.state.search_text = ""
+            self._reset_global_search()
         self.refresh_rows()
+
+    def _toggle_search_mode(self) -> None:
+        """Tab: swap between content-searching every session and filtering
+        workstream names (port of SearchInput.action_toggle_mode)."""
+        self.state.search_mode = (
+            "sessions" if self.state.search_mode == "ws" else "ws"
+        )
+        self._reset_global_search()
+        label = (
+            "sessions (content)" if self.state.search_mode == "sessions"
+            else "workstreams"
+        )
+        self._toast(f"Search mode: {label}")
+        self.refresh_rows()  # re-run the live query under the new mode
+
+    # ── cross-workstream session search ───────────────────────────
+
+    def _global_search_shown(self) -> bool:
+        """True when the workstream list is holding session hits."""
+        return bool(self.state.search_mode == "sessions" and self.state.search_text)
+
+    def _reset_global_search(self) -> None:
+        self._gs_query = None
+        self._gs_results = []
+        self._gs_running = False
+        self._gs_map = {}
+
+    def _build_global_search_rows(self, kick: bool = True) -> None:
+        """Render the latest results into ws_list, kicking a worker when the
+        query moved on (the search itself must never run on the event loop —
+        parsing a matching multi-MB JSONL would stall every frame)."""
+        query = self.state.search_text
+        if kick and query != self._gs_query:
+            self._gs_query = query
+            self._gs_results = []
+            self._gs_running = True
+            self._kick_global_search(query)
+
+        self._gs_map = {r.session.session_id: ws for r, ws in self._gs_results}
+        rows: list[tuple[Any, str, bool]] = []
+        if not self._gs_results:
+            if self._gs_running:
+                hint = f"  [{C_DIM}]Searching {len(self.state.sessions)} sessions…[/{C_DIM}]"
+            elif not self.state.sessions:
+                hint = f"  [{C_DIM}]Sessions still loading… try again in a moment[/{C_DIM}]"
+            else:
+                hint = f"  [{C_DIM}]No session matches[/{C_DIM}]"
+            rows.append((GS_HINT_ID, hint, True))
+        else:
+            for r, ws in self._gs_results:
+                rid = f"{GS_ROW_PREFIX}{r.session.session_id}"
+                lines = _markup_lines(
+                    _render_global_search_result(r, ws.name if ws else None)
+                )
+                rows.append((rid, lines[0], False))
+                rows.extend(((rid, j), line, True)
+                            for j, line in enumerate(lines[1:], 1))
+        self._ws_count = len(self._gs_results)
+        # keep_id: streamed batches re-rank the list, so follow the session
+        # under the cursor instead of pinning a row index that moved.
+        self.ws_list.set_rows(rows)
+        self._refresh_preview(force=True)
+        self.request_paint()
+
+    def _kick_global_search(self, query: str) -> None:
+        app = self.app
+        if app is None:
+            return
+        app.exclusive(GS_GROUP, self._gs_runner(query, app.gen(GS_GROUP) + 1))
+
+    async def _gs_runner(self, query: str, g: int) -> None:
+        """Stream (result, ws) pairs off the event loop, newest session first.
+
+        to_thread can't be cancelled mid-parse, so the loop re-checks the
+        exclusive generation on every candidate and drops itself the moment a
+        newer keystroke supersedes it."""
+        app = self.app
+        if app is None:
+            return
+
+        def work():
+            acc: list = []
+            last_post = 0.0
+            try:
+                for pair in self.state.iter_global_session_search(query):
+                    if app.gen(GS_GROUP) != g:
+                        return  # superseded — a fresher query owns the rows
+                    acc.append(pair)
+                    now = _time.monotonic()
+                    if now - last_post > GS_POST_INTERVAL:
+                        last_post = now
+                        app.call_from_thread(
+                            self._apply_global_search, query, g, list(acc), False
+                        )
+            except Exception as e:
+                app.call_from_thread(
+                    self._toast, f"Search error: {type(e).__name__}: {e}"
+                )
+            app.call_from_thread(self._apply_global_search, query, g, acc, True)
+
+        await asyncio.to_thread(work)
+
+    def _apply_global_search(self, query: str, g: int, results, done: bool) -> None:
+        """Store a streamed batch and repaint — event-loop thread only."""
+        app = self.app
+        if app is None or app.gen(GS_GROUP) != g:
+            return  # stale worker
+        if query != self.state.search_text:
+            return  # the user kept typing
+        self._gs_results = sorted(
+            results, key=lambda p: p[0].total_score, reverse=True
+        )
+        self._gs_running = not done
+        self._gs_query = query
+        if not self._global_search_shown():
+            return  # mode flipped to the ws filter while we ran
+        self._build_global_search_rows(kick=False)
 
     # ── workstream rows ───────────────────────────────────────────
 
@@ -610,6 +784,9 @@ class HomeView(View):
         return w if w > 20 else 0
 
     def refresh_rows(self) -> None:
+        if self._global_search_shown():
+            self._build_global_search_rows()  # session hits own the list
+            return
         items = self.state.get_unified_items()
         last_seen = self.state.get_last_seen()
         lw = self._ws_line_width()
@@ -799,14 +976,25 @@ class HomeView(View):
                 preset_parts.append(f"[{C_FAINT}]{n}:{label}[/{C_FAINT}]")
         line = f" {SEP.join(preset_parts)}"
         if self.state.search_text:
+            label = "sessions" if self.state.search_mode == "sessions" else "search"
+            hint = f"  [{C_FAINT}](Tab toggles)[/{C_FAINT}]" if self.search_active else ""
             line += (
-                f"  [{C_DIM}]·[/{C_DIM}]  [{C_DIM}]search:[/{C_DIM}] "
-                f"[{C_YELLOW}]{_rich_escape(self.state.search_text)}[/{C_YELLOW}]"
+                f"  [{C_DIM}]·[/{C_DIM}]  [{C_DIM}]{label}:[/{C_DIM}] "
+                f"[{C_YELLOW}]{_rich_escape(self.state.search_text)}[/{C_YELLOW}]{hint}"
             )
         return line
 
     def _render_summary_bar(self) -> str:
         count = self._ws_count
+        if self._global_search_shown():
+            searching = f"  [{C_DIM}]searching…[/{C_DIM}]" if self._gs_running else ""
+            return (
+                f"  {count} session {'match' if count == 1 else 'matches'}{searching}  "
+                f"[{C_DIM}]│[/{C_DIM}]  "
+                f"[{C_YELLOW}]enter[/{C_YELLOW}] open  "
+                f"[{C_YELLOW}]Tab[/{C_YELLOW}] filter workstreams  "
+                f"[{C_YELLOW}]esc[/{C_YELLOW}] clear"
+            )
         if self.state.filter_mode == "archived":
             return (
                 f"  {count} archived  "
@@ -886,11 +1074,22 @@ class HomeView(View):
     def _render_footer(self, frame, rect: Rect) -> None:
         toast = getattr(self.app, "toast_text", "") if self.app is not None else ""
         if self.search_active:
-            input_w = max(1, rect.w - 3)
+            tag = (
+                "sessions (content) · Tab: workstreams"
+                if self.state.search_mode == "sessions"
+                else "workstreams · Tab: sessions"
+            )
+            tag_w = len(tag) + 2 if rect.w > len(tag) + 24 else 0
+            input_w = max(1, rect.w - 3 - tag_w)
             frame.write_markup(
-                rect.x, rect.y, rect.w,
+                rect.x, rect.y, rect.w - tag_w,
                 f" [bold {C_YELLOW}]/[/bold {C_YELLOW}]{self.search.render(input_w)}",
             )
+            if tag_w:
+                frame.write_markup(
+                    rect.x + rect.w - tag_w, rect.y, tag_w,
+                    f"[{C_FAINT}]{tag}[/{C_FAINT}] ",
+                )
             frame.cursor = (rect.x + 2 + self.search.cursor_col(input_w), rect.y)
         elif toast:
             frame.write_markup(
