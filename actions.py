@@ -33,13 +33,19 @@ def has_tmux() -> bool:
 def ui_is_visible() -> bool:
     """Best-effort check that orch's terminal is actually on screen.
 
-    Detects the three ways orch runs 24/7 without being looked at: on a Linux
-    VT the user has switched away from, in a tmux session that is detached /
-    whose window is inactive / whose only attached clients sit on an inactive
-    VT, and in an X terminal that the window manager has unmapped (an xmonad
-    scratchpad toggled off, or a window on a workspace that isn't showing).
-    Setups we can't resolve count as visible. Override with
-    ORCH_ASSUME_VISIBLE=1 (useful for profiling).
+    Detects the two ways orch runs 24/7 without being looked at: on a Linux
+    VT the user has switched away from, and in a tmux session that is
+    detached / whose window is inactive / whose only attached clients sit on
+    an inactive VT. Unknown setups (X terminal emulators, ssh pts) count as
+    visible. Override with ORCH_ASSUME_VISIBLE=1 (useful for profiling).
+
+    ORCH_X_VISIBILITY=1 additionally treats an X terminal the window manager
+    has unmapped (an xmonad scratchpad toggled off, a window on a workspace
+    that isn't showing) as hidden. That stops orch repainting into a window
+    nobody can see — worth ~30% of a core here — but it is opt-in until the
+    garbled-scrollback regression it exposed is understood: with the gate
+    engaged, the frame can end up drawn wider than the terminal it is written
+    to, and the overflow wraps into the pane's history permanently.
     """
     if os.environ.get("ORCH_ASSUME_VISIBLE"):
         return True
@@ -52,9 +58,15 @@ def ui_is_visible() -> bool:
         return _vt_is_active(name)
     if os.environ.get("TMUX"):
         return _tmux_pane_visible()
+    if not _x_visibility_enabled():
+        return True
     # Bare terminal emulator — our own process tree owns the window.
     mapped = _x_pids_mapped([os.getpid()])
     return True if mapped is None else mapped
+
+
+def _x_visibility_enabled() -> bool:
+    return bool(os.environ.get("ORCH_X_VISIBILITY"))
 
 
 def _vt_is_active(name: str) -> bool:
@@ -99,6 +111,8 @@ def _tmux_pane_visible() -> bool:
             return any(_vt_is_active(n) for n in vt_names)
         # Clients live on pts — under X each one belongs to a terminal
         # emulator window that the WM may have unmapped.
+        if not _x_visibility_enabled():
+            return True
         mapped = _x_pids_mapped(client_pids)
         return True if mapped is None else mapped
     except Exception:
@@ -142,7 +156,16 @@ def _wm_state(win: int) -> str | None:
 
 
 def _managed_windows(pid: int) -> list[int]:
-    """Toplevel windows owned by `pid` or its nearest window-owning ancestor."""
+    """Toplevel windows owned by `pid` or its nearest window-owning ancestor.
+
+    KNOWN DEFECT (why ORCH_X_VISIBILITY defaults off): this can latch onto a
+    window that is no longer the one on screen. Observed live — the tmux
+    client resolved to 0x4200003 reading Iconic while the actual NSP_orch
+    window was 0x4e00003 reading Normal. ui_is_visible() then reports hidden
+    for a fully visible orch and the UI stops painting. Resolve this against
+    the client's own terminal rather than a process-tree walk before turning
+    the gate back on.
+    """
     cached = _x_window_cache.get(pid)
     if cached is not None:
         return cached
@@ -1101,7 +1124,7 @@ class VisibilityWatcher:
 
 def _orch_windows() -> list[int]:
     """Toplevel X windows hosting orch's terminal, freshest-first."""
-    if not os.environ.get("DISPLAY"):
+    if not os.environ.get("DISPLAY") or not _x_visibility_enabled():
         return []
     try:
         os.ttyname(1)

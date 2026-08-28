@@ -768,6 +768,7 @@ class TestTmuxPaneVisible:
         assert actions._tmux_pane_visible() is True
 
     def test_pts_client_defers_to_x(self, monkeypatch):
+        monkeypatch.setenv("ORCH_X_VISIBILITY", "1")
         self._tmux_replies(monkeypatch, "1,1,$0\n", "/dev/pts/15 4242\n")
         seen = {}
 
@@ -883,6 +884,7 @@ class TestVisibilityWatcherFactory:
     def test_outside_tmux_it_watches_our_own_window(self, monkeypatch):
         import os
         monkeypatch.setenv("DISPLAY", ":0")
+        monkeypatch.setenv("ORCH_X_VISIBILITY", "1")
         monkeypatch.delenv("TMUX", raising=False)
         monkeypatch.setattr(actions.os, "ttyname", lambda fd: "/dev/pts/9")
         seen = []
@@ -892,6 +894,7 @@ class TestVisibilityWatcherFactory:
 
     def test_under_tmux_it_watches_the_client_windows(self, monkeypatch):
         monkeypatch.setenv("DISPLAY", ":0")
+        monkeypatch.setenv("ORCH_X_VISIBILITY", "1")
         monkeypatch.setenv("TMUX", "/tmp/tmux-1000/default,1,0")
         monkeypatch.setattr(actions.os, "ttyname", lambda fd: "/dev/pts/9")
         replies = ["$3\n", "4242\n"]
@@ -912,3 +915,33 @@ class TestVisibilityWatcherFactory:
         monkeypatch.setattr(actions, "_managed_windows",
                             lambda p: pytest.fail("should not resolve windows"))
         assert actions._orch_windows() == []
+
+
+class TestXVisibilityIsOptIn:
+    """Off by default: the gate exposed a rendering bug where the frame gets
+    drawn wider than the terminal, and the overflow wraps into pane history
+    permanently. ORCH_X_VISIBILITY=1 re-enables it."""
+
+    def test_pts_client_counts_as_visible_by_default(self, monkeypatch):
+        monkeypatch.delenv("ORCH_X_VISIBILITY", raising=False)
+        monkeypatch.setenv("DISPLAY", ":0")
+        replies = ["1,1,$0\n", "/dev/pts/15 4242\n"]
+        monkeypatch.setattr(actions.subprocess, "run",
+                            lambda *a, **k: MagicMock(stdout=replies.pop(0)))
+        monkeypatch.setattr(actions, "_x_pids_mapped",
+                            lambda pids: pytest.fail("X must not be consulted"))
+        assert actions._tmux_pane_visible() is True
+
+    def test_no_watcher_by_default(self, monkeypatch):
+        monkeypatch.delenv("ORCH_X_VISIBILITY", raising=False)
+        monkeypatch.setenv("DISPLAY", ":0")
+        assert actions._orch_windows() == []
+        assert actions.visibility_watcher() is None
+
+    def test_vt_detection_is_unaffected(self, monkeypatch):
+        monkeypatch.delenv("ORCH_X_VISIBILITY", raising=False)
+        replies = ["1,1,$0\n", "/dev/tty2 999\n"]
+        monkeypatch.setattr(actions.subprocess, "run",
+                            lambda *a, **k: MagicMock(stdout=replies.pop(0)))
+        monkeypatch.setattr(actions, "_vt_is_active", lambda n: False)
+        assert actions._tmux_pane_visible() is False
