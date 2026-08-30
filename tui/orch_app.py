@@ -948,7 +948,26 @@ class OrchApp(App):
         backlog = [t for t in ws.todos if not t.done and not t.archived]
         backlog_ids = {t.id for t in backlog}
 
-        if not backlog_ids:
+        # A todo whose implementer is still running is not free to pick.
+        # The loop would hold it anyway, but offering it in the picker and
+        # then silently ignoring the choice is how the coordinator ends up
+        # dispatching a second implementer into the same worktree.
+        # backlog_ids keeps them, so they still land in skip_ids below.
+        from auto_mode import todos_with_live_implementer
+        try:
+            live_sids = set(TerminalHost.list_tmux_sessions() or ())
+        except Exception:
+            live_sids = set()
+        busy = todos_with_live_implementer(backlog, live_sids)
+        if busy:
+            busy_ids = {t.id for t in busy}
+            backlog = [t for t in backlog if t.id not in busy_ids]
+            self.notify(
+                f"[auto] {len(busy)} todo(s) hidden — implementer still running",
+                timeout=5,
+            )
+
+        if not backlog:
             # No backlog to pick from, so the picker never appears — ask
             # outright before spawning a coordinator loop.
             from rendering import C_DIM, _rich_escape
@@ -995,7 +1014,7 @@ class OrchApp(App):
 
     async def _run_auto_mode(self, ws_id: str, coord_sid: str,
                              skip_ids: set | None = None) -> None:
-        from auto_mode import AutoMode
+        from auto_mode import AutoMode, record_todo_implementer
         from session_launch import log_session_exit, spawn_implementer_session
 
         def inject(text: str) -> None:
@@ -1050,6 +1069,11 @@ class OrchApp(App):
                         self.state.store.update(cur_ws)
                 except Exception:
                     pass
+                # Stamp the todo itself. auto_impl_sids is a flat list wiped
+                # at every start, so it cannot say WHICH todo a session is
+                # on, nor survive the loop — the per-todo stamp does both,
+                # and is what holds this todo if this loop is canceled.
+                record_todo_implementer(self.state.store, ws_id, todo.id, sid)
 
             async def wait_for_report():
                 while True:

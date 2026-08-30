@@ -38,6 +38,13 @@ class TodoItem:
     created_at: str = field(default_factory=lambda: datetime.now().isoformat())
     origin: str = "manual"  # "manual" or "crystallized"
     report: str = ""  # implementer's writeback (auto-mode loop)
+    # Auto-mode: which session is implementing this todo right now, and
+    # since when. Set at spawn, cleared when the loop's wait resolves.
+    # These outlive the loop on purpose — a canceled loop leaves them set,
+    # which is how a LATER run can tell "nobody is on this" apart from
+    # "an implementer from a dead loop is still working on it".
+    impl_sid: str = ""
+    impl_started_at: str = ""
 
 
 @dataclass
@@ -270,6 +277,8 @@ class Workstream:
             if isinstance(t, dict):
                 t.setdefault("origin", "manual")
                 t.setdefault("report", "")
+                t.setdefault("impl_sid", "")
+                t.setdefault("impl_started_at", "")
                 todos.append(TodoItem(**t))
             else:
                 todos.append(t)

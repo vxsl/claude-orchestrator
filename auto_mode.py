@@ -126,6 +126,79 @@ def find_next_todo(
     return None
 
 
+def todos_with_live_implementer(todos, live_sids) -> list:
+    """Todos whose recorded implementer session is still running.
+
+    An implementer outlives the loop that spawned it — the cancel path
+    says so out loud ("in-flight implementers keep running") — and
+    nothing on the way out clears `impl_sid`. So a later run can ask
+    tmux whether that session is still there.
+
+    This is the only signal that survives the loop that created it:
+    `auto_impl_sids` is wiped by _mark_running and
+    `auto_dispatched_todo_ids` by _mark_stopped, which is why the
+    in-run re-dispatch guard could not see across a restart. A cancel
+    plus a restart put two implementers in one worktree on one todo.
+
+    live_sids: live tmux session names (TerminalHost.list_tmux_sessions()).
+    """
+    live = set(live_sids or ())
+    return [
+        t for t in todos
+        if getattr(t, "impl_sid", "") and t.impl_sid in live
+        and not t.done and not t.archived
+    ]
+
+
+def record_todo_implementer(store, ws_id: str, todo_id: str, sid: str) -> None:
+    """Stamp `todo_id` with the session now implementing it, and when.
+
+    Written by whichever engine spawned the session; read back by a
+    later run's `todos_with_live_implementer` and by the status line.
+    Best-effort — never fail a spawn on a store write.
+    """
+    if not (ws_id and todo_id and sid):
+        return
+    try:
+        store.load(force=True)
+        ws = store.get(ws_id)
+        if ws is None:
+            return
+        todo = next((t for t in ws.todos if t.id == todo_id), None)
+        if todo is None:
+            return
+        todo.impl_sid = sid
+        todo.impl_started_at = datetime.now().isoformat()
+        store.update(ws)
+    except Exception:
+        pass
+
+
+def clear_todo_implementers(store, ws_id: str, todo_ids) -> None:
+    """Drop the implementer stamp once the loop's wait for it resolved.
+
+    Leaving it set would make a finished todo look permanently in-flight
+    to the next run's hold check and to the status line.
+    """
+    ids = {t for t in (todo_ids or ()) if t}
+    if not (ws_id and ids):
+        return
+    try:
+        store.load(force=True)
+        ws = store.get(ws_id)
+        if ws is None:
+            return
+        dirty = False
+        for t in ws.todos:
+            if t.id in ids and getattr(t, "impl_sid", ""):
+                t.impl_sid = ""
+                dirty = True
+        if dirty:
+            store.update(ws)
+    except Exception:
+        pass
+
+
 def build_implementer_brief(todo: TodoItem) -> str:
     """Prompt for an implementer session: the todo's text + context, plus
     instructions to call `orch report` when done."""
@@ -598,6 +671,37 @@ class AutoMode:
             except Exception:
                 pass
 
+    async def _live_tmux_sessions(self) -> set:
+        """Live session names on the orch tmux socket.
+
+        Empty on any failure — the hold check fails OPEN, matching the
+        quota gate: an unreadable tmux must not stop the loop dispatching.
+        """
+        try:
+            from term_host import TerminalHost
+            names = await asyncio.to_thread(TerminalHost.list_tmux_sessions)
+            return set(names or ())
+        except Exception:
+            return set()
+
+    async def _hold_todos_with_live_implementer(self, ws) -> list:
+        """Add every todo with a still-running implementer to the skip set.
+
+        Called once at start, before _mark_running publishes the skip set
+        as auto_dispatched_todo_ids — which is what makes `orch distill
+        next` refuse them too, in the coordinator's own process.
+        """
+        held = todos_with_live_implementer(
+            ws.todos, await self._live_tmux_sessions())
+        for t in held:
+            self.skip_todo_ids.add(t.id)
+        if held:
+            self.notify(
+                f"holding {len(held)} todo(s) — implementer still running: "
+                + ", ".join(f"{t.id} ({t.impl_sid[:8]})" for t in held)
+            )
+        return held
+
     async def _read_report(self, todo_id: str) -> str:
         """Read the implementer's writeback for `todo_id`, retrying briefly
         when the load returns no workstreams or no matching todo.
@@ -755,6 +859,13 @@ class AutoMode:
         if dirty:
             self.store.update(ws)
 
+        # An implementer outlives the loop that spawned it (cancel says so:
+        # "in-flight implementers keep running"). Dispatching its todo again
+        # puts two Claude sessions in one worktree on one task. Hold anything
+        # whose implementer is still alive in tmux — the only cross-run
+        # signal, since the in-run guard's state is wiped at start/stop.
+        await self._hold_todos_with_live_implementer(ws)
+
         # Mark this loop as the active owner BEFORE spawning the watchdog —
         # the watchdog polls auto_cancel_requested and would mis-fire on
         # leftover True from a previous run. _mark_running clears it.
@@ -827,8 +938,17 @@ class AutoMode:
                 *[self.spawn_implementer(t, brief) for t, brief in briefs]
             )
             if self.canceled:
+                # Do NOT clear the implementer stamp here. A cancel unblocks
+                # the wait without stopping the implementer — that stamp is
+                # precisely what tells the next run this todo is taken.
                 self.final_status = "canceled"
                 return self.final_status
+
+            # The wait resolved on its own terms (report written, or the
+            # session exited), so nothing is in flight — drop the stamp
+            # before the next run reads it as live.
+            clear_todo_implementers(
+                self.store, self.ws_id, [t.id for t in batch])
 
             # Read each report (with the same retry semantics as before).
             items: list[tuple[TodoItem, str]] = []

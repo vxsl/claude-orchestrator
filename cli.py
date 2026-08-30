@@ -816,6 +816,35 @@ def cmd_distill(args):
             if not any(r.id == match.id for r in resolved):
                 resolved.append(match)
 
+        # Refuse a todo whose implementer is STILL RUNNING, even one this
+        # loop never dispatched. An implementer outlives the loop that
+        # spawned it (cancel says so: "in-flight implementers keep
+        # running"), and auto_dispatched_todo_ids below is wiped at every
+        # stop — so across a restart that check sees nothing and the todo
+        # gets a second implementer in the same worktree.
+        from auto_mode import todos_with_live_implementer
+        try:
+            from term_host import TerminalHost
+            live_sids = set(TerminalHost.list_tmux_sessions() or ())
+        except Exception:
+            live_sids = set()  # unreadable tmux: fail open, let it dispatch
+        busy = todos_with_live_implementer(resolved, live_sids)
+        if busy:
+            print(_c("red", "  Refused — an implementer is still working on:"))
+            for r in busy:
+                preview = r.text.strip().replace("\n", " ")
+                if len(preview) > 80:
+                    preview = preview[:77] + "..."
+                age = _relative_time(r.impl_started_at) if r.impl_started_at else ""
+                started = f" · started {age}" if age else ""
+                print(f"    - {_c('bold', r.id)}  {preview}")
+                print(_c("dim", f"      session {r.impl_sid[:8]} is alive{started}"))
+            print(_c("dim",
+                "  That session survived whatever stopped the last loop and is "
+                "still writing. Wait for its report, kill it if it's stuck, or "
+                "pick a different pending todo."))
+            sys.exit(1)
+
         # Refuse re-dispatch of todos the active auto-mode loop has already
         # tried. Without this, the loop silently filters them out via its
         # in-memory skip set, and the CLI's "✓ Auto-mode will dispatch X"

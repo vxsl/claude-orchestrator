@@ -19,8 +19,11 @@ from auto_mode import (
     build_coordinator_kickoff,
     build_coordinator_nudge,
     build_implementer_brief,
+    clear_todo_implementers,
     detect_quota_stall,
     find_next_todo,
+    record_todo_implementer,
+    todos_with_live_implementer,
 )
 from models import Store, TodoItem, Workstream
 
@@ -2051,3 +2054,220 @@ class TestQuotaGate:
         assert len(injected) == 1
         assert "[auto-mode started]" in injected[0]
         assert not any("Still waiting on you" in t for t in injected)
+
+
+# ─── live-implementer hold (survives a restart) ──────────────────────
+
+class TestLiveImplementerHold:
+    """An implementer outlives the loop that spawned it. The in-run guard
+    (`auto_dispatched_todo_ids`) is wiped by _mark_stopped and
+    `auto_impl_sids` by _mark_running, so before the per-todo stamp a
+    cancel-then-restart put a second implementer on the same todo."""
+
+    def test_matches_only_live_pending_todos(self):
+        live = TodoItem(text="live", id="t1", impl_sid="sid-live")
+        dead = TodoItem(text="dead", id="t2", impl_sid="sid-dead")
+        never = TodoItem(text="never", id="t3")
+        finished = TodoItem(text="done", id="t4", impl_sid="sid-live", done=True)
+        archived = TodoItem(text="arch", id="t5", impl_sid="sid-live", archived=True)
+        held = todos_with_live_implementer(
+            [live, dead, never, finished, archived], {"sid-live"})
+        assert [t.id for t in held] == ["t1"]
+
+    def test_empty_live_set_holds_nothing(self):
+        # tmux unreadable → fail open, exactly like the quota gate.
+        todos = [TodoItem(text="x", id="t1", impl_sid="sid-live")]
+        assert todos_with_live_implementer(todos, set()) == []
+        assert todos_with_live_implementer(todos, None) == []
+
+    def test_record_and_clear_round_trip(self, store):
+        ws = _ws_with_todos(store, [TodoItem(text="t", id="todo1aaa")])
+        record_todo_implementer(store, ws.id, "todo1aaa", "sid-abc")
+        fresh = Store(path=store.path).get(ws.id)
+        assert fresh.todos[0].impl_sid == "sid-abc"
+        assert fresh.todos[0].impl_started_at  # stamped with a time
+
+        clear_todo_implementers(store, ws.id, ["todo1aaa"])
+        fresh = Store(path=store.path).get(ws.id)
+        assert fresh.todos[0].impl_sid == ""
+
+    def test_record_survives_a_reload(self, store):
+        """The stamp is persisted, not in-memory — that is the whole point."""
+        ws = _ws_with_todos(store, [TodoItem(text="t", id="todo1aaa")])
+        record_todo_implementer(store, ws.id, "todo1aaa", "sid-abc")
+        reloaded = Store(path=store.path)
+        held = todos_with_live_implementer(
+            reloaded.get(ws.id).todos, {"sid-abc"})
+        assert [t.id for t in held] == ["todo1aaa"]
+
+    def test_loop_holds_todo_whose_implementer_is_alive(self, store, monkeypatch):
+        """A restart must not re-dispatch a todo someone is still on."""
+        ws = _ws_with_todos(store, [
+            TodoItem(text="taken", origin="crystallized", id="todo1aaa",
+                     impl_sid="sid-live"),
+            TodoItem(text="free", origin="crystallized", id="todo2bbb"),
+        ])
+        from term_host import TerminalHost
+        monkeypatch.setattr(TerminalHost, "list_tmux_sessions",
+                            classmethod(lambda cls: ["sid-live"]))
+
+        spawned = []
+        injected = []
+
+        async def spawn(todo, _brief):
+            spawned.append(todo.id)
+            fresh = store.get(ws.id)
+            next(t for t in fresh.todos if t.id == todo.id).report = "r"
+            store.update(fresh)
+
+        def inject(text):
+            injected.append(text)
+            fresh = store.get(ws.id)
+            if "[auto-mode started]" in text:
+                # The coordinator picks the held todo anyway; the loop must
+                # refuse it rather than spawn a second implementer.
+                fresh.auto_next_todo_ids = ["todo1aaa", "todo2bbb"]
+            else:
+                fresh.auto_done_reason = "test-done"
+            store.update(fresh)
+
+        mode = AutoMode(store=store, ws_id=ws.id, spawn_implementer=spawn,
+                        inject_coordinator=inject, poll_interval=0.01)
+        result = asyncio.run(mode.run())
+        assert result == "test-done"
+        assert spawned == ["todo2bbb"]  # the held one was never dispatched
+
+    def test_held_todo_is_published_for_the_cli_guard(self, store, monkeypatch):
+        """_mark_running publishes the skip set as auto_dispatched_todo_ids,
+        which is how `orch distill next` refuses in the coordinator's own
+        process rather than the loop filtering it out silently."""
+        ws = _ws_with_todos(store, [
+            TodoItem(text="taken", origin="crystallized", id="todo1aaa",
+                     impl_sid="sid-live"),
+        ])
+        from term_host import TerminalHost
+        monkeypatch.setattr(TerminalHost, "list_tmux_sessions",
+                            classmethod(lambda cls: ["sid-live"]))
+
+        seen = {}
+
+        async def spawn(todo, _brief):
+            pass
+
+        def inject(_text):
+            seen["dispatched"] = list(
+                store.get(ws.id).auto_dispatched_todo_ids)
+            fresh = store.get(ws.id)
+            fresh.auto_done_reason = "test-done"
+            store.update(fresh)
+
+        mode = AutoMode(store=store, ws_id=ws.id, spawn_implementer=spawn,
+                        inject_coordinator=inject, poll_interval=0.01)
+        asyncio.run(mode.run())
+        assert seen["dispatched"] == ["todo1aaa"]
+
+    def test_cancel_leaves_the_stamp_set(self, store, monkeypatch):
+        """Cancel unblocks the wait without stopping the implementer, so the
+        stamp must survive — it is what holds the todo for the next run."""
+        ws = _ws_with_todos(store, [
+            TodoItem(text="t", origin="crystallized", id="todo1aaa"),
+        ])
+        from term_host import TerminalHost
+        monkeypatch.setattr(TerminalHost, "list_tmux_sessions",
+                            classmethod(lambda cls: []))
+
+        async def spawn(todo, _brief):
+            # The engine stamps the todo as it spawns; then the user cancels.
+            record_todo_implementer(store, ws.id, todo.id, "sid-live")
+            mode.cancel()
+
+        def inject(text):
+            if "[auto-mode started]" in text:
+                fresh = store.get(ws.id)
+                fresh.auto_next_todo_ids = ["todo1aaa"]
+                store.update(fresh)
+
+        mode = AutoMode(store=store, ws_id=ws.id, spawn_implementer=spawn,
+                        inject_coordinator=inject, poll_interval=0.01)
+        assert asyncio.run(mode.run()) == "canceled"
+        assert Store(path=store.path).get(ws.id).todos[0].impl_sid == "sid-live"
+
+    def test_completed_iteration_clears_the_stamp(self, store, monkeypatch):
+        """A wait that resolved on its own terms means nothing is in flight."""
+        ws = _ws_with_todos(store, [
+            TodoItem(text="t", origin="crystallized", id="todo1aaa"),
+        ])
+        from term_host import TerminalHost
+        monkeypatch.setattr(TerminalHost, "list_tmux_sessions",
+                            classmethod(lambda cls: []))
+
+        async def spawn(todo, _brief):
+            record_todo_implementer(store, ws.id, todo.id, "sid-live")
+            fresh = store.get(ws.id)
+            fresh.todos[0].report = "done"
+            store.update(fresh)
+
+        def inject(text):
+            fresh = store.get(ws.id)
+            if "[auto-mode started]" in text:
+                fresh.auto_next_todo_ids = ["todo1aaa"]
+            else:
+                fresh.auto_done_reason = "test-done"
+            store.update(fresh)
+
+        mode = AutoMode(store=store, ws_id=ws.id, spawn_implementer=spawn,
+                        inject_coordinator=inject, poll_interval=0.01)
+        assert asyncio.run(mode.run()) == "test-done"
+        assert Store(path=store.path).get(ws.id).todos[0].impl_sid == ""
+
+
+class TestDistillNextRefusesLiveImplementer:
+    def _setup(self, tmp_path, monkeypatch, todos):
+        target = tmp_path / "dev" / "claude-orchestrator" / "data.json"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        store = Store(path=target)
+        ws = Workstream(name="next-ws")
+        ws.todos = todos
+        store.add(ws)
+        monkeypatch.setenv("HOME", str(tmp_path))
+        monkeypatch.setenv("ORCH_WS_ID", ws.id)
+        return target, ws
+
+    class _Args:
+        distill_mode = "next"
+        ws_id = None
+        text = None
+        context = None
+        summary = None
+        reason = None
+        todo_id = "abc12345"
+
+    def test_refuses_when_the_session_is_alive(self, tmp_path, monkeypatch, capsys):
+        target, ws = self._setup(tmp_path, monkeypatch, [
+            TodoItem(text="task", origin="crystallized", id="abc12345",
+                     impl_sid="sid-live"),
+        ])
+        from term_host import TerminalHost
+        monkeypatch.setattr(TerminalHost, "list_tmux_sessions",
+                            classmethod(lambda cls: ["sid-live"]))
+        from cli import cmd_distill
+
+        with pytest.raises(SystemExit) as exc:
+            cmd_distill(self._Args())
+        assert exc.value.code == 1
+        assert "still working" in capsys.readouterr().out
+        # And nothing was queued for dispatch.
+        assert Store(path=target).workstreams[0].auto_next_todo_ids == []
+
+    def test_allows_when_the_session_is_gone(self, tmp_path, monkeypatch):
+        target, ws = self._setup(tmp_path, monkeypatch, [
+            TodoItem(text="task", origin="crystallized", id="abc12345",
+                     impl_sid="sid-dead"),
+        ])
+        from term_host import TerminalHost
+        monkeypatch.setattr(TerminalHost, "list_tmux_sessions",
+                            classmethod(lambda cls: []))
+        from cli import cmd_distill
+
+        cmd_distill(self._Args())
+        assert Store(path=target).workstreams[0].auto_next_todo_ids == ["abc12345"]
