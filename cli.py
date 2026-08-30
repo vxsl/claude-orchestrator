@@ -1055,10 +1055,14 @@ def cmd_auto(args):
             _print_assessment(ws)
             return
 
-        # No filter. Everything with a loop now or a run to remember —
-        # a stopped loop's reason is the thing you came here to read.
+        # No filter. Everything with a loop now or a run to remember — a
+        # stopped loop's reason is the thing you came here to read.
+        # Archived workstreams are dropped unless one is somehow still
+        # running: their last run is history, and history belongs behind
+        # an explicit --ws-id rather than in the morning's overview.
         seen = [w for w in store.workstreams
-                if w.auto_running or RunnerRecord.load(w.id) is not None]
+                if w.auto_running
+                or (not w.archived and RunnerRecord.load(w.id) is not None)]
         if as_json:
             payload = []
             for ws in seen:

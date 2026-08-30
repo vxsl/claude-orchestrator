@@ -346,9 +346,14 @@ def capture_pane(sid: str) -> str:
         return ""
 
 
-# Claude's classic (inline) renderer draws an input box before it will
-# accept anything. These are what that box looks like once it is there.
-READY_MARKERS = ("? for shortcuts", "│ >", "╰─")
+# What a Claude session that is ready for input looks like, taken from a
+# real spawn rather than guessed at. The startup banner is the marker
+# that matters: it is drawn only AFTER the workspace-trust question is
+# settled, so it separates "ready" from "sitting on a modal dialog whose
+# default answer is to exit" — which is what the first draft of this
+# matched on the prompt glyph and got wrong, because the trust dialog
+# draws that glyph too, on the word "No, exit".
+READY_MARKERS = ("Claude Code v", "? for shortcuts")
 
 
 def wait_for_claude_ready(sid: str, timeout: float = 60.0,
