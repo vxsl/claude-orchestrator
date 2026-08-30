@@ -8,6 +8,8 @@ import re
 import shlex
 import subprocess
 import sys
+import time
+from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
 
@@ -78,13 +80,31 @@ def _ws_line(ws: Workstream, show_age: bool = True) -> str:
     return " ".join(parts)
 
 
-def _resolve_ws(store: Store, ws_id: str) -> Workstream:
-    """Resolve a workstream by ID/prefix or exit with error."""
+def _resolve_ws(store: Store, ws_id: str, source: str = "") -> Workstream:
+    """Resolve a workstream by ID/prefix or exit with error.
+
+    `source` says where the id came from, and it earns its place: an id
+    inherited from $ORCH_WS_ID can outlive the thing it names. Delete and
+    recreate a workstream and every session still exporting the old id
+    gets a bare "Not found" from a command it has run successfully a
+    hundred times — with nothing on screen connecting that to an env var
+    it never sees. Naming the source turns a dead end into a fix.
+    """
     ws = store.get(ws_id)
-    if not ws:
-        print(_c("red", f"  Not found: {ws_id}"))
-        sys.exit(1)
-    return ws
+    if ws:
+        return ws
+    via = f"  (from {source})" if source else ""
+    print(_c("red", f"  Not found: {ws_id}{via}"))
+    if "ORCH_WS_ID" in source:
+        print(_c("dim", "    $ORCH_WS_ID is exported once, when the session starts, and"))
+        print(_c("dim", "    survives the workstream being deleted and recreated under a"))
+        print(_c("dim", "    new id. Pass --ws-id explicitly, or start a fresh session."))
+    active = [w for w in store.active][:8]
+    if active:
+        print(_c("dim", "    Workstreams that do exist:"))
+        for w in active:
+            print(_c("dim", f"      {w.id[:8]}  {w.name}"))
+    sys.exit(1)
 
 
 def _die(msg: str) -> None:
@@ -719,11 +739,12 @@ def cmd_distill(args):
     store = Store()
 
     # Resolve workstream: explicit arg > env var
-    ws_id = getattr(args, "ws_id", None) or os.environ.get("ORCH_WS_ID")
+    explicit = getattr(args, "ws_id", None)
+    ws_id = explicit or os.environ.get("ORCH_WS_ID")
     if not ws_id:
         print(_c("red", "  No workstream ID. Set ORCH_WS_ID or pass --ws-id."))
         sys.exit(1)
-    ws = _resolve_ws(store, ws_id)
+    ws = _resolve_ws(store, ws_id, source="--ws-id" if explicit else "$ORCH_WS_ID")
 
     mode = args.distill_mode
 
@@ -916,59 +937,165 @@ def cmd_report(args):
 
 def cmd_auto(args):
     """Inspect/control auto-mode loops via the persisted runtime state."""
+    from auto_runner import (
+        RunnerRecord, RunnerState, classify, holder_pid, log_path,
+    )
+
     store = Store()
     mode = getattr(args, "auto_mode", None)
 
-    def _ws_status_line(ws: Workstream) -> str:
-        if not ws.auto_running:
-            return f"  {_c('dim', '○')} {ws.id[:8]}  {ws.name}  {_c('dim', '(idle)')}"
-        pid_state = "" if ws.auto_pid_alive else _c("red", "  [stale pid: process dead]")
-        cur = ws.auto_current_todo_id[:8] if ws.auto_current_todo_id else "—"
-        # A quota park looks identical to a wedged loop from the outside —
-        # spell out what it's waiting on and when it expects to move.
-        paused = ""
-        if ws.auto_paused:
-            eta = ws.auto_resume_eta
-            paused = "\n      " + _c("yellow", (
-                f"paused: {ws.auto_pause_reason or 'quota spent'}"
-                + (f" — resumes {eta}" if eta else "")
-            ))
-        bullet = _c("yellow", "⏸") if ws.auto_paused else _c("green", "●")
-        return (
-            f"  {bullet} {ws.id[:8]}  {ws.name}\n"
-            f"      pid={ws.auto_pid}  started={ws.auto_started_at}\n"
-            f"      iter={ws.auto_iteration}  current_todo={cur}  "
-            f"coord={ws.auto_coord_sid[:8] or '—'}  "
-            f"impls={len(ws.auto_impl_sids)}{pid_state}{paused}"
-        )
+    # ── State a reader can act on ─────────────────────────────────────
+    #
+    # Two sources, because there are two hosts. The sidecar record is
+    # written by the headless runner and knows how a run ended; data.json
+    # is written by whichever loop is live and is the only thing a
+    # TUI-hosted loop writes at all. Neither alone can tell you "parked"
+    # from "stopped" from "the process is gone and never said why", which
+    # is the distinction the whole feature exists for.
 
-    if mode == "status":
-        ws_id = getattr(args, "ws_id", None) or os.environ.get("ORCH_WS_ID")
+    _GLYPH = {
+        RunnerState.RUNNING: ("green", "●"),
+        RunnerState.PARKED: ("yellow", "⏸"),
+        RunnerState.STOPPED: ("dim", "○"),
+        RunnerState.CRASHED: ("red", "✗"),
+        RunnerState.VANISHED: ("red", "⚠"),
+        RunnerState.FOREIGN: ("dim", "?"),
+        RunnerState.IDLE: ("dim", "·"),
+    }
+
+    def _assess(ws: Workstream):
+        """(record, state, why, host) for one workstream."""
+        rec = RunnerRecord.load(ws.id)
+        state, why = classify(rec)
+        host = "headless" if rec else ""
+        live = ws.auto_running and ws.auto_pid_alive
+        rec_covers_live = (
+            rec is not None and not rec.exit_kind and rec.pid == ws.auto_pid)
+        if live and not rec_covers_live:
+            # Something is running that this record does not describe —
+            # the TUI's loop, which keeps its state only in data.json.
+            host = "tui"
+            if ws.auto_paused:
+                eta = ws.auto_resume_eta
+                state = RunnerState.PARKED
+                why = (f"{ws.auto_pause_reason or 'quota spent'}"
+                       + (f" — resumes {eta}" if eta else "")
+                       + " — asleep, not stopped")
+            else:
+                state = RunnerState.RUNNING
+                why = f"iteration {ws.auto_iteration}"
+        elif (not live and ws.auto_running
+                and state in (RunnerState.IDLE, RunnerState.STOPPED)):
+            # data.json still claims a loop. _mark_stopped clears that on
+            # every ordinary exit, so its survival means the owner never
+            # ran its cleanup: killed outright, or the machine went down.
+            state = RunnerState.VANISHED
+            why = (f"data.json still claims a loop on pid {ws.auto_pid}, and "
+                   f"that process is gone — killed outright or the machine "
+                   f"went down")
+        return rec, state, why, host
+
+    def _print_assessment(ws: Workstream) -> None:
+        rec, state, why, host = _assess(ws)
+        if state == RunnerState.IDLE and not ws.auto_running:
+            print(f"  {_c('dim', '·')} {ws.id[:8]}  {ws.name}  "
+                  f"{_c('dim', '(no auto-mode run recorded)')}")
+            return
+        color, glyph = _GLYPH.get(state, ("dim", "·"))
+        tag = _c(color, state.upper())
+        where = _c("dim", f" [{host}]") if host else ""
+        print(f"  {_c(color, glyph)} {ws.id[:8]}  {ws.name}  {tag}{where}")
+        if rec is not None:
+            line = (f"      pid={rec.pid} host={rec.host} "
+                    f"started={rec.started_at} iter={rec.iteration}")
+            if rec.coord_sid:
+                line += f" coord={rec.coord_sid[:8]}"
+            print(_c("dim", line))
+        elif ws.auto_running:
+            print(_c("dim", f"      pid={ws.auto_pid} started={ws.auto_started_at} "
+                            f"iter={ws.auto_iteration} "
+                            f"coord={ws.auto_coord_sid[:8] or '—'}"))
+        if why:
+            print(f"      {_c(color, why)}")
+        if rec is not None and rec.exit_at:
+            print(_c("dim", f"      ended {rec.exit_at}"))
+        if rec is not None and rec.exit_detail:
+            first = rec.exit_detail.strip().splitlines()[-1]
+            print(_c("dim", f"      {first}"))
+            print(_c("dim", f"      full traceback: orch auto status "
+                            f"--ws-id {ws.id[:8]} --log"))
+        if rec is not None and not rec.exit_kind and rec.last_note:
+            print(_c("dim", f"      last: {rec.last_note}"))
+
+    if mode == "start":
+        _auto_start(args, store)
+
+    elif mode == "status":
+        explicit = getattr(args, "ws_id", None)
+        ws_id = explicit or os.environ.get("ORCH_WS_ID")
+        as_json = getattr(args, "json", False)
         if ws_id:
-            ws = _resolve_ws(store, ws_id)
-            print(_ws_status_line(ws))
+            ws = _resolve_ws(store, ws_id,
+                             source="--ws-id" if explicit else "$ORCH_WS_ID")
+            if getattr(args, "log", False):
+                path = log_path(ws.id)
+                if not path.exists():
+                    _die(f"No run log at {path}")
+                sys.stdout.write(path.read_text())
+                return
+            if as_json:
+                rec, state, why, host = _assess(ws)
+                _emit_json({
+                    "ws_id": ws.id, "ws_name": ws.name, "state": state,
+                    "why": why, "host": host,
+                    "log": str(log_path(ws.id)),
+                    "record": asdict(rec) if rec else None,
+                })
+                return
+            _print_assessment(ws)
             return
-        # No filter — list all that are running, plus a count of idle.
-        active = [w for w in store.workstreams if w.auto_running]
-        if not active:
-            print(_c("dim", "  No auto-mode loops are running."))
+
+        # No filter. Everything with a loop now or a run to remember —
+        # a stopped loop's reason is the thing you came here to read.
+        seen = [w for w in store.workstreams
+                if w.auto_running or RunnerRecord.load(w.id) is not None]
+        if as_json:
+            payload = []
+            for ws in seen:
+                rec, state, why, host = _assess(ws)
+                payload.append({
+                    "ws_id": ws.id, "ws_name": ws.name, "state": state,
+                    "why": why, "host": host,
+                    "log": str(log_path(ws.id)),
+                    "record": asdict(rec) if rec else None,
+                })
+            _emit_json(payload)
             return
-        for ws in active:
-            print(_ws_status_line(ws))
+        if not seen:
+            print(_c("dim", "  No auto-mode loops are running, and none have run."))
+            return
+        for ws in seen:
+            _print_assessment(ws)
 
     elif mode == "cancel":
-        ws_id = getattr(args, "ws_id", None) or os.environ.get("ORCH_WS_ID")
+        explicit = getattr(args, "ws_id", None)
+        ws_id = explicit or os.environ.get("ORCH_WS_ID")
         if not ws_id:
             print(_c("red", "  --ws-id is required for `orch auto cancel`."))
             sys.exit(1)
-        ws = _resolve_ws(store, ws_id)
-        if not ws.auto_running:
+        ws = _resolve_ws(store, ws_id,
+                         source="--ws-id" if explicit else "$ORCH_WS_ID")
+        held = holder_pid(ws.id)
+        if not ws.auto_running and not held:
             print(_c("dim", f"  Loop is not running on {ws.name}; nothing to cancel."))
             return
         ws.auto_cancel_requested = True
         store.update(ws)
-        print(f"  {_c('green', '✓')} Cancel requested for {_c('bold', ws.name)} (pid {ws.auto_pid}).")
-        print(_c("dim", "    The owning orch process will exit on its next poll (~3s)."))
+        owner = ws.auto_pid or held
+        print(f"  {_c('green', '✓')} Cancel requested for {_c('bold', ws.name)} (pid {owner}).")
+        print(_c("dim", "    The owning process will exit on its next poll (~3s)."))
+        print(_c("dim", "    In-flight implementers keep running — they are tmux"))
+        print(_c("dim", "    sessions of their own, not children of the loop."))
 
     elif mode == "quota":
         from config import auto_quota_config
@@ -1002,6 +1129,112 @@ def cmd_auto(args):
     else:
         print(_c("red", f"  Unknown auto subcommand: {mode}"))
         sys.exit(1)
+
+
+def _auto_start(args, store: Store) -> None:
+    """`orch auto start` — put the loop in a process of its own.
+
+    Refuses twice over before it will run: once on the flock the headless
+    host holds, and once on data.json's `auto_running`, because a
+    TUI-hosted loop takes no flock. Two hosts driving one coordinator is
+    how two implementers ended up in one worktree writing the same file,
+    and the conservative failure — refusing to run — is cheap next to
+    the other one.
+    """
+    from auto_runner import (
+        DEFAULT_MAX_NUDGES, RunnerRecord, holder_pid, log_path, run_headless,
+    )
+
+    explicit = getattr(args, "ws_id", None)
+    ws_id = explicit or os.environ.get("ORCH_WS_ID")
+    if not ws_id:
+        print(_c("red", "  No workstream ID. Pass --ws-id (or set ORCH_WS_ID)."))
+        sys.exit(1)
+    # Resolve against the store, not the env: the id is durable state, and
+    # an inherited ORCH_WS_ID can name a workstream that no longer exists.
+    ws = _resolve_ws(store, ws_id, source="--ws-id" if explicit else "$ORCH_WS_ID")
+
+    held = holder_pid(ws.id)
+    if held:
+        rec = RunnerRecord.load(ws.id)
+        who = f"pid {held}" if held > 0 else "another process"
+        print(_c("red", f"  Refusing: a headless loop already owns {ws.name} ({who})."))
+        if rec is not None:
+            print(_c("dim", f"    started {rec.started_at}, iteration {rec.iteration}"
+                            + (f", last: {rec.last_note}" if rec.last_note else "")))
+        print(_c("dim", f"    orch auto status --ws-id {ws.id[:8]}"))
+        print(_c("dim", f"    orch auto cancel --ws-id {ws.id[:8]}   # to stop it"))
+        sys.exit(1)
+    if ws.auto_running and ws.auto_pid_alive:
+        print(_c("red", f"  Refusing: a loop is already running on {ws.name} "
+                        f"(pid {ws.auto_pid}, hosted by the TUI)."))
+        print(_c("dim", f"    orch auto cancel --ws-id {ws.id[:8]}   # to stop it"))
+        sys.exit(1)
+
+    skip = set()
+    if getattr(args, "skip_backlog", False):
+        skip = {t.id for t in ws.todos if not t.done and not t.archived}
+
+    raw_nudges = getattr(args, "max_nudges", None)
+    if raw_nudges is None:
+        max_nudges = DEFAULT_MAX_NUDGES
+    elif raw_nudges <= 0:
+        max_nudges = None          # explicit "never give up"
+    else:
+        max_nudges = raw_nudges
+
+    if getattr(args, "foreground", False):
+        sys.exit(run_headless(
+            ws_id=ws.id,
+            coord_sid=getattr(args, "coord_sid", "") or "",
+            skip_todo_ids=skip,
+            max_nudges=max_nudges,
+            store=store,
+        ))
+
+    # Detached: re-exec ourselves in a session of our own. `orch` the
+    # wrapper is deliberately not used — it rebinds tmux keys when $TMUX
+    # is set, which a daemon has no business doing on its way up.
+    log = log_path(ws.id)
+    log.parent.mkdir(parents=True, exist_ok=True)
+    argv = [sys.executable, str(Path(__file__).parent / "orch.py"),
+            "auto", "start", "--foreground", "--ws-id", ws.id]
+    if getattr(args, "coord_sid", ""):
+        argv += ["--coord-sid", args.coord_sid]
+    if getattr(args, "skip_backlog", False):
+        argv.append("--skip-backlog")
+    if raw_nudges is not None:
+        argv += ["--max-nudges", str(raw_nudges)]
+
+    env = os.environ.copy()
+    env.pop("TMUX", None)
+    env["ORCH_WS_ID"] = ws.id  # never let the child inherit a stale one
+    with log.open("a") as fh:
+        proc = subprocess.Popen(
+            argv, stdin=subprocess.DEVNULL, stdout=fh, stderr=fh,
+            start_new_session=True, env=env,
+            cwd=str(Path(__file__).parent),
+        )
+
+    # Wait for the child to publish a record so this command can report
+    # something true. It spawns a coordinator first, which can take a
+    # while — the record lands before that, on purpose.
+    deadline = time.time() + 15
+    while time.time() < deadline:
+        if proc.poll() is not None:
+            print(_c("red", f"  Loop exited immediately (status {proc.returncode})."))
+            print(_c("dim", f"    {log}"))
+            sys.exit(1)
+        rec = RunnerRecord.load(ws.id)
+        if rec is not None and rec.pid == proc.pid and not rec.exit_kind:
+            break
+        time.sleep(0.3)
+
+    print(f"  {_c('green', '✓')} Headless auto-mode started on "
+          f"{_c('bold', ws.name)} (pid {proc.pid}).")
+    print(_c("dim", f"    log:    {log}"))
+    print(_c("dim", f"    status: orch auto status --ws-id {ws.id[:8]}"))
+    print(_c("dim", f"    stop:   orch auto cancel --ws-id {ws.id[:8]}"))
 
 
 def cmd_export(args):
@@ -1660,24 +1893,54 @@ or pass --ws-id explicitly.
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""\
 examples:
-  orch auto status                        List all running auto-mode loops
+  orch auto start --ws-id abc12345        Start a detached loop (survives this terminal)
+  orch auto start --ws-id abc12345 -f     Run it in the foreground (what systemd uses)
+  orch auto status                        List every loop, running or not
   orch auto status --ws-id abc12345       Status for one workstream
-  orch auto cancel --ws-id abc12345       Signal the owning orch to exit
+  orch auto status --ws-id abc12345 --log Print that loop's run log
+  orch auto cancel --ws-id abc12345       Signal the running loop to exit
   orch auto quota                         Show the quota the loop gates on
 
-`auto cancel` writes a flag to data.json; the owning orch process polls
-it every ~3s and self-cancels. The implementer claude processes keep
+`auto start` detaches by default: the loop outlives the terminal it was
+typed in, which is the whole point — auto mode used to live inside the
+TUI process, and a dead TUI stranded a full night's queue. Exactly one
+loop per workstream; a second start refuses and names the first.
+
+`auto status` distinguishes PARKED (quota spent, asleep, will resume) from
+STOPPED (ended, with the reason), CRASHED (with the traceback in the log)
+and VANISHED (killed outright or the machine went down — no reason was
+recorded because the process never got to write one).
+
+`auto cancel` writes a flag to data.json; the owning process polls it
+every ~3s and self-cancels. The implementer claude processes keep
 running (they're attached to the orch tmux server, not the loop).
 
 `auto quota` reads the same subscription limits auto mode parks on. Tune
 the gate under [auto_mode] in ~/.claude-orchestrator/config.toml
 (quota_pause / quota_percent / quota_kinds).
 """)
-    p_auto.add_argument("auto_mode", choices=["status", "cancel", "quota"],
-                        help="status: print loop state; cancel: request the running loop exit; "
+    p_auto.add_argument("auto_mode", choices=["start", "status", "cancel", "quota"],
+                        help="start: launch a headless loop; status: print loop state; "
+                             "cancel: request the running loop exit; "
                              "quota: show the Claude limits the gate watches")
     p_auto.add_argument("--ws-id", dest="ws_id",
                         help="Workstream ID (8-char UUID prefix). Defaults to $ORCH_WS_ID.")
+    p_auto.add_argument("--foreground", "-f", action="store_true",
+                        help="(start) Run in this process instead of detaching. "
+                             "Use this from a systemd unit (Type=simple).")
+    p_auto.add_argument("--coord-sid", dest="coord_sid",
+                        help="(start) tmux session to drive as coordinator. Default: "
+                             "reuse the last run's if alive, else spawn a fresh one.")
+    p_auto.add_argument("--skip-backlog", action="store_true",
+                        help="(start) Hold every currently-pending todo out of this "
+                             "run — the coordinator starts from a clean slate.")
+    p_auto.add_argument("--max-nudges", type=int, default=None,
+                        help="(start) Give up after this many unanswered nudges "
+                             "(default 10 ≈ 30 min of coordinator silence). 0 = never.")
+    p_auto.add_argument("--log", action="store_true",
+                        help="(status) Print the run log for --ws-id instead of a summary.")
+    p_auto.add_argument("--json", action="store_true",
+                        help="(status) Emit the runner records as JSON.")
 
     # report (auto-mode implementer writeback)
     p_report = sub.add_parser("report", help="Implementer writeback to a crystallized todo (auto-mode)",

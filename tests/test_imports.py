@@ -6,6 +6,8 @@ import pytest
 MODULES = [
     "actions",
     "app",
+    "auto_mode",
+    "auto_runner",
     "brain",
     "claude_session_screen",
     "cli",

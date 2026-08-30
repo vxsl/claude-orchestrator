@@ -505,6 +505,12 @@ class AutoMode:
         self.silent_iterations = 0
 
         self.canceled = False
+        # Who pulled the cord. "" until something does; "flag" for
+        # `orch auto cancel`, whatever a host passes for its own reasons
+        # (a headless host passes the signal name). A cancel is a clean
+        # end either way, but "someone typed cancel" and "systemd stopped
+        # the unit" are different answers to "why did it stop last night".
+        self.cancel_source: str = ""
         self.iteration = 0
         self.current_todo_id: Optional[str] = None
         self.last_report: str = ""
@@ -516,8 +522,10 @@ class AutoMode:
         # immediately instead of waiting for the next checkpoint.
         self.cancel_event = asyncio.Event()
 
-    def cancel(self) -> None:
+    def cancel(self, source: str = "") -> None:
         self.canceled = True
+        if source and not self.cancel_source:
+            self.cancel_source = source
         self.cancel_event.set()
 
     def _finish(self, kind: str, reason: str) -> str:
@@ -730,7 +738,7 @@ class AutoMode:
                 ws = self.store.get(self.ws_id)
                 if ws is not None and ws.auto_cancel_requested:
                     self.notify("cancel requested via persisted flag — exiting")
-                    self.cancel()
+                    self.cancel(source="flag")
                     return
             except Exception:
                 pass

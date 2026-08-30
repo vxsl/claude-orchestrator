@@ -226,12 +226,48 @@ def spawn_implementer_session(
     prompt: str,
     cwd: str | None = None,
 ) -> tuple[str, Path]:
-    """Spawn a claude session in tmux with no UI attached.
+    """Spawn an implementer: a detached session that opens on its brief.
 
     Used by auto-mode to launch implementer sessions without forcing the
-    user's screen to switch. The session lives in the orch tmux server
-    (TerminalHost.TMUX_SOCKET) and can be attached to from the
-    workstream detail view if the user wants to watch it.
+    user's screen to switch.
+
+    Returns (session_id, jsonl_path). Raises RuntimeError on tmux failure.
+    """
+    return spawn_detached_session(ws, prompt=prompt, cwd=cwd)
+
+
+def spawn_coordinator_session(
+    ws: Workstream,
+    store: Store,
+    cwd: str | None = None,
+) -> tuple[str, Path]:
+    """Spawn a coordinator: a detached session with nothing said to it yet.
+
+    The TUI never needed this — its coordinator is whatever session the
+    user pressed the auto-mode key in, already running and already
+    attached. A headless host starting cold has no such session, so it
+    makes one and lets the loop's own kickoff be the first thing typed
+    into it. Passing no opening prompt is the whole difference: the
+    kickoff must come from `AutoMode`, because that is what the nudge
+    loop knows how to re-send if the first one lands before Claude is
+    listening.
+
+    Returns (session_id, jsonl_path). Raises RuntimeError on tmux failure.
+    """
+    return spawn_detached_session(ws, prompt=None, cwd=cwd)
+
+
+def spawn_detached_session(
+    ws: Workstream,
+    prompt: str | None = None,
+    cwd: str | None = None,
+) -> tuple[str, Path]:
+    """Spawn a claude session in tmux with no UI attached.
+
+    The session lives in the orch tmux server (TerminalHost.TMUX_SOCKET)
+    and can be attached to from the workstream detail view if the user
+    wants to watch it. `prompt` of None or "" starts Claude idle at its
+    input box.
 
     Returns (session_id, jsonl_path). Raises RuntimeError on tmux failure.
     """
