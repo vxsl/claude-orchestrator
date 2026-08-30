@@ -419,3 +419,81 @@ class TestConstants:
     def test_category_enum_values(self):
         assert Category.WORK.value == "work"
         assert Category.PERSONAL.value == "personal"
+
+
+class TestCorruptFileNeverClobbers:
+    """A truncated data.json wiped 250 workstreams and every todo on them.
+
+    The chain: load() failed to parse, set workstreams=[] AND stamped
+    _loaded_mtime with the file's mtime; _merge_external_state early-outs
+    when that mtime matches, so the anti-clobber merge skipped; worktree
+    discovery then saw an empty store and saved a stub per worktree over
+    everything."""
+
+    def _corrupt(self, path):
+        path.write_text('{"workstreams": [{"id": "abc", "na')
+
+    def test_failed_load_does_not_claim_the_mtime(self, tmp_path):
+        p = tmp_path / "data.json"
+        store = Store(path=p)
+        store.add(Workstream(name="real"))
+        self._corrupt(p)
+
+        reloaded = Store(path=p)
+        assert reloaded.workstreams == []
+        assert reloaded._load_failed is True
+        # 0.0, not the file's mtime — this is what keeps the merge armed.
+        assert reloaded._loaded_mtime == 0.0
+
+    def test_save_is_refused_after_a_failed_load(self, tmp_path):
+        p = tmp_path / "data.json"
+        store = Store(path=p)
+        ws = Workstream(name="real")
+        ws.todos = [TodoItem(text="a real todo", report="a real report")]
+        store.add(ws)
+        before = p.read_text()
+
+        self._corrupt(p)
+        broken = Store(path=p)
+        # Discovery sees an empty store and creates a stub per worktree.
+        stub = Workstream(name="some-worktree")
+        stub.add_link(kind="worktree", value="/tmp/x", label="x")
+        broken.add(stub)
+
+        # The unreadable file is left exactly as it was, not overwritten.
+        assert p.read_text() != before  # still the corrupt bytes
+        assert p.read_text() == '{"workstreams": [{"id": "abc", "na'
+        assert broken.save() is False
+
+    def test_missing_file_still_saves(self, tmp_path):
+        """Absent is not unreadable — a first run must be able to bootstrap."""
+        p = tmp_path / "data.json"
+        store = Store(path=p)
+        assert store._load_failed is False
+        store.add(Workstream(name="first"))
+        assert p.exists()
+        assert [w.name for w in Store(path=p).workstreams] == ["first"]
+
+    def test_recovers_once_the_bad_file_is_moved_aside(self, tmp_path):
+        p = tmp_path / "data.json"
+        Store(path=p).add(Workstream(name="real"))
+        self._corrupt(p)
+        broken = Store(path=p)
+        assert broken.save() is False
+
+        p.unlink()  # the operator moves it aside
+        broken.load(force=True)
+        assert broken._load_failed is False
+        broken.add(Workstream(name="fresh"))
+        assert [w.name for w in Store(path=p).workstreams] == ["fresh"]
+
+    def test_survives_a_write_that_never_reached_disk(self, tmp_path):
+        """The save path fsyncs before the rename, so the file a reader
+        finds is always a complete one."""
+        p = tmp_path / "data.json"
+        store = Store(path=p)
+        ws = Workstream(name="real")
+        ws.todos = [TodoItem(text="t")]
+        store.add(ws)
+        assert not (tmp_path / "data.json.tmp").exists()  # no debris
+        assert json.loads(p.read_text())["workstreams"][0]["name"] == "real"

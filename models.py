@@ -339,6 +339,7 @@ class Store:
         self._known_ws_ids: set[str] = set()    # ws IDs seen at last load/save
         self._removed_ws_ids: set[str] = set()  # ws IDs explicitly removed since last load
         self._loaded_mtime: float = 0.0  # mtime at last successful load
+        self._load_failed: bool = False  # last load hit unreadable/corrupt JSON
         self.load()
 
     @contextmanager
@@ -365,11 +366,16 @@ class Store:
     def load(self, *, force: bool = False):
         """Load workstreams from disk. Skips re-read when mtime is unchanged."""
         if not self.path.exists():
+            # Genuinely absent is not the same as unreadable: an empty
+            # store is the correct state here, and saving it is how a
+            # first run bootstraps. Clear the refusal so a store that
+            # recovers (file moved aside by hand) can write again.
             self.workstreams = []
             self._known_todo_ids = set()
             self._known_ws_ids = set()
             self._removed_ws_ids = set()
             self._loaded_mtime = 0.0
+            self._load_failed = False
             return
         try:
             current_mtime = self.path.stat().st_mtime
@@ -380,23 +386,65 @@ class Store:
         try:
             data = json.loads(self.path.read_text())
             self.workstreams = [Workstream.from_dict(w) for w in data.get("workstreams", [])]
-        except (json.JSONDecodeError, KeyError, TypeError) as e:
+            self._load_failed = False
+        except (json.JSONDecodeError, KeyError, TypeError, OSError) as e:
             # stdout may be a JSON payload (`orch list --json`) — warn on stderr.
             print(f"Warning: could not load {self.path}: {e}", file=sys.stderr)
             self.workstreams = []
+            self._load_failed = True
         self._known_todo_ids = {t.id for ws in self.workstreams for t in ws.todos}
         self._known_ws_ids = {ws.id for ws in self.workstreams}
         self._removed_ws_ids = set()
-        self._loaded_mtime = current_mtime
+        # Only a load that actually parsed may claim the file's mtime. A
+        # failed one that stamped it told _merge_external_state "disk is
+        # unchanged since I read it", which is that method's early-out --
+        # so the merge skipped, and the empty workstreams list above was
+        # written over 250 real workstreams. The one defense against a
+        # wholesale-stub clobber was disabled by the very event it exists
+        # for. 0.0 leaves the merge armed.
+        self._loaded_mtime = current_mtime if not self._load_failed else 0.0
 
-    def save(self):
+    def save(self) -> bool:
+        """Persist to disk. Returns False when the write was refused.
+
+        Refused when the last load could not parse the file: in-memory
+        state is then an empty list that means "unreadable", not "no
+        workstreams", and writing it destroys the file we failed to read.
+        Callers treat a refusal as a no-op — the data on disk is the
+        better copy, and it stays there to be recovered by hand.
+        """
+        if self._load_failed:
+            print(
+                f"Refusing to save {self.path}: the last load failed, so "
+                f"in-memory state is empty because the file is unreadable, "
+                f"not because there is nothing to store. Fix or move the "
+                f"file aside, then restart.",
+                file=sys.stderr,
+            )
+            return False
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with self._flock():
             self._merge_external_state()
             data = {"workstreams": [w.to_dict() for w in self.workstreams]}
             tmp = self.path.with_name(self.path.name + ".tmp")
-            tmp.write_text(json.dumps(data, indent=2) + "\n")
+            # fsync before the rename, and the directory after it. Without
+            # this the rename can reach disk while the contents have not,
+            # so a power loss or suspend leaves a truncated data.json --
+            # which is the input the refusal above exists to catch, and
+            # this is how it got produced in the first place.
+            with open(tmp, "w") as f:
+                f.write(json.dumps(data, indent=2) + "\n")
+                f.flush()
+                os.fsync(f.fileno())
             os.replace(tmp, self.path)
+            try:
+                dir_fd = os.open(str(self.path.parent), os.O_DIRECTORY)
+                try:
+                    os.fsync(dir_fd)
+                finally:
+                    os.close(dir_fd)
+            except OSError:
+                pass  # best-effort; the file rename itself already landed
         self._known_todo_ids = {t.id for ws in self.workstreams for t in ws.todos}
         self._known_ws_ids = {ws.id for ws in self.workstreams}
         self._removed_ws_ids = set()  # everything written now reflects intent
