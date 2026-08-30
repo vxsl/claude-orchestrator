@@ -422,6 +422,76 @@ def _all_sessions_seen(sessions: list, last_seen: dict[str, str] | None = None) 
 
 # ─── Workstream Option Rendering ─────────────────────────────────────
 
+def _compact_age(iso_str: str) -> str:
+    """'42m', '2h', '3d' — a duration, not a timestamp.
+
+    _relative_time says "42m ago", which reads as when something last
+    happened. For a session that is running right now the question is
+    how long it has been going, so the "ago" is wrong.
+    """
+    from datetime import datetime as _dt
+    try:
+        dt = _dt.fromisoformat((iso_str or "").replace("Z", "+00:00"))
+    except (ValueError, TypeError, AttributeError):
+        return ""
+    # Not _parse_iso: that reads a naive stamp as UTC, which is right for
+    # session timestamps off the wire and wrong for ours. Every timestamp
+    # this model writes is `datetime.now().isoformat()` — naive LOCAL —
+    # so treat it the way models._relative_time does.
+    if dt.tzinfo is None:
+        dt = dt.astimezone()
+    secs = int((_dt.now().astimezone() - dt).total_seconds())
+    if secs < 0:
+        return "0m"
+    if secs < 3600:
+        return f"{secs // 60}m"
+    if secs < 86400:
+        return f"{secs // 3600}h"
+    return f"{secs // 86400}d"
+
+
+def auto_status(ws) -> tuple[str, str]:
+    """(text, color) describing the auto-mode loop's liveness, or ("", "").
+
+    The loop's only surface is the coordinator's pane, and that pane is
+    idle by design for as long as an implementer runs — routinely 40+
+    minutes. A working loop and a dead one looked identical from there,
+    so "it stopped silently" was the natural reading of a loop that was
+    doing exactly what it should, and the restart put a second
+    implementer on the same todo.
+
+    So the two waits are named apart: "impl 42m" (an implementer is
+    working, the loop is blocked on it) vs "awaiting coordinator" (the
+    loop has reported back and is waiting to be told what to do next).
+    """
+    if not getattr(ws, "auto_running", False):
+        return "", ""
+    if not ws.auto_pid_alive:
+        return f"auto:stale (dead pid {ws.auto_pid})", C_RED
+    if ws.auto_paused:
+        eta = ws.auto_resume_eta.removeprefix("in ")
+        return f"auto paused{f' ↻{eta}' if eta else ''}", C_YELLOW
+
+    bits = [f"auto iter {ws.auto_iteration}" if ws.auto_iteration else "auto"]
+    inflight = [
+        t for t in ws.todos
+        if getattr(t, "impl_sid", "") and not t.done and not t.archived
+    ]
+    if inflight:
+        # Oldest first: with a concurrent batch the loop is blocked until
+        # the slowest one lands, so that is the wait actually in progress.
+        oldest = min(
+            inflight,
+            key=lambda t: t.impl_started_at or "9999",
+        )
+        age = _compact_age(oldest.impl_started_at)
+        label = "impl" if len(inflight) == 1 else f"{len(inflight)} impl"
+        bits.append(f"{label} {age}" if age else label)
+    else:
+        bits.append("awaiting coordinator")
+    return " · ".join(bits), C_BLUE
+
+
 def _render_ws_option(
     ws: Workstream,
     ws_sessions: list[ClaudeSession],
@@ -532,18 +602,9 @@ def _render_ws_option(
     # spent Claude quota; "auto stale" if the owner pid is dead (orch
     # crashed without clearing auto_running) so the user can clear it by
     # pressing the auto-mode key to start a fresh loop.
-    if ws.auto_running:
-        if not ws.auto_pid_alive:
-            parts.append(f"[{C_RED}]auto:stale[/{C_RED}]")
-        elif ws.auto_paused:
-            # Parked on a spent Claude quota — reads as waiting, not wedged.
-            eta = ws.auto_resume_eta.removeprefix("in ")  # "in 2h" → "↻2h"
-            parts.append(
-                f"[{C_YELLOW}]auto paused{f' ↻{eta}' if eta else ''}[/{C_YELLOW}]"
-            )
-        else:
-            iter_part = f" iter {ws.auto_iteration}" if ws.auto_iteration else ""
-            parts.append(f"[{C_BLUE}]auto{iter_part}[/{C_BLUE}]")
+    auto_text, auto_color = auto_status(ws)
+    if auto_text:
+        parts.append(f"[{auto_color}]{auto_text}[/{auto_color}]")
 
     wt_text, wt_color = _worktree_styled(ws)
     if wt_text:
@@ -1352,17 +1413,14 @@ def render_ws_meta(ws, sessions: list) -> str:
             parts.append(f"[{C_DIM}]solve:{_rich_escape(solve_status)}[/{C_DIM}]")
     # Auto-mode status — same at-a-glance visibility for a second orch
     # instance (over ssh) that doesn't own the loop.
-    if ws.auto_running:
-        if ws.auto_pid_alive:
-            bits = [f"auto iter {ws.auto_iteration}"]
-            if ws.auto_current_todo_id:
-                bits.append(f"todo {ws.auto_current_todo_id[:8]}")
-            pid = ws.auto_pid
-            if pid != _os.getpid():
-                bits.append(f"pid {pid}")
-            parts.append(f"[{C_BLUE}]" + " · ".join(bits) + f"[/{C_BLUE}]")
-        else:
-            parts.append(f"[{C_RED}]auto:stale (dead pid {ws.auto_pid})[/{C_RED}]")
+    auto_text, auto_color = auto_status(ws)
+    if auto_text:
+        bits = [auto_text]
+        if ws.auto_pid_alive and ws.auto_current_todo_id:
+            bits.append(f"todo {ws.auto_current_todo_id[:8]}")
+        if ws.auto_pid_alive and ws.auto_pid != _os.getpid():
+            bits.append(f"pid {ws.auto_pid}")
+        parts.append(f"[{auto_color}]" + " · ".join(bits) + f"[/{auto_color}]")
     if sessions:
         n = len(sessions)
         total_tok = sum(s.total_input_tokens + s.total_output_tokens for s in sessions)

@@ -1,8 +1,10 @@
 """Tests for rendering.py — markup helpers, color functions, display formatting."""
 
+import os
+
 import pytest
 from datetime import datetime, timedelta, timezone
-from models import Category, Workstream
+from models import Category, TodoItem, Workstream
 from sessions import ClaudeSession
 from threads import ThreadActivity
 from notifications import Notification
@@ -13,7 +15,8 @@ from rendering import (
     _activity_icon, _activity_badge, _best_activity,
     _render_notification_option,
     _parse_worktree_display, _worktree_color, _WORKTREE_COLORS,
-    C_DIM, C_GREEN, C_ORANGE, C_RED, C_LIGHT,
+    C_DIM, C_GREEN, C_ORANGE, C_RED, C_LIGHT, C_BLUE, C_YELLOW,
+    _compact_age, auto_status,
 )
 
 
@@ -172,3 +175,83 @@ class TestCommitLineMarkup:
             s, ThreadActivity.AWAITING_INPUT, 0,
             ws_repo_path=None, seen=True, line_width=60)
         self._assert_all_lines_valid_markup(out)
+
+
+class TestAutoStatus:
+    """The loop's coordinator pane is idle by design for as long as an
+    implementer runs, so "working" and "dead" looked identical. This
+    names the two waits apart."""
+
+    def _running_ws(self, **kw):
+        ws = Workstream(name="w")
+        ws.auto_running = True
+        ws.auto_pid = os.getpid()  # alive
+        ws.auto_iteration = 8
+        for k, v in kw.items():
+            setattr(ws, k, v)
+        return ws
+
+    def test_silent_when_not_running(self):
+        assert auto_status(Workstream(name="w")) == ("", "")
+
+    def test_awaiting_coordinator_with_no_implementer(self):
+        text, color = auto_status(self._running_ws())
+        assert text == "auto iter 8 · awaiting coordinator"
+        assert color == C_BLUE
+
+    def test_names_the_running_implementer_and_its_age(self):
+        ws = self._running_ws()
+        started = (datetime.now() - timedelta(minutes=42)).isoformat()
+        ws.todos = [TodoItem(text="t", impl_sid="sid", impl_started_at=started)]
+        text, _ = auto_status(ws)
+        assert text == "auto iter 8 · impl 42m"
+
+    def test_counts_a_concurrent_batch_and_uses_the_oldest(self):
+        ws = self._running_ws()
+        ws.todos = [
+            TodoItem(text="a", impl_sid="s1",
+                     impl_started_at=(datetime.now() - timedelta(minutes=5)).isoformat()),
+            TodoItem(text="b", impl_sid="s2",
+                     impl_started_at=(datetime.now() - timedelta(hours=2)).isoformat()),
+        ]
+        text, _ = auto_status(ws)
+        # The loop is blocked until the slowest lands, so that is the wait.
+        assert text == "auto iter 8 · 2 impl 2h"
+
+    def test_finished_todos_are_not_in_flight(self):
+        ws = self._running_ws()
+        started = (datetime.now() - timedelta(minutes=42)).isoformat()
+        ws.todos = [
+            TodoItem(text="a", impl_sid="s1", impl_started_at=started, done=True),
+            TodoItem(text="b", impl_sid="s2", impl_started_at=started, archived=True),
+        ]
+        assert auto_status(ws)[0] == "auto iter 8 · awaiting coordinator"
+
+    def test_dead_owner_reads_as_stale(self):
+        ws = self._running_ws(auto_pid=999_999_999)
+        text, color = auto_status(ws)
+        assert "stale" in text
+        assert color == C_RED
+
+    def test_quota_park_wins_over_the_wait(self):
+        ws = self._running_ws(auto_paused=True)
+        ws.auto_resume_at = (datetime.now() + timedelta(hours=2)).isoformat()
+        text, color = auto_status(ws)
+        assert text.startswith("auto paused")
+        assert color == C_YELLOW
+
+
+class TestCompactAge:
+    def test_minutes_hours_days(self):
+        now = datetime.now()
+        assert _compact_age((now - timedelta(minutes=42)).isoformat()) == "42m"
+        assert _compact_age((now - timedelta(hours=3)).isoformat()) == "3h"
+        assert _compact_age((now - timedelta(days=2)).isoformat()) == "2d"
+
+    def test_unparseable_is_empty(self):
+        assert _compact_age("") == ""
+        assert _compact_age("not-a-date") == ""
+
+    def test_future_clamps_to_zero(self):
+        future = (datetime.now() + timedelta(minutes=5)).isoformat()
+        assert _compact_age(future) == "0m"

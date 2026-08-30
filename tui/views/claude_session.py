@@ -42,7 +42,7 @@ from rendering import (
     C_PURPLE, C_YELLOW,
     CATEGORY_THEME, THROBBER_FRAMES,
     _activity_icon, _context_bar_compact, _is_session_seen, _rich_escape,
-    _session_title,
+    _session_title, auto_status,
 )
 from session_launch import (
     ORCH_DIR,
@@ -688,7 +688,11 @@ class ClaudeSessionView(View):
         self._msg_snippets: dict[str, str] = {}
 
         self._keymap = self._build_keymap()
-        self._footer_cache: dict[int, str] = {}
+        self._footer_cache: dict[tuple, str] = {}
+        # (text, color) from rendering.auto_status, refreshed on the 5s
+        # header timer. The footer is the only always-visible chrome in
+        # this view, and this view is where the coordinator lives.
+        self._auto_status: tuple[str, str] = ("", "")
         self._layout_cache: tuple | None = None  # (key, layout dict)
 
     @staticmethod
@@ -1165,11 +1169,31 @@ class ClaudeSessionView(View):
                       self._header_runner(app.gen(self._header_group) + 1))
 
     async def _header_runner(self, g: int) -> None:
-        lines = await asyncio.to_thread(self.header.refresh_blocking)
+        lines, auto = await asyncio.to_thread(self._header_blocking)
         if self.app.gen(self._header_group) != g:
             return  # superseded while off-loop — drop the stale result
         self.header.lines = lines
+        self._auto_status = auto
         self.request_paint()
+
+    def _header_blocking(self) -> tuple[list, tuple[str, str]]:
+        """Header lines and auto-mode status — both off-loop.
+
+        The store read rides along on the header's existing 5s timer
+        rather than adding one: a minute counter needs no better
+        resolution, and load() is mtime-gated so an idle store costs a
+        stat.
+        """
+        lines = self.header.refresh_blocking()
+        auto = ("", "")
+        try:
+            self.store.load()
+            ws = self.store.get(self.ws.id)
+            if ws is not None:
+                auto = auto_status(ws)
+        except Exception:
+            pass
+        return lines, auto
 
     def _refresh_sessions_list(self) -> None:
         if self.sessions_list.refresh(self.state):
@@ -1283,11 +1307,20 @@ class ClaudeSessionView(View):
     def _render_footer(self, frame, rect: Rect) -> None:
         """1-line static footer (port of SessionFooterWidget). Composed
         once per width — its inputs never change for a given view."""
-        cached = self._footer_cache.get(rect.w)
+        auto_text, auto_color = self._auto_status
+        key = (rect.w, auto_text, auto_color)
+        cached = self._footer_cache.get(key)
         if cached is None:
             sid_short = self.session_id[:8]
             short_cwd = self._cwd.replace(os.path.expanduser("~"), "~")
-            left_parts = [
+            left_parts = []
+            if auto_text:
+                # First on the bar, before the session's own identity: this
+                # is the answer to "is the loop still alive", and the pane
+                # above it stays silent for as long as an implementer runs.
+                left_parts.append(f"[{auto_color}]{_esc(auto_text)}[/]")
+                left_parts.append(f"[{C_DIM}]│[/]")
+            left_parts += [
                 f"[{C_BLUE}]{sid_short}[/]",
                 f"[{C_DIM}]{_esc(short_cwd)}[/]",
             ]
@@ -1305,7 +1338,7 @@ class ClaudeSessionView(View):
             width = rect.w - 4  # padding 0 2
             gap = max(2, width - len(strip_markup(left)) - len(strip_markup(right)))
             cached = f"  {left}{' ' * gap}{right}"
-            self._footer_cache = {rect.w: cached}
+            self._footer_cache = {key: cached}
         self._raised_line(frame, rect.x, rect.y, rect.w, cached, bg=BG_CHROME)
 
     def _render_picker(self, frame, rect: Rect) -> None:
