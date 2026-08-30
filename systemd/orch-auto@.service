@@ -1,0 +1,88 @@
+# orch-auto@.service -- one headless auto-mode loop, for one workstream.
+#
+# THIS UNIT IS NOT ENABLED BY ANYTHING IN THIS REPO, and that is deliberate. Auto mode
+# spawns Claude sessions that spend real quota, unattended, for as long as the loop runs.
+# A program with that shape should start because a person decided it should, not because
+# they cloned a checkout. To decide:
+#
+#   cp systemd/orch-auto@.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload
+#   orch list                                          # find the workstream id
+#   systemctl --user start orch-auto@<8-char-ws-id>.service
+#   orch auto status --ws-id <8-char-ws-id>
+#
+# and `systemctl --user stop orch-auto@<id>.service` undoes it -- cleanly, see KillSignal
+# below. `systemctl --user enable` is intentionally not part of those instructions: a loop
+# that restarts itself at every login is a loop that will one day dispatch a night's work
+# at somebody who only wanted to check their email.
+#
+# The instance name (%i) is the workstream id, or any unique prefix of it -- the same
+# string `orch auto status --ws-id` takes. One unit instance per workstream falls out of
+# the same constraint the runner enforces on its own with an flock: exactly one loop per
+# workstream, because two hosts driving one coordinator is how two implementers ended up
+# in one worktree writing the same file.
+#
+# A *user* unit and not a system one, because the job is a user's all the way down: it
+# reads a user's OAuth credentials to check the quota, drives a user's tmux server
+# (the orch-sessions socket), spawns a user's Claude sessions, and writes a user's state
+# directory. All four would have to be punched through for a system unit to buy anything,
+# and it would buy nothing.
+
+[Unit]
+Description=Headless orch auto-mode loop for workstream %i
+Documentation=file:%h/dev/claude-orchestrator/auto_runner.py
+
+# Ordering only, and only when tmux is already up under systemd -- most people start the
+# orch tmux server by running orch, not by a unit, in which case this line does nothing
+# and the runner spawns into the socket itself. It is here so that the ordering is right
+# for anyone who does run one.
+After=default.target
+
+[Service]
+Type=simple
+
+# --foreground is the whole reason `orch auto start` has that flag. Left to itself the
+# command double-detaches so it can survive the terminal it was typed in; under systemd
+# that is exactly wrong -- systemd IS the thing keeping it alive, and a process that
+# forks away from its unit is a process systemd will report as dead the moment it starts.
+ExecStart=%h/bin/orch auto start --foreground --ws-id %i
+
+# ~/bin/orch is a symlink to this checkout's `orch`. If yours lives elsewhere, this is
+# the one line to rewrite.
+
+# The runner turns SIGTERM into a cancel that records "received SIGTERM" as the exit
+# reason, rather than dying where it stands. That is the difference between reading
+# `orch auto status` tomorrow and being told the loop was stopped at 03:14, and being
+# told it VANISHED -- which is what an unrecorded death looks like from outside and is
+# indistinguishable from the machine having gone down.
+KillSignal=SIGTERM
+
+# Long enough for the cancel to propagate (the loop polls the flag every ~3s) and for the
+# final record write to land. Not longer: nothing here holds a lock worth waiting on, and
+# in-flight implementers are tmux sessions of their own that outlive the loop by design.
+TimeoutStopSec=60
+
+# NO Restart=. A loop stops for a reason, and the reasons are recorded precisely so a
+# human can read them: the coordinator declared the workstream done; it went silent for
+# half an hour; the implementers stopped writing back. Restarting on any of those spends
+# quota re-deriving the same conclusion. If the loop crashed, the traceback is in
+# ~/.local/state/claude-orchestrator/auto/<ws-id>.log and wants reading, not retrying.
+Restart=no
+
+# 3 is "gave up: the coordinator or the implementers went silent" and 4 is "refused:
+# another loop already owns this workstream". Both are the design working as designed,
+# and a unit sitting in `failed` for either would train `systemctl --user status` to be
+# ignored. 1 (crashed) and 5 (never got a coordinator to talk to) stay failures.
+SuccessExitStatus=3 4
+
+# A user unit inherits almost nothing. The runner shells out to tmux and spawns claude,
+# and finds neither without this. Adjust to taste -- these are the two that matter.
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+
+# NOT a quota knob. The loop parks itself when the subscription limit is spent and wakes
+# itself when the window resets -- that park can last five hours and is not a hang, so
+# there is deliberately no watchdog or runtime limit here to cut it short. See
+# `AutoMode._await_quota`, and `orch auto quota` for what it is watching.
+
+[Install]
+WantedBy=default.target

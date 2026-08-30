@@ -80,6 +80,18 @@ class FakeRunner(HeadlessRunner):
             self.on_spawn(self, todo, brief)
 
 
+def _coordinator_is_alive(monkeypatch, *sids):
+    """Point AutoMode's tmux liveness probe at a fixed session list.
+
+    Pass None for "tmux could not be read at all", which is a different
+    answer from "the list is empty".
+    """
+    import term_host
+    names = [s for s in sids if s]
+    monkeypatch.setattr(term_host.TerminalHost, "list_tmux_sessions",
+                        classmethod(lambda cls: list(names)))
+
+
 def _runner(store, ws, **kw):
     kw.setdefault("coord_sid", "coord-sid-0001")
     kw.setdefault("poll_interval", 0.01)
@@ -159,6 +171,7 @@ class TestExitReasons:
 
     def test_silent_coordinator_gives_up_and_says_so(self, store, monkeypatch):
         monkeypatch.setattr("auto_mode.NUDGE_INTERVAL_S", 0.01)
+        _coordinator_is_alive(monkeypatch, "coord-sid-0001")
         ws = _ws(store)
 
         r = _runner(store, ws, max_nudges=2)   # never answers
@@ -169,6 +182,39 @@ class TestExitReasons:
         assert "2 nudges" in rec.exit_reason
         # It really did try before giving up: kickoff plus two nudges.
         assert len(r.injected) == 3
+
+    def test_a_dead_coordinator_is_not_nudged_for_half_an_hour(
+            self, store, monkeypatch):
+        """Injections into a session that no longer exists vanish, and the
+        loop cannot tell that from a coordinator deep in thought. Saying
+        so at the first nudge beats spending the whole nudge budget on
+        it — this is how a coordinator that died at spawn (Claude exits
+        on the default answer to its trust prompt) gets named."""
+        monkeypatch.setattr("auto_mode.NUDGE_INTERVAL_S", 0.01)
+        _coordinator_is_alive(monkeypatch, "some-other-session")
+        ws = _ws(store)
+
+        r = _runner(store, ws, max_nudges=50)
+        assert asyncio.run(r.run()) == EXIT_GAVE_UP
+
+        rec = RunnerRecord.load(ws.id)
+        assert rec.exit_kind == ExitKind.COORDINATOR_GONE
+        assert "coord-si" in rec.exit_reason
+        assert len(r.injected) == 1   # the kickoff, and nothing after it
+
+    def test_an_unreadable_tmux_does_not_read_as_a_dead_coordinator(
+            self, store, monkeypatch):
+        """The liveness check fails OPEN, like the quota gate: an empty
+        session list means tmux could not be read, not that everything
+        died. Failing closed here would kill every loop the moment the
+        tmux server hiccuped."""
+        monkeypatch.setattr("auto_mode.NUDGE_INTERVAL_S", 0.01)
+        _coordinator_is_alive(monkeypatch, None)   # tmux answers nothing
+        ws = _ws(store)
+
+        r = _runner(store, ws, max_nudges=2)
+        assert asyncio.run(r.run()) == EXIT_GAVE_UP
+        assert RunnerRecord.load(ws.id).exit_kind == ExitKind.COORDINATOR_SILENT
 
     def test_implementer_that_never_reports_ends_the_run(self, store):
         todo = TodoItem(text="a task", origin="crystallized", id="silent01")
@@ -188,6 +234,19 @@ class TestExitReasons:
         assert rec.exit_kind == ExitKind.IMPLEMENTER_SILENT
         assert "no implementer writeback" in rec.exit_reason
         assert r.spawned == ["silent01"]
+
+    def test_a_coordinator_that_dies_at_spawn_is_not_waited_out(
+            self, monkeypatch):
+        """A session that is gone is a different thing from a session that
+        is slow, and only one of them is worth 60 seconds. The message
+        names the cause because it is nearly always the same one."""
+        import term_host
+
+        monkeypatch.setattr(auto_runner, "capture_pane", lambda sid: "")
+        monkeypatch.setattr(term_host.TerminalHost, "tmux_session_alive",
+                            classmethod(lambda cls, sid: False))
+        with pytest.raises(RuntimeError, match="trust"):
+            auto_runner.wait_for_claude_ready("deadsid1", timeout=30, poll=0.01)
 
     def test_missing_workstream_is_recorded_not_raised(self, store):
         assert run_headless("nosuchws", store=store) == EXIT_NO_START

@@ -77,6 +77,7 @@ class ExitKind:
     SIGNALED = "signaled"                      # SIGTERM/SIGINT (systemctl stop, kill)
     NO_WORKSTREAM = "no_workstream"            # ws_id stopped resolving mid-run
     COORDINATOR_SILENT = "coordinator_silent"  # nudge limit hit
+    COORDINATOR_GONE = "coordinator_gone"      # its tmux session is not there any more
     IMPLEMENTER_SILENT = "implementer_silent"  # implementers stopped reporting
     SPAWN_FAILED = "spawn_failed"              # never got a coordinator to talk to
     CRASHED = "crashed"                        # unhandled exception; detail holds the traceback
@@ -756,6 +757,19 @@ class AutoMode:
         except Exception:
             return set()
 
+    async def _coordinator_is_gone(self) -> bool:
+        """True only when tmux answered AND the coordinator is not in it.
+
+        A dead coordinator used to be indistinguishable from a thinking
+        one: injections vanish into a session that no longer exists and
+        the loop nudges the void until its budget runs out. Half an hour
+        of that is a poor substitute for saying what happened.
+        """
+        if not self.coord_sid:
+            return False
+        live = await self._live_tmux_sessions()
+        return bool(live) and self.coord_sid not in live
+
     async def _hold_todos_with_live_implementer(self, ws) -> list:
         """Add every todo with a still-running implementer to the skip set.
 
@@ -833,6 +847,7 @@ class AutoMode:
           - canceled → "canceled"                        (ExitKind.CANCELED)
           - workstream missing → "workstream not found"  (ExitKind.NO_WORKSTREAM)
           - max_nudges exhausted                         (ExitKind.COORDINATOR_SILENT)
+          - the coordinator's tmux session died          (ExitKind.COORDINATOR_GONE)
 
         Fresh crystallizations are returned ONE at a time even if multiple
         appear in a single poll — the coordinator opts into concurrency
@@ -895,6 +910,20 @@ class AutoMode:
                     # from being retold later as "the coordinator died".
                     self.notify("quota spent — holding nudges until reset")
                 else:
+                    # Nudging is the only thing that talks to the
+                    # coordinator, so it is the natural place to notice
+                    # there is nothing there to talk to. Checked here and
+                    # not on every poll because it costs a subprocess.
+                    #
+                    # An empty session list means tmux itself could not be
+                    # read, not that everything died — the check fails OPEN
+                    # for the same reason the quota gate does.
+                    gone = await self._coordinator_is_gone()
+                    if gone:
+                        return [], (
+                            f"coordinator session {self.coord_sid[:8]} is gone "
+                            f"from tmux — nothing left to nudge"
+                        ), ExitKind.COORDINATOR_GONE
                     nudges_sent += 1
                     if (self.max_nudges is not None
                             and nudges_sent > self.max_nudges):

@@ -115,6 +115,7 @@ _EXIT_STATUS_BY_KIND = {
     ExitKind.CANCELED: EXIT_OK,
     ExitKind.SIGNALED: EXIT_OK,
     ExitKind.COORDINATOR_SILENT: EXIT_GAVE_UP,
+    ExitKind.COORDINATOR_GONE: EXIT_GAVE_UP,
     ExitKind.IMPLEMENTER_SILENT: EXIT_GAVE_UP,
     ExitKind.NO_WORKSTREAM: EXIT_NO_START,
     ExitKind.SPAWN_FAILED: EXIT_NO_START,
@@ -350,21 +351,36 @@ def capture_pane(sid: str) -> str:
 READY_MARKERS = ("? for shortcuts", "│ >", "╰─")
 
 
-def wait_for_claude_ready(sid: str, timeout: float = 45.0,
+def wait_for_claude_ready(sid: str, timeout: float = 60.0,
                           poll: float = 1.0) -> bool:
     """Block until a freshly-spawned Claude session shows its input box.
 
-    Returns False on timeout — and the caller should inject anyway. A
-    kickoff typed into a session that is not listening yet is lost, but
-    it is not fatal: `_wait_for_todo_or_done` re-sends it as a nudge
-    after NUDGE_INTERVAL_S. Refusing to start because a boot took 46
-    seconds would be the worse trade.
+    Returns False on timeout, and the caller injects anyway: a kickoff
+    typed into a session that is not listening yet is lost, but it is not
+    fatal — `_wait_for_todo_or_done` re-sends it as a nudge. Refusing to
+    start because a boot took 61 seconds would be the worse trade.
+
+    Raises RuntimeError if the session is gone, which is a different
+    thing entirely and must not be waited out. Claude's first run in a
+    directory asks whether you trust it and *exits* on the default
+    answer, so a session that dies during startup is the single most
+    likely way this goes wrong.
     """
+    from term_host import TerminalHost
+
     deadline = time.time() + timeout
     while time.time() < deadline:
         text = capture_pane(sid)
         if any(m in text for m in READY_MARKERS):
             return True
+        if not TerminalHost.tmux_session_alive(sid):
+            raise RuntimeError(
+                f"coordinator session {sid[:8]} exited during startup. "
+                f"Claude asks 'is this a project you trust?' on its first "
+                f"run in a directory and exits on the default answer — "
+                f"start a session there by hand once, or `orch trust add "
+                f"<dir>`, then try again"
+            )
         time.sleep(poll)
     return False
 
