@@ -438,6 +438,34 @@ class TestClassify:
         assert "wrote no exit reason" in why
         assert "02:14" in why   # how far it got before it went
 
+    def test_a_reboot_beats_a_recycled_pid(self, monkeypatch):
+        """The scenario is an overnight one, and PIDs are recycled across
+        a reboot. Without this, a record left claiming "running, pid N"
+        comes back in the morning pointing at whatever unrelated process
+        now holds N, and reports a loop that died in the night as fine."""
+        rec = RunnerRecord(ws_id="boot0001", pid=os.getpid(),   # alive!
+                           host=auto_runner.socket.gethostname(),
+                           boot_id="the-boot-that-was",
+                           started_at="2026-08-29T23:00:00",
+                           heartbeat_at="2026-08-30T02:14:00")
+        monkeypatch.setattr(auto_runner, "boot_id", lambda: "the-boot-that-is")
+        state, why = classify(rec)
+        assert state == RunnerState.VANISHED
+        assert "rebooted" in why
+        assert "02:14" in why
+
+        # Same boot: the pid check has the last word, as before.
+        monkeypatch.setattr(auto_runner, "boot_id", lambda: "the-boot-that-was")
+        assert classify(rec)[0] == RunnerState.RUNNING
+
+    def test_a_record_with_no_boot_id_falls_back_to_the_pid(self, monkeypatch):
+        """Records written before boot_id existed, and any system without
+        /proc, must still classify — on the pid alone, as they always did."""
+        rec = RunnerRecord(ws_id="oldrec01", pid=os.getpid(),
+                           host=auto_runner.socket.gethostname())
+        monkeypatch.setattr(auto_runner, "boot_id", lambda: "whatever")
+        assert classify(rec)[0] == RunnerState.RUNNING
+
     def test_record_from_another_host_is_not_guessed_at(self):
         rec = RunnerRecord(ws_id="far00001", pid=1234, host="some-other-box")
         state, why = classify(rec)

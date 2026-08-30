@@ -79,6 +79,22 @@ def state_dir() -> Path:
     return Path.home() / ".local" / "state" / "claude-orchestrator" / "auto"
 
 
+def boot_id() -> str:
+    """This boot's kernel-assigned id, or "" where there isn't one.
+
+    Recorded so a record can be told apart from the machine it was
+    written on. PIDs are recycled across a reboot, and the whole scenario
+    this runner exists for is an overnight one: a record left claiming
+    "running, pid 2481160" would otherwise come back in the morning
+    pointing at whatever unrelated process now holds that number, and
+    report a loop that died in the night as healthy.
+    """
+    try:
+        return Path("/proc/sys/kernel/random/boot_id").read_text().strip()
+    except Exception:
+        return ""
+
+
 def record_path(ws_id: str) -> Path:
     return state_dir() / f"{ws_id}.json"
 
@@ -144,6 +160,7 @@ class RunnerRecord:
     ws_name: str = ""
     pid: int = 0
     host: str = ""
+    boot_id: str = ""
     coord_sid: str = ""
     started_at: str = ""
     heartbeat_at: str = ""
@@ -231,6 +248,17 @@ def classify(rec: Optional[RunnerRecord]) -> tuple[str, str]:
     if rec.host and rec.host != socket.gethostname():
         return RunnerState.FOREIGN, (
             f"recorded on {rec.host}; pid {rec.pid} cannot be checked from here"
+        )
+    now_boot = boot_id()
+    if rec.boot_id and now_boot and rec.boot_id != now_boot:
+        # Nothing that was running before the reboot is running now, and
+        # pid {rec.pid} today is somebody else. Decided BEFORE the pid
+        # check, which would otherwise report a healthy loop.
+        return RunnerState.VANISHED, (
+            f"the machine rebooted since this run started"
+            f"{f' ({rec.started_at})' if rec.started_at else ''} and it wrote "
+            f"no exit reason — it went down with the machine; last heartbeat "
+            f"{rec.heartbeat_at or 'never'}"
         )
     if not _pid_alive(rec.pid):
         return RunnerState.VANISHED, (
@@ -437,6 +465,7 @@ class HeadlessRunner:
             ws_id=ws_id,
             pid=os.getpid(),
             host=socket.gethostname(),
+            boot_id=boot_id(),
             coord_sid=coord_sid,
             started_at=datetime.now().isoformat(timespec="seconds"),
         )
@@ -755,7 +784,7 @@ def run_headless(
     ws = store.get(ws_id)
     if ws is None:
         rec = RunnerRecord(ws_id=ws_id, pid=os.getpid(),
-                           host=socket.gethostname(),
+                           host=socket.gethostname(), boot_id=boot_id(),
                            started_at=datetime.now().isoformat(timespec="seconds"))
         rec.finish(ExitKind.NO_WORKSTREAM, f"no workstream with id {ws_id}")
         return EXIT_NO_START
