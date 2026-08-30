@@ -32,6 +32,19 @@ Pure logic — no Textual imports. The TUI wires three callables:
       that's fine; the next iteration will push another screen on top.
   inject_coordinator(text) -> None              (typed into coordinator's PTY)
   notify(line) -> None                          (status surfacing)
+
+Every terminating path sets BOTH `final_status` (prose, and what run()
+returns) and `final_kind` (one of `ExitKind`, for machines). A host that
+outlives its terminal — `auto_runner` — persists the pair, because a
+headless loop that dies quietly is strictly worse than a TUI that dies
+visibly: at least a closed terminal is something you can see.
+
+Two of those paths only exist when a host asks for them. `max_nudges`
+and `max_silent_iterations` are None by default, which is right for the
+TUI (a human is sitting there and can tell a thinking coordinator from a
+dead one). A headless host has no such human, so it sets both, and a
+coordinator that stops answering ends the run with a reason instead of
+nudging an empty tmux session until morning.
 """
 
 from __future__ import annotations
@@ -46,6 +59,31 @@ from models import Store, TodoItem, Workstream
 CANCEL_POLL_INTERVAL_S = 3.0  # how often to poll auto_cancel_requested
 
 NUDGE_INTERVAL_S = 180.0  # 3 minutes of coordinator silence → re-prompt
+
+
+class ExitKind:
+    """Why a loop is no longer running.
+
+    A string enum rather than an Enum so it round-trips through JSON and
+    an old record still reads back as itself. The set is deliberately
+    exhaustive over *observed* ends; VANISHED is the one nobody writes —
+    it is what a reader concludes when the record says "running" and the
+    pid says otherwise, which is the shape of SIGKILL and of the machine
+    going down mid-run.
+    """
+
+    DONE = "done"                              # `orch distill done`
+    CANCELED = "canceled"                      # `orch auto cancel`, or a local cancel()
+    SIGNALED = "signaled"                      # SIGTERM/SIGINT (systemctl stop, kill)
+    NO_WORKSTREAM = "no_workstream"            # ws_id stopped resolving mid-run
+    COORDINATOR_SILENT = "coordinator_silent"  # nudge limit hit
+    IMPLEMENTER_SILENT = "implementer_silent"  # implementers stopped reporting
+    SPAWN_FAILED = "spawn_failed"              # never got a coordinator to talk to
+    CRASHED = "crashed"                        # unhandled exception; detail holds the traceback
+    VANISHED = "vanished"                      # inferred, never written: see above
+
+    #: Ends that are the design working as designed.
+    CLEAN = frozenset({DONE, CANCELED, SIGNALED})
 
 # ── Quota gate tuning ────────────────────────────────────────────────
 # While parked, the loop sleeps in bounded hops and re-reads the quota on
@@ -427,6 +465,8 @@ class AutoMode:
         quota_threshold: Optional[float] = None,
         quota_kinds: Optional[tuple] = None,
         check_quota: Optional[Callable[[], object]] = None,
+        max_nudges: Optional[int] = None,
+        max_silent_iterations: Optional[int] = None,
     ):
         self.store = store
         self.ws_id = ws_id
@@ -454,11 +494,23 @@ class AutoMode:
         self.quota_paused = False
         self.quota_resume_at: Optional[datetime] = None
 
+        # Give-up limits. None means "never give up", which is the right
+        # default for the TUI: a human is watching, and a coordinator that
+        # takes twenty minutes to think is not a coordinator that died.
+        # A headless host sets both, because nobody is watching and an
+        # unbounded nudge loop into a dead tmux session is the failure this
+        # whole runner exists to make visible.
+        self.max_nudges = max_nudges
+        self.max_silent_iterations = max_silent_iterations
+        self.silent_iterations = 0
+
         self.canceled = False
         self.iteration = 0
         self.current_todo_id: Optional[str] = None
         self.last_report: str = ""
         self.final_status: str = ""
+        # Machine-readable twin of final_status. See ExitKind.
+        self.final_kind: str = ""
         # Set by cancel(); awaitable so callers blocked on long polls (e.g.
         # waiting for an implementer's report) can race against it and exit
         # immediately instead of waiting for the next checkpoint.
@@ -467,6 +519,18 @@ class AutoMode:
     def cancel(self) -> None:
         self.canceled = True
         self.cancel_event.set()
+
+    def _finish(self, kind: str, reason: str) -> str:
+        """Record the terminating reason in both forms and return the prose.
+
+        Every `return` out of the loop goes through here so the two can
+        never drift — a status without a kind is a status a headless host
+        cannot classify, and classifying it by string-matching prose is
+        how "parked" gets mistaken for "stopped".
+        """
+        self.final_kind = kind
+        self.final_status = reason
+        return reason
 
     # ── Persisted-state writes ────────────────────────────────────
     # The owning orch process is the only writer for everything except
@@ -744,7 +808,7 @@ class AutoMode:
     async def _wait_for_todo_or_done(
         self,
         existing_ids: set[str],
-    ) -> tuple[list[TodoItem], str]:
+    ) -> tuple[list[TodoItem], str, str]:
         """Poll until the coordinator picks something or terminates.
 
         `existing_ids` is the snapshot of pending todo IDs at the moment
@@ -754,29 +818,32 @@ class AutoMode:
         — possibly multiple IDs for a concurrent batch) or crystallize a
         fresh todo (a new id appears that wasn't in the snapshot).
 
-        Returns (todos, terminate_reason). On dispatch: todos is a non-empty
-        list of items to spawn (concurrently if len>1); reason is "".
-        On terminate: todos is [] and reason explains why:
-          - ws.auto_done_reason set → that string
-          - canceled → "canceled"
-          - workstream missing → "workstream not found"
+        Returns (todos, terminate_reason, exit_kind). On dispatch: todos is
+        a non-empty list of items to spawn (concurrently if len>1); reason
+        and kind are "". On terminate: todos is [] and reason explains why:
+          - ws.auto_done_reason set → that string        (ExitKind.DONE)
+          - canceled → "canceled"                        (ExitKind.CANCELED)
+          - workstream missing → "workstream not found"  (ExitKind.NO_WORKSTREAM)
+          - max_nudges exhausted                         (ExitKind.COORDINATOR_SILENT)
 
         Fresh crystallizations are returned ONE at a time even if multiple
         appear in a single poll — the coordinator opts into concurrency
         explicitly via `distill next`, not implicitly by crystallizing fast.
 
         If the coordinator goes silent past NUDGE_INTERVAL_S, re-inject
-        a short reminder.
+        a short reminder — up to `max_nudges` times, after which the
+        silence is the answer and the loop stops saying so.
         """
         import time as _time
         last_nudge_at = _time.time()
+        nudges_sent = 0
         while not self.canceled:
             self.store.load(force=True)
             ws = self.store.get(self.ws_id)
             if not ws:
-                return [], "workstream not found"
+                return [], "workstream not found", ExitKind.NO_WORKSTREAM
             if ws.auto_done_reason:
-                return [], ws.auto_done_reason
+                return [], ws.auto_done_reason, ExitKind.DONE
 
             # (1) Coordinator explicitly picked one or more pending todos.
             if ws.auto_next_todo_ids:
@@ -802,21 +869,36 @@ class AutoMode:
                 ws.auto_next_todo_ids = []
                 self.store.update(ws)
                 if picked:
-                    return picked, ""
+                    return picked, "", ""
 
             # (2) A fresh todo was crystallized (id not in pre-wait snapshot).
             for t in self._pending_todos(ws):
                 if t.id not in existing_ids:
-                    return [t], ""
+                    return [t], "", ""
 
             # (3) Silent — nudge. Unless the quota is spent, in which case
             # the coordinator's own Claude is parked too and nudges would
             # just pile up in an input box nobody is reading.
             if _time.time() - last_nudge_at > NUDGE_INTERVAL_S:
                 if await self._blocking_limits():
+                    # A parked coordinator is not a silent one — its Claude
+                    # is waiting on the same reset we are. Holding the nudge
+                    # AND not counting it is what keeps a long quota park
+                    # from being retold later as "the coordinator died".
                     self.notify("quota spent — holding nudges until reset")
                 else:
-                    self.notify("coordinator silent — sending nudge")
+                    nudges_sent += 1
+                    if (self.max_nudges is not None
+                            and nudges_sent > self.max_nudges):
+                        silent_for = int(self.max_nudges * NUDGE_INTERVAL_S / 60)
+                        return [], (
+                            f"coordinator silent through {self.max_nudges} "
+                            f"nudges (~{silent_for} min)"
+                        ), ExitKind.COORDINATOR_SILENT
+                    self.notify(
+                        f"coordinator silent — sending nudge {nudges_sent}"
+                        + (f"/{self.max_nudges}" if self.max_nudges else "")
+                    )
                     pending = [t for t in self._pending_todos(ws) if t.id in existing_ids]
                     self.inject_coordinator(build_coordinator_nudge(pending))
                 last_nudge_at = _time.time()
@@ -826,7 +908,7 @@ class AutoMode:
                 )
             except asyncio.TimeoutError:
                 pass
-        return [], "canceled"
+        return [], "canceled", ExitKind.CANCELED
 
     async def run(self) -> str:
         """Run the loop to completion. Returns the terminating reason.
@@ -842,8 +924,7 @@ class AutoMode:
         self.store.load(force=True)
         ws = self.store.get(self.ws_id)
         if not ws:
-            self.final_status = "workstream not found"
-            return self.final_status
+            return self._finish(ExitKind.NO_WORKSTREAM, "workstream not found")
 
         # Clear stale signals from a previous run.
         dirty = False
@@ -885,27 +966,24 @@ class AutoMode:
     async def _run_inner(self) -> str:
         ws = self.store.get(self.ws_id)
         if not ws:
-            self.final_status = "workstream not found"
-            return self.final_status
+            return self._finish(ExitKind.NO_WORKSTREAM, "workstream not found")
 
         if not await self._await_quota("kickoff"):
-            self.final_status = "canceled"
-            return self.final_status
+            return self._finish(ExitKind.CANCELED, "canceled")
 
         pending = self._pending_todos(ws)
         existing_ids = {t.id for t in pending}
         self.inject_coordinator(build_coordinator_kickoff(ws, pending_todos=pending))
         self.notify(f"started ({len(pending)} todos queued, awaiting coordinator pick)")
 
-        batch, reason = await self._wait_for_todo_or_done(existing_ids)
+        batch, reason, kind = await self._wait_for_todo_or_done(existing_ids)
         if reason or not batch:
-            self.final_status = reason or "canceled"
-            return self.final_status
+            return self._finish(
+                kind or ExitKind.CANCELED, reason or "canceled")
 
         while not self.canceled:
             if not await self._await_quota("dispatch"):
-                self.final_status = "canceled"
-                return self.final_status
+                return self._finish(ExitKind.CANCELED, "canceled")
 
             self.iteration += 1
             self.current_todo_id = batch[0].id  # informational; first of batch
@@ -941,8 +1019,7 @@ class AutoMode:
                 # Do NOT clear the implementer stamp here. A cancel unblocks
                 # the wait without stopping the implementer — that stamp is
                 # precisely what tells the next run this todo is taken.
-                self.final_status = "canceled"
-                return self.final_status
+                return self._finish(ExitKind.CANCELED, "canceled")
 
             # The wait resolved on its own terms (report written, or the
             # session exited), so nothing is in flight — drop the stamp
@@ -952,18 +1029,35 @@ class AutoMode:
 
             # Read each report (with the same retry semantics as before).
             items: list[tuple[TodoItem, str]] = []
+            wrote_back = 0
             for t in batch:
                 report_text = await self._read_report(t.id)
+                if report_text:
+                    wrote_back += 1
                 report = report_text or "(implementer did not run `orch report` — no writeback)"
                 items.append((t, report))
             self.last_report = items[-1][1] if items else ""
+
+            # A whole batch with no writeback means the implementers are
+            # dying before they report — a worktree that won't open, a
+            # command that isn't there, a prompt they can't run. One such
+            # iteration is worth telling the coordinator about; a run of
+            # them is a loop burning quota to produce nothing, and the
+            # headless host stops rather than doing that all night.
+            self.silent_iterations = 0 if wrote_back else self.silent_iterations + 1
+            if (self.max_silent_iterations is not None
+                    and self.silent_iterations >= self.max_silent_iterations):
+                return self._finish(
+                    ExitKind.IMPLEMENTER_SILENT,
+                    f"{self.silent_iterations} consecutive iterations with no "
+                    f"implementer writeback",
+                )
 
             # The batch that just finished may have spent the last of the
             # quota. Hold the followup rather than typing it into a
             # coordinator that's parked on its own limit prompt.
             if not await self._await_quota("coordinator followup"):
-                self.final_status = "canceled"
-                return self.final_status
+                return self._finish(ExitKind.CANCELED, "canceled")
 
             # Snapshot pending todos AS OF NOW — anything created after
             # this point counts as a fresh coordinator decision and will
@@ -972,8 +1066,8 @@ class AutoMode:
             self.store.load(force=True)
             ws_snap = self.store.get(self.ws_id)
             if not ws_snap:
-                self.final_status = "workstream not found"
-                return self.final_status
+                return self._finish(
+                    ExitKind.NO_WORKSTREAM, "workstream not found")
             pending_snap = self._pending_todos(ws_snap)
             existing_ids = {t.id for t in pending_snap}
 
@@ -985,13 +1079,10 @@ class AutoMode:
                 f"awaiting coordinator pick"
             )
 
-            batch, reason = await self._wait_for_todo_or_done(existing_ids)
+            batch, reason, kind = await self._wait_for_todo_or_done(existing_ids)
             if reason:
-                self.final_status = reason
-                return self.final_status
+                return self._finish(kind or ExitKind.DONE, reason)
             if not batch:
-                self.final_status = "canceled"
-                return self.final_status
+                return self._finish(ExitKind.CANCELED, "canceled")
 
-        self.final_status = "canceled"
-        return self.final_status
+        return self._finish(ExitKind.CANCELED, "canceled")
