@@ -254,6 +254,19 @@ def build_implementer_brief(todo: TodoItem) -> str:
         f"of what you did, anything notable, surprising, or unfinished>\"\n\n"
         f"Then exit with /exit."
     )
+    parts.append("")
+    parts.append(
+        "[auto-mode] QUOTA — Kyle's rule (2026-09-05): pause before the 5-hour window is "
+        "spent, never stall on the usage-limit prompt mid-edit. The gate that launched you "
+        "only parks NEW launches; you are your own gate. After every commit, and at least "
+        "every 15 minutes, read the window:\n\n"
+        "  orch auto quota | sed 's/\\x1b\\[[0-9;]*m//g' | awk '/5h session/{gsub(\"%\",\"\",$1); print $1}'\n\n"
+        "At 90 or above: finish only the edit in hand if it is a few lines, commit everything "
+        "that compiles (files by name, never `git add -A`), note where you are, then poll "
+        "`sleep 300` until the reading has dropped below 40 (the reset), and resume. Above 90 "
+        "never start a full test suite, a page rebuild, or a model call. The same rule applies "
+        "to the weekly window. If the checkout has a CLAUDE.md, it says the same thing."
+    )
     return "\n".join(parts)
 
 
