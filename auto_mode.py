@@ -265,7 +265,9 @@ def build_implementer_brief(todo: TodoItem) -> str:
         "that compiles (files by name, never `git add -A`), note where you are, then poll "
         "`sleep 300` until the reading has dropped below 40 (the reset), and resume. Above 90 "
         "never start a full test suite, a page rebuild, or a model call. The same rule applies "
-        "to the weekly window. If the checkout has a CLAUDE.md, it says the same thing."
+        "to the weekly window. A BLANK reading (the endpoint could not be read, e.g. a 429) is not a "
+        "number: never start a pause on it, and end a pause after four blank polls (20 minutes) — the "
+        "gate fails open for the same reason. If the checkout has a CLAUDE.md, it says the same thing."
     )
     return "\n".join(parts)
 
