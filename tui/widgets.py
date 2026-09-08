@@ -57,11 +57,19 @@ class ListView:
             return self.rows[self.highlighted][0]
         return None
 
-    def set_rows(self, rows: list[tuple[Any, str, bool]], keep_id: bool = True) -> None:
+    def set_rows(self, rows: list[tuple[Any, str, bool]], keep_id: bool = True,
+                 from_top: bool = False) -> None:
         prev_id = self.highlighted_id
         prev_idx = self.highlighted
         self.rows = list(rows)
         idx = -1
+        if from_top:
+            # The rows changed *meaning* (a new search query re-ranks them),
+            # so following the old selection would strand the cursor — and the
+            # scroll window with it — partway down results nobody asked for.
+            keep_id = False
+            prev_idx = 0
+            self._scroll = 0
         if keep_id and prev_id is not None:
             for i, (rid, _, disabled) in enumerate(self.rows):
                 if rid == prev_id and not disabled:
@@ -534,9 +542,7 @@ class FuzzyList:
             rows = [(item_id, markup, False) for _, item_id, markup in scored]
         else:
             rows = [(item_id, markup, False) for item_id, markup in self._items]
-        if self.list.rows:
-            self.list.highlighted = 0  # reset baseline: best match goes on top
-        self.list.set_rows(rows, keep_id=False)  # clamps to 0, fires on change
+        self.list.set_rows(rows, from_top=True)  # best match on top
         self.status = f"{len(rows)} of {len(self._items)}"
 
 

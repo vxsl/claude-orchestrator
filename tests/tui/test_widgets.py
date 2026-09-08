@@ -158,6 +158,33 @@ def test_set_rows_keep_id_false_clamps_by_index():
     assert lv.highlighted == 1
 
 
+def test_set_rows_from_top_ignores_surviving_id():
+    """A re-ranked row set starts at the best match, not the old selection."""
+    lv = make_list("a", "b", "c")
+    press(lv, "j", "j")  # c
+    lv.set_rows(rows_of("c", "b", "a"), from_top=True)
+    assert lv.highlighted == 0 and lv.highlighted_id == "c"
+    lv.set_rows(rows_of("b", "a"), from_top=True)
+    assert lv.highlighted == 0 and lv.highlighted_id == "b"
+
+
+def test_set_rows_from_top_skips_disabled_first_row():
+    lv = make_list("a", "b", "c")
+    press(lv, "j")
+    lv.set_rows(rows_of(("sep", True), "b", "c"), from_top=True)
+    assert lv.highlighted == 1 and lv.highlighted_id == "b"
+
+
+def test_set_rows_from_top_rewinds_the_scroll_window():
+    lv = ListView()
+    lv.set_rows(rows_of(*[str(i) for i in range(30)]))
+    press(lv, "G")          # bottom
+    lv.render(width=20, height=5)
+    assert lv._scroll > 0
+    lv.set_rows(rows_of(*[str(i) for i in range(30)]), from_top=True)
+    assert lv._scroll == 0 and lv.highlighted == 0
+
+
 def test_set_rows_empty_resets():
     lv = make_list("a")
     lv.set_rows([])

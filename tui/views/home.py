@@ -161,6 +161,8 @@ class HomeView(View):
         self.search.on_cancel = self._close_search
         self.search.on_submit = lambda _text: self._close_search(keep=True)
         self.search_active = False
+        # Row under the cursor when '/' was pressed, restored if escape cancels.
+        self._pre_search_id: Any | None = None
         # Cross-workstream session search (search_mode == "sessions").
         self._gs_query: str | None = None   # query the cached results answer
         self._gs_results: list = []         # ranked (SessionSearchResult, ws)
@@ -637,6 +639,7 @@ class HomeView(View):
     def _open_search(self) -> None:
         """'/' always starts a fresh query, keeping the last-used mode
         (sessions by default; Tab flips to the workstream filter)."""
+        self._pre_search_id = self.ws_list.highlighted_id
         self.search_active = True
         self.search.text = ""
         self.search.cursor = 0
@@ -653,6 +656,12 @@ class HomeView(View):
         if not keep:
             self.state.search_text = ""
             self._reset_global_search()
+            self.refresh_rows()
+            # Escape means "never mind" — put the cursor back where '/' found
+            # it, which the session-hit rows have otherwise thrown away.
+            if self._pre_search_id is not None:
+                self.ws_list.highlight_id(self._pre_search_id)
+            return
         self.refresh_rows()
 
     def _toggle_search_mode(self) -> None:
@@ -712,9 +721,11 @@ class HomeView(View):
                 rows.extend(((rid, j), line, True)
                             for j, line in enumerate(lines[1:], 1))
         self._ws_count = len(self._gs_results)
-        # keep_id: streamed batches re-rank the list, so follow the session
-        # under the cursor instead of pinning a row index that moved.
-        self.ws_list.set_rows(rows)
+        # While the input is open the user cannot have moved the cursor (every
+        # key goes to the LineEdit) and each streamed batch re-ranks the hits,
+        # so start at the best match.  Once they've hit enter and are
+        # navigating, keep_id follows the session under the cursor instead.
+        self.ws_list.set_rows(rows, from_top=self.search_active)
         self._refresh_preview(force=True)
         self.request_paint()
 
@@ -817,7 +828,7 @@ class HomeView(View):
                 else:
                     rows.append(((ws.id, i), line, True))
         self._ws_count = len(items)
-        self.ws_list.set_rows(rows)
+        self.ws_list.set_rows(rows, from_top=self.search_active)
         self._refresh_preview(force=True)
         self.request_paint()
 

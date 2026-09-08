@@ -241,6 +241,29 @@ class TestSearch:
             assert len(ws_ids(h.app)) < 6
             assert "Personal project" in h.screen_text()
 
+    async def test_typing_rewinds_the_list_to_the_best_match(self, home_app):
+        """A new query re-ranks the rows, so the cursor must not stay on
+        whatever workstream it was parked on further down the list."""
+        async with Headless(home_app) as h:
+            await h.press("j", "j", "j")  # park the cursor mid-list
+            parked = h.app.home.ws_list.highlighted_id
+            assert parked == ws_ids(h.app)[3]
+            await h.press("slash", "tab")  # ws-name filter mode
+            await h.feed_bytes(b"e")       # matches every workstream, incl. parked
+            assert parked in ws_ids(h.app)
+            assert h.app.home.ws_list.highlighted_id == ws_ids(h.app)[0]
+            assert h.app.home.ws_list._scroll == 0
+
+    async def test_escape_puts_the_cursor_back(self, home_app):
+        async with Headless(home_app) as h:
+            await h.press("j", "j", "j")
+            parked = h.app.home.ws_list.highlighted_id
+            await h.press("slash", "tab")
+            await h.feed_bytes(b"personal")
+            assert h.app.home.ws_list.highlighted_id != parked
+            await h.press("escape")
+            assert h.app.home.ws_list.highlighted_id == parked
+
     async def test_escape_cancels_search_and_restores(self, home_app):
         async with Headless(home_app) as h:
             await h.press("slash", "tab")
