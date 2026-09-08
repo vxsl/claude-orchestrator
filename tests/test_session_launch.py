@@ -46,11 +46,21 @@ class TestBuildClaudeCommand:
         assert argv[:3] == ["claude", "--session-id", "sid-1"]
         assert "--resume" not in argv
         assert argv[-1] == "do the thing"
-        assert "orch:my ws" in argv
         # sys prompt spilled to the (redirected) spawn-args dir
         i = argv.index("--append-system-prompt-file")
         assert argv[i + 1].endswith("sid-1.sys")
         assert open(argv[i + 1]).read() == "ctx"
+
+    def test_no_session_name(self, tmp_path):
+        """`-n` suppresses Claude Code's own ai-title, and the name we used to
+        pass ("orch:<ws>") repeated what the UI around it already said."""
+        cmd = build_claude_command(
+            session_id="sid-1", cwd=str(tmp_path), sys_prompt="ctx",
+            prompt=None, ws_name="my ws", is_new=True,
+        )
+        argv = shlex.split(cmd)
+        assert "-n" not in argv and "--name" not in argv
+        assert not any(a.startswith("orch:") for a in argv)
 
     def test_resume_flag(self, tmp_path):
         cmd = build_claude_command(

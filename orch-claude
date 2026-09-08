@@ -239,7 +239,8 @@ else
     CLAUDE_ARGS+=(--resume "$SESSION_ID")
 fi
 CLAUDE_ARGS+=(--append-system-prompt "$CONTEXT")
-CLAUDE_ARGS+=(-n "orch:${WS_NAME}")
+# No -n: naming a session suppresses Claude Code's own ai-title, and
+# "orch:<workstream>" told us nothing the UI around it had not already said.
 if [[ "$TRUSTED" == "true" ]]; then
     CLAUDE_ARGS+=(--dangerously-skip-permissions)
 fi

@@ -164,6 +164,13 @@ def build_claude_command(
     via --append-system-prompt-file). A long positional prompt is also
     spilled to a file and read via command substitution at exec time,
     because tmux new-session caps the inner command at ~16KB.
+
+    No `-n`: naming a session tells Claude Code it is already titled, and it
+    then never writes an ai-title of its own — 8% of the sessions we launched
+    that way have one, against 66% of the ones started outside orch.  The name
+    we were passing was "orch:<workstream>", which said nothing the surrounding
+    UI had not already said.  ``ws_name`` stays in the signature for the frozen
+    Textual caller (see MIGRATION.md); nothing reads it here.
     """
     args = ["claude"]
     if is_new:
@@ -177,8 +184,6 @@ def build_claude_command(
     sys_path = spawn_dir / f"{session_id}.sys"
     sys_path.write_text(sys_prompt)
     args += ["--append-system-prompt-file", str(sys_path)]
-
-    args += ["-n", f"orch:{ws_name}"]
 
     try:
         from trust import is_trusted
