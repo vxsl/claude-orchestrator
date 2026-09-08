@@ -16,8 +16,33 @@ from rendering import (
     _render_notification_option,
     _parse_worktree_display, _worktree_color, _WORKTREE_COLORS,
     C_DIM, C_GREEN, C_ORANGE, C_RED, C_LIGHT, C_BLUE, C_YELLOW,
-    _compact_age, auto_status,
+    _compact_age, auto_status, _session_title,
 )
+
+
+class TestSessionTitle:
+    """Claude's own title beats the one we paid haiku to guess."""
+
+    def _session(self, **kw):
+        return ClaudeSession(session_id="a", project_dir="d", project_path="/p", **kw)
+
+    def test_prefers_claudes_own_title_over_our_cached_one(self, monkeypatch):
+        import thread_namer
+        monkeypatch.setattr(thread_namer, "_load_session_cache",
+                            lambda: {"a": "web client work"})
+        s = self._session(ai_title="Add CI gate for test coverage in web client")
+        assert _session_title(s) == "Add CI gate for test coverage in web client"
+
+    def test_batch_override_still_wins(self, monkeypatch):
+        """The caller's freshly-titled batch is newer than anything stored."""
+        s = self._session(ai_title="Claude's title")
+        assert _session_title(s, {"a": "just generated"}) == "just generated"
+
+    def test_falls_back_to_the_cache_when_claude_never_titled_it(self, monkeypatch):
+        import thread_namer
+        monkeypatch.setattr(thread_namer, "_load_session_cache",
+                            lambda: {"a": "metrics.toml cleanup"})
+        assert _session_title(self._session()) == "metrics.toml cleanup"
 
 
 class TestTokenColor:

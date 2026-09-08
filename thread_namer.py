@@ -92,6 +92,14 @@ def _extract_context(thread: Thread) -> str:
         for m in msgs:
             parts.append(f"  - {m}")
 
+    # Claude's own titles for the member sessions: a summary of where each one
+    # actually went, which a first message can only guess at.
+    titles = [s.ai_title for s in thread.sessions[:5] if s.ai_title]
+    if titles:
+        parts.append("Claude's titles for those sessions:")
+        for t in titles:
+            parts.append(f"  - {t}")
+
     parts.append(f"Sessions: {thread.session_count}, Last active: {thread.age}")
 
     return "\n".join(parts)
@@ -505,16 +513,23 @@ Respond with ONLY a JSON object mapping the session ID prefix to the title strin
 
 
 def title_sessions(sessions: list[ClaudeSession]) -> dict[str, str]:
-    """Title sessions that don't have cached titles.
+    """Title sessions that don't have a title already.
 
-    Returns {session_id: title} for all sessions (cached + newly generated).
+    Returns {session_id: title} for all sessions (Claude's own + cached + newly
+    generated).  Claude Code titles its own sessions and writes the result into
+    the JSONL, so a session carrying an ``ai_title`` costs nothing and needs no
+    haiku call — and that title is the better one, being made from the whole
+    conversation rather than the first 200 characters of it.  Only sessions
+    Claude never titled (`claude -n` suppresses it) reach the model here.
     """
     cache = _load_session_cache()
     result = {}
     uncached = []
 
     for s in sessions:
-        if s.session_id in cache:
+        if s.ai_title:
+            result[s.session_id] = s.ai_title
+        elif s.session_id in cache:
             result[s.session_id] = cache[s.session_id]
         else:
             uncached.append(s)
@@ -575,6 +590,11 @@ def title_sessions(sessions: list[ClaudeSession]) -> dict[str, str]:
 
 
 def get_session_title(session: ClaudeSession) -> str:
-    """Get a cached title for a session, or empty string if not yet titled."""
+    """Best stored title for a session, or "" if it has none yet.
+
+    Claude Code's own title wins over ours — see :func:`title_sessions`.
+    """
+    if session.ai_title:
+        return session.ai_title
     cache = _load_session_cache()
     return cache.get(session.session_id, "")

@@ -53,6 +53,11 @@ pub struct Session {
     pub project_dir: String,
     pub project_path: String,
     pub title: String,
+    /// Claude Code's own title for the session ("ai-title"), written after the
+    /// first exchange and refined as it goes.  Absent when `claude -n` gave the
+    /// session a name, which suppresses Claude's titling.
+    #[serde(default)]
+    pub ai_title: String,
     pub started_at: String,
     pub last_activity: String,
     pub total_input_tokens: i64,
@@ -371,6 +376,14 @@ pub fn parse_session(jsonl_path: &Path) -> Result<Session> {
             }
         }
 
+        // Claude's own title. It is rewritten as the session grows, so the
+        // last record wins rather than the first.
+        if msg_type == "ai-title" {
+            if let Some(t) = data["aiTitle"].as_str() {
+                session.ai_title = t.to_string();
+            }
+        }
+
         // Extract session ID (first one wins as primary, track all)
         if let Some(sid) = data["sessionId"].as_str() {
             if !sid.is_empty() {
@@ -617,6 +630,14 @@ pub fn refresh_session_tail(session: &mut Session, tail_bytes: u64) -> Result<bo
 
         let msg_type = data["type"].as_str().unwrap_or("");
 
+        // Claude retitles as a session grows, so a tail read can carry a
+        // fresher ai-title than the full parse that seeded this Session.
+        if msg_type == "ai-title" {
+            if let Some(t) = data["aiTitle"].as_str() {
+                session.ai_title = t.to_string();
+            }
+        }
+
         // See parse_session_full: system events are autonomous bookkeeping
         // (turn_duration, stop_hook_summary, away_summary) and must not
         // bump last_activity, or recaps would flip seen→unseen.
@@ -759,6 +780,39 @@ mod tests {
     fn test_truncate() {
         assert_eq!(truncate("hello", 10), "hello");
         assert_eq!(truncate("hello world", 5), "hello");
+    }
+
+    /// Claude rewrites its title as a session grows; the newest wins, and a
+    /// `claude -n` name (custom-title) is a separate field, not a replacement.
+    #[test]
+    fn test_parse_takes_last_ai_title() {
+        let dir = std::env::temp_dir().join(format!("orch-ai-title-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("s.jsonl");
+        std::fs::write(
+            &path,
+            concat!(
+                r#"{"type":"user","message":{"content":"go"},"timestamp":"2026-03-20T10:00:00Z"}"#,
+                "
+",
+                r#"{"type":"ai-title","aiTitle":"first guess","sessionId":"s1"}"#,
+                "
+",
+                r#"{"type":"custom-title","customTitle":"orch:ws","sessionId":"s1"}"#,
+                "
+",
+                r#"{"type":"ai-title","aiTitle":"Debug the socket timeout","sessionId":"s1"}"#,
+                "
+",
+            ),
+        )
+        .unwrap();
+
+        let session = parse_session(&path).unwrap();
+        assert_eq!(session.ai_title, "Debug the socket timeout");
+        assert_eq!(session.title, "orch:ws");
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

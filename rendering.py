@@ -659,12 +659,22 @@ def _render_ws_option(
 # ─── Session Option Rendering ────────────────────────────────────────
 
 def _session_title(session: ClaudeSession, titles: dict[str, str] | None = None) -> str:
-    """Best available title for a session: AI title > cached > first message > project."""
+    """Best available title: batch override > Claude's own > cached > first
+    message > project.
+
+    ``session.ai_title`` is what Claude Code named the session itself, written
+    into the JSONL after the first exchange and refined as it goes.  It beats
+    our own cached title, which is a haiku call made from the project path,
+    branch and first 200 characters — "web client work" where Claude, having
+    read the whole conversation, said "Add CI gate for test coverage".
+    """
     from thread_namer import get_session_title
     from threads import _extract_first_message
 
     if titles and session.session_id in titles:
         return titles[session.session_id]
+    if session.ai_title:
+        return session.ai_title
     cached = get_session_title(session)
     if cached:
         return cached

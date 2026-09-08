@@ -181,6 +181,9 @@ def _hydrate_session(row: dict) -> ClaudeSession:
         project_dir=row["project_dir"],
         project_path=project_path,
         title=row["title"],
+        # .get: rows written before the column existed are backfilled by the
+        # daemon's next full sync, not by the migration.
+        ai_title=row.get("ai_title", ""),
         started_at=row["started_at"],
         last_activity=row["last_activity"],
         total_input_tokens=row["total_input_tokens"],
@@ -867,6 +870,7 @@ class ClaudeSession:
     project_dir: str  # The project directory name (e.g., "-home-kyle-dev-claude-orchestrator")
     project_path: str  # Decoded real path (e.g., "/home/kyle/dev/claude-orchestrator")
     title: str = ""
+    ai_title: str = ""  # Claude Code's own title ("ai-title"); empty when `claude -n` named the session
     started_at: str = ""
     last_activity: str = ""
     total_input_tokens: int = 0
@@ -972,8 +976,15 @@ class ClaudeSession:
 
     @property
     def display_name(self) -> str:
+        # `claude -n "orch:<ws>"` stamps every orch-launched session with the
+        # workstream name, which says nothing the surrounding UI hasn't already
+        # said — Claude's own title beats that placeholder when there is one.
+        if self.title.startswith("orch:") and self.ai_title:
+            return self.ai_title
         if self.title:
             return self.title
+        if self.ai_title:
+            return self.ai_title
         # Extract something useful from the project path
         return self.project_path.replace(str(Path.home()), "~")
 
@@ -1119,6 +1130,11 @@ def parse_session(jsonl_path: Path) -> Optional[ClaudeSession]:
                     session.title = data.get("customTitle", "")
                     if not session.session_id and data.get("sessionId"):
                         session.session_id = data["sessionId"]
+
+                # Claude's own title. It is rewritten as the session grows, so
+                # the last record wins rather than the first.
+                if msg_type == "ai-title":
+                    session.ai_title = data.get("aiTitle", "") or session.ai_title
 
                 # Extract session ID (first one wins as primary, but track all for resume detection)
                 sid = data.get("sessionId", "")
@@ -1308,6 +1324,12 @@ def refresh_session_tail(session: ClaudeSession, tail_bytes: int = 8192) -> bool
 
             msg_type = data.get("type", "")
             ts = data.get("timestamp")
+
+            # Claude retitles as a session grows, so the tail can carry a
+            # fresher ai-title than the full parse that built this session.
+            if msg_type == "ai-title":
+                session.ai_title = data.get("aiTitle", "") or session.ai_title
+
             # See parse_session: system events (turn_duration, away_summary,
             # stop_hook_summary) are bookkeeping and must not bump
             # last_activity, or autonomous recaps would flip seen→unseen.

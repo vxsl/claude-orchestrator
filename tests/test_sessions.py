@@ -65,6 +65,28 @@ class TestClaudeSessionDisplay:
         s = ClaudeSession(session_id="test", project_dir="d", project_path="/home/user/project")
         assert "project" in s.display_name or "/" in s.display_name
 
+    def test_display_name_prefers_ai_title_over_orch_name(self):
+        """`claude -n "orch:<ws>"` names every orch session after its
+        workstream, which the surrounding UI has already said."""
+        s = ClaudeSession(session_id="test", project_dir="d", project_path="/p",
+                          title="orch:ul", ai_title="Debug the socket timeout")
+        assert s.display_name == "Debug the socket timeout"
+
+    def test_display_name_keeps_a_real_custom_title(self):
+        s = ClaudeSession(session_id="test", project_dir="d", project_path="/p",
+                          title="My Session", ai_title="Claude's guess")
+        assert s.display_name == "My Session"
+
+    def test_display_name_falls_back_to_ai_title(self):
+        s = ClaudeSession(session_id="test", project_dir="d", project_path="/p",
+                          ai_title="Bus stop streams worldgraph query")
+        assert s.display_name == "Bus stop streams worldgraph query"
+
+    def test_display_name_keeps_an_orch_name_when_thats_all_there_is(self):
+        s = ClaudeSession(session_id="test", project_dir="d", project_path="/p",
+                          title="orch:ul")
+        assert s.display_name == "orch:ul"
+
     def test_age_unknown(self):
         s = ClaudeSession(session_id="test", project_dir="d", project_path="/p")
         assert s.age == "unknown"
@@ -284,6 +306,58 @@ class TestParseSession:
 
 
 # ─── Last Message Text ─────────────────────────────────────────────
+
+class TestParseSessionAiTitle:
+    """Claude Code titles its own sessions into the JSONL we already parse."""
+
+    def _write(self, tmp_path, lines):
+        f = tmp_path / "projects" / "test" / "session.jsonl"
+        f.parent.mkdir(parents=True)
+        f.write_text("\n".join(json.dumps(l) for l in lines) + "\n")
+        return f
+
+    def test_parse_takes_the_last_ai_title(self, tmp_path):
+        """Claude refines the title as the session grows."""
+        f = self._write(tmp_path, [
+            {"type": "user", "message": {"content": "go"},
+             "timestamp": "2026-03-20T10:00:00Z"},
+            {"type": "ai-title", "aiTitle": "first guess", "sessionId": "s1"},
+            {"type": "ai-title", "aiTitle": "Debug the socket timeout",
+             "sessionId": "s1"},
+        ])
+        assert parse_session(f).ai_title == "Debug the socket timeout"
+
+    def test_ai_title_and_custom_title_are_separate_fields(self, tmp_path):
+        f = self._write(tmp_path, [
+            {"type": "user", "message": {"content": "go"},
+             "timestamp": "2026-03-20T10:00:00Z"},
+            {"type": "ai-title", "aiTitle": "Debug the socket timeout"},
+            {"type": "custom-title", "customTitle": "orch:ul"},
+        ])
+        session = parse_session(f)
+        assert session.ai_title == "Debug the socket timeout"
+        assert session.title == "orch:ul"
+
+    def test_no_ai_title_leaves_it_empty(self, tmp_path):
+        f = self._write(tmp_path, [
+            {"type": "user", "message": {"content": "go"},
+             "timestamp": "2026-03-20T10:00:00Z"},
+        ])
+        assert parse_session(f).ai_title == ""
+
+    def test_tail_refresh_picks_up_a_later_ai_title(self, tmp_path):
+        """A session titled after its full parse must not stay untitled."""
+        f = tmp_path / "s.jsonl"
+        f.write_text("\n".join(json.dumps(l) for l in [
+            {"type": "user", "message": {"content": "go"},
+             "timestamp": "2026-03-20T10:00:00Z"},
+            {"type": "ai-title", "aiTitle": "Debug the socket timeout"},
+        ]) + "\n")
+        s = ClaudeSession(session_id="s", project_dir="d", project_path="/p",
+                          jsonl_path=str(f))
+        refresh_session_tail(s)
+        assert s.ai_title == "Debug the socket timeout"
+
 
 class TestExtractMessageText:
     def test_user_string_content(self):
