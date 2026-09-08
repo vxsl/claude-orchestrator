@@ -47,6 +47,14 @@ fn migrate(conn: &Connection) -> Result<()> {
         "ALTER TABLE sessions ADD COLUMN ai_title TEXT NOT NULL DEFAULT ''",
         [],
     );
+    let _ = conn.execute(
+        "ALTER TABLE sessions ADD COLUMN recap TEXT NOT NULL DEFAULT ''",
+        [],
+    );
+    let _ = conn.execute(
+        "ALTER TABLE sessions ADD COLUMN recap_at TEXT NOT NULL DEFAULT ''",
+        [],
+    );
     // threads table may not exist on older DBs
     let _ = conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS threads (
@@ -70,6 +78,8 @@ fn create_tables(conn: &Connection) -> Result<()> {
             project_path    TEXT NOT NULL,
             title           TEXT NOT NULL DEFAULT '',
             ai_title        TEXT NOT NULL DEFAULT '',
+            recap           TEXT NOT NULL DEFAULT '',
+            recap_at        TEXT NOT NULL DEFAULT '',
             started_at      TEXT NOT NULL DEFAULT '',
             last_activity   TEXT NOT NULL DEFAULT '',
             total_input_tokens  INTEGER NOT NULL DEFAULT 0,
@@ -209,17 +219,21 @@ pub fn upsert_session(
             last_stop_reason, turn_complete, all_session_ids, last_message_text,
             last_user_message_text, last_tool_name, last_commit_sha, last_commit_summary,
             tool_counts, files_mutated, git_branch, first_message, context_tokens,
-            total_work_ms, mtime, last_assistant_message_text, ai_title
+            total_work_ms, mtime, last_assistant_message_text, ai_title,
+            recap, recap_at
         ) VALUES (
             ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10,
             ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19,
-            ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32
+            ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32,
+            ?33, ?34
         )
         ON CONFLICT(session_id) DO UPDATE SET
             project_dir = excluded.project_dir,
             project_path = excluded.project_path,
             title = excluded.title,
             ai_title = excluded.ai_title,
+            recap = excluded.recap,
+            recap_at = excluded.recap_at,
             started_at = excluded.started_at,
             last_activity = excluded.last_activity,
             total_input_tokens = excluded.total_input_tokens,
@@ -280,6 +294,8 @@ pub fn upsert_session(
             mtime,
             session.last_assistant_message_text,
             session.ai_title,
+            session.recap,
+            session.recap_at,
         ],
     )?;
     Ok(())

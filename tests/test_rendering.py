@@ -17,7 +17,73 @@ from rendering import (
     _parse_worktree_display, _worktree_color, _WORKTREE_COLORS,
     C_DIM, C_GREEN, C_ORANGE, C_RED, C_LIGHT, C_BLUE, C_YELLOW,
     _compact_age, auto_status, _session_title,
+    _render_session_option, render_peek_header,
 )
+
+
+class TestRecapRendering:
+    """Claude's recap says where it left a session; the last paragraph it
+    happened to emit does not."""
+
+    def _session(self, **kw):
+        now = datetime.now(timezone.utc)
+        base = dict(
+            session_id="ccccdddd-0000-0000-0000-000000000001",
+            project_dir="d", project_path="/home/u/proj",
+            ai_title="Debug the socket timeout",
+            last_activity=(now - timedelta(minutes=5)).isoformat(),
+            last_user_message_text="have another go at it",
+            last_assistant_message_text="I have rebuilt and reinstalled the engine.",
+            last_message_role="assistant",
+        )
+        base.update(kw)
+        return ClaudeSession(**base)
+
+    def _row(self, s):
+        return _render_session_option(s, ThreadActivity.IDLE, line_width=90)
+
+    def test_current_recap_takes_the_assistant_line(self):
+        now = datetime.now(timezone.utc)
+        s = self._session(
+            recap="Goal was the engine rebuild; done and committed. Next: restart orch.",
+            recap_at=(now - timedelta(minutes=1)).isoformat(),
+        )
+        row = self._row(s)
+        assert "recap: " in row
+        assert "Goal was the engine rebuild" in row
+        # it replaces that line rather than adding a sixth one
+        assert "I have rebuilt and reinstalled" not in row
+        assert "have another go at it" in row
+
+    def test_stale_recap_leaves_the_assistant_line_alone(self):
+        """The session carried on past the recap, so it no longer holds."""
+        now = datetime.now(timezone.utc)
+        s = self._session(
+            recap="Goal was the engine rebuild; done and committed.",
+            recap_at=(now - timedelta(hours=2)).isoformat(),
+        )
+        row = self._row(s)
+        assert "recap:" not in row
+        assert "I have rebuilt and reinstalled" in row
+
+    def test_no_recap_renders_as_before(self):
+        row = self._row(self._session())
+        assert "recap:" not in row
+        assert "I have rebuilt and reinstalled" in row
+
+    def test_peek_header_carries_a_current_recap(self):
+        now = datetime.now(timezone.utc)
+        s = self._session(
+            recap="Goal was the engine rebuild; done and committed. Next: restart orch.",
+            recap_at=(now - timedelta(minutes=1)).isoformat(),
+        )
+        header = render_peek_header(s, width=90)
+        assert "Goal was the engine rebuild" in header
+        assert header.count("\n") == 2  # title, recap, key hints
+
+    def test_peek_header_stays_two_lines_without_one(self):
+        header = render_peek_header(self._session(), width=90)
+        assert header.count("\n") == 1
 
 
 class TestSessionTitle:

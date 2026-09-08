@@ -1032,17 +1032,24 @@ def _render_session_option(
                 f"{INDENT}[{user_lbl_color}]{prefix}[/{user_lbl_color}]"
                 f"[{user_color}]{body}[/{user_color}]"
             )
-        if assistant_text:
-            prefix = "a: "
+        # Claude's own account of where it left this session beats the last
+        # paragraph it happened to emit, so it takes that line rather than
+        # adding one — and only while it is still true (recap_is_current).
+        recap_text = s.recap if s.recap_is_current else ""
+        if recap_text or assistant_text:
+            prefix = "recap: " if recap_text else "a: "
             body_chars = line_chars - len(prefix)
-            text = assistant_text.replace("\n", " ")
+            text = (recap_text or assistant_text).replace("\n", " ")
             body_raw = text[:body_chars]
             if len(text) > body_chars:
                 body_raw = body_raw[:-1] + "…"
             body = _rich_escape(body_raw)
+            # The assistant snippet is near-invisible on purpose; a recap is
+            # signal, so it reads at the same weight as the user's own line.
+            body_color = (C_DIM if stale else C_MID) if recap_text else asst_color
             lines.append(
                 f"{INDENT}[{user_lbl_color}]{prefix}[/{user_lbl_color}]"
-                f"[italic {asst_color}]{body}[/italic {asst_color}]"
+                f"[italic {body_color}]{body}[/italic {body_color}]"
             )
 
     return "\n".join(lines)
@@ -1473,12 +1480,28 @@ def render_ws_body_lines(ws, active_todos: list) -> list[str]:
     return lines
 
 
-def render_peek_header(session) -> str:
-    """Two-line header block for the detail session peek."""
+def _wrap_plain(text: str, width: int) -> list[str]:
+    """Word-wrap plain text to `width`, collapsing newlines. Markup-free input
+    only — the caller escapes each line afterwards."""
+    import textwrap
+    return textwrap.wrap(" ".join(text.split()), width=width) or [""]
+
+
+def render_peek_header(session, width: int = 0) -> str:
+    """Header block for the detail session peek.
+
+    Two lines, or three when Claude left a recap that still holds — the point
+    of peeking is to decide whether to pick the session back up, and its own
+    "goal / state / next step" answers that faster than scrolling does.
+    """
     title_text = _session_title(session)
-    return (
+    lines = [
         f"[bold {C_BLUE}]{_rich_escape(title_text)}[/bold {C_BLUE}]  "
         f"[{C_DIM}]{session.age} · {_short_model(session.model)} · "
-        f"{session.message_count} msgs · {session.tokens_display}[/{C_DIM}]\n"
-        f"[{C_DIM}]p[/{C_DIM}] close  [{C_DIM}]j/k[/{C_DIM}] scroll"
-    )
+        f"{session.message_count} msgs · {session.tokens_display}[/{C_DIM}]"
+    ]
+    if session.recap_is_current:
+        for line in _wrap_plain(session.recap, max(30, (width or 100) - 9)):
+            lines.append(f"[{C_MID}]{_rich_escape(line)}[/{C_MID}]")
+    lines.append(f"[{C_DIM}]p[/{C_DIM}] close  [{C_DIM}]j/k[/{C_DIM}] scroll")
+    return "\n".join(lines)

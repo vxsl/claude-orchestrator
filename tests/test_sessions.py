@@ -359,6 +359,92 @@ class TestParseSessionAiTitle:
         assert s.ai_title == "Debug the socket timeout"
 
 
+class TestParseSessionRecap:
+    """Claude's step-away recap ("away_summary"): goal, state, next step."""
+
+    def _write(self, tmp_path, lines):
+        f = tmp_path / "projects" / "test" / "session.jsonl"
+        f.parent.mkdir(parents=True)
+        f.write_text("\n".join(json.dumps(l) for l in lines) + "\n")
+        return f
+
+    def test_parses_recap_and_strips_the_affordance(self, tmp_path):
+        """The trailing "(disable recaps in /config)" is Claude's UI, not recap."""
+        f = self._write(tmp_path, [
+            {"type": "user", "message": {"content": "go"},
+             "timestamp": "2026-03-20T10:00:00Z"},
+            {"type": "system", "subtype": "away_summary",
+             "content": "Goal was X. Next: Y. (disable recaps in /config)",
+             "timestamp": "2026-03-20T10:05:00Z"},
+        ])
+        session = parse_session(f)
+        assert session.recap == "Goal was X. Next: Y."
+        assert session.recap_at == "2026-03-20T10:05:00Z"
+
+    def test_recap_without_the_affordance_is_left_alone(self, tmp_path):
+        f = self._write(tmp_path, [
+            {"type": "user", "message": {"content": "go"},
+             "timestamp": "2026-03-20T10:00:00Z"},
+            {"type": "system", "subtype": "away_summary",
+             "content": "Goal was X. Next: Y.",
+             "timestamp": "2026-03-20T10:05:00Z"},
+        ])
+        assert parse_session(f).recap == "Goal was X. Next: Y."
+
+    def test_last_recap_wins(self, tmp_path):
+        f = self._write(tmp_path, [
+            {"type": "user", "message": {"content": "go"},
+             "timestamp": "2026-03-20T10:00:00Z"},
+            {"type": "system", "subtype": "away_summary", "content": "early",
+             "timestamp": "2026-03-20T10:05:00Z"},
+            {"type": "user", "message": {"content": "more"},
+             "timestamp": "2026-03-20T11:00:00Z"},
+            {"type": "system", "subtype": "away_summary", "content": "later",
+             "timestamp": "2026-03-20T11:30:00Z"},
+        ])
+        session = parse_session(f)
+        assert session.recap == "later"
+        assert session.recap_is_current is True
+
+    def test_a_session_that_carried_on_has_a_stale_recap(self, tmp_path):
+        f = self._write(tmp_path, [
+            {"type": "user", "message": {"content": "go"},
+             "timestamp": "2026-03-20T10:00:00Z"},
+            {"type": "system", "subtype": "away_summary", "content": "Goal was X.",
+             "timestamp": "2026-03-20T10:05:00Z"},
+            {"type": "user", "message": {"content": "actually, do Z"},
+             "timestamp": "2026-03-20T12:00:00Z"},
+        ])
+        session = parse_session(f)
+        assert session.recap == "Goal was X."
+        assert session.recap_is_current is False
+
+    def test_no_recap_is_never_current(self, tmp_path):
+        f = self._write(tmp_path, [
+            {"type": "user", "message": {"content": "go"},
+             "timestamp": "2026-03-20T10:00:00Z"},
+        ])
+        session = parse_session(f)
+        assert session.recap == "" and session.recap_is_current is False
+
+    def test_tail_refresh_picks_up_a_recap(self, tmp_path):
+        """A recap is the last thing written before you walk away, so the
+        tail read of a live session is exactly where it shows up."""
+        f = tmp_path / "s.jsonl"
+        f.write_text("\n".join(json.dumps(l) for l in [
+            {"type": "user", "message": {"content": "go"},
+             "timestamp": "2026-03-20T10:00:00Z"},
+            {"type": "system", "subtype": "away_summary",
+             "content": "Goal was X. (disable recaps in /config)",
+             "timestamp": "2026-03-20T10:05:00Z"},
+        ]) + "\n")
+        s = ClaudeSession(session_id="s", project_dir="d", project_path="/p",
+                          jsonl_path=str(f))
+        refresh_session_tail(s)
+        assert s.recap == "Goal was X."
+        assert s.recap_at == "2026-03-20T10:05:00Z"
+
+
 class TestExtractMessageText:
     def test_user_string_content(self):
         from sessions import _extract_message_text

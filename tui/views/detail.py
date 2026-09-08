@@ -886,8 +886,9 @@ class DetailView(View):
             self.app.notify("No conversation content to peek", timeout=2)
             return
         rows: list[tuple] = []
-        rows.extend(self._block_rows("peek-header",
-                                     render_peek_header(session).split("\n")))
+        rows.extend(self._block_rows(
+            "peek-header",
+            render_peek_header(session, self._session_line_width()).split("\n")))
         for i, msg in enumerate(messages):
             role_fmt = (f"[bold {C_CYAN}]you[/bold {C_CYAN}]" if msg.role == "user"
                         else f"[bold {C_PURPLE}]claude[/bold {C_PURPLE}]")

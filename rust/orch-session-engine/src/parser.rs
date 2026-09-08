@@ -37,6 +37,14 @@ fn extract_commit_from_text(text: &str) -> Option<(String, String)> {
     Some((sha.to_string(), summary))
 }
 
+/// Claude ends a recap with its own affordance text; that is chrome, not recap.
+const RECAP_AFFORDANCE: &str = "(disable recaps in /config)";
+
+fn clean_recap(text: &str) -> String {
+    let t = text.trim();
+    t.strip_suffix(RECAP_AFFORDANCE).unwrap_or(t).trim().to_string()
+}
+
 /// Plans directory prefix for filtering mutated files.
 fn plans_dir_prefix() -> String {
     if let Some(home) = std::env::var_os("HOME") {
@@ -58,6 +66,12 @@ pub struct Session {
     /// session a name, which suppresses Claude's titling.
     #[serde(default)]
     pub ai_title: String,
+    /// Claude's "where I left off / what's next" recap, written when you step
+    /// away ("away_summary").  Describes the session as of `recap_at`.
+    #[serde(default)]
+    pub recap: String,
+    #[serde(default)]
+    pub recap_at: String,
     pub started_at: String,
     pub last_activity: String,
     pub total_input_tokens: i64,
@@ -384,6 +398,20 @@ pub fn parse_session(jsonl_path: &Path) -> Result<Session> {
             }
         }
 
+        // Claude's step-away recap: goal, state, and next step. A session that
+        // carries on past it moves last_activity beyond recap_at, which is how
+        // a reader tells a current recap from a stale one.
+        if msg_type == "system" && data["subtype"].as_str() == Some("away_summary") {
+            if let Some(c) = data["content"].as_str() {
+                let cleaned = clean_recap(c);
+                if !cleaned.is_empty() {
+                    session.recap = cleaned;
+                    session.recap_at =
+                        data["timestamp"].as_str().unwrap_or_default().to_string();
+                }
+            }
+        }
+
         // Extract session ID (first one wins as primary, track all)
         if let Some(sid) = data["sessionId"].as_str() {
             if !sid.is_empty() {
@@ -638,6 +666,20 @@ pub fn refresh_session_tail(session: &mut Session, tail_bytes: u64) -> Result<bo
             }
         }
 
+        // Claude's step-away recap: goal, state, and next step. A session that
+        // carries on past it moves last_activity beyond recap_at, which is how
+        // a reader tells a current recap from a stale one.
+        if msg_type == "system" && data["subtype"].as_str() == Some("away_summary") {
+            if let Some(c) = data["content"].as_str() {
+                let cleaned = clean_recap(c);
+                if !cleaned.is_empty() {
+                    session.recap = cleaned;
+                    session.recap_at =
+                        data["timestamp"].as_str().unwrap_or_default().to_string();
+                }
+            }
+        }
+
         // See parse_session_full: system events are autonomous bookkeeping
         // (turn_duration, stop_hook_summary, away_summary) and must not
         // bump last_activity, or recaps would flip seen→unseen.
@@ -811,6 +853,34 @@ mod tests {
         let session = parse_session(&path).unwrap();
         assert_eq!(session.ai_title, "Debug the socket timeout");
         assert_eq!(session.title, "orch:ws");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The recap's trailing "(disable recaps in /config)" is Claude's own UI
+    /// affordance, not part of what it said.
+    #[test]
+    fn test_parse_strips_the_recap_affordance() {
+        let dir = std::env::temp_dir().join(format!("orch-recap-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("s.jsonl");
+        std::fs::write(
+            &path,
+            concat!(
+                r#"{"type":"user","message":{"content":"go"},"timestamp":"2026-03-20T10:00:00Z"}"#,
+                "\n",
+                r#"{"type":"system","subtype":"away_summary","content":"Goal was X. Next: Y. (disable recaps in /config)","timestamp":"2026-03-20T10:05:00Z"}"#,
+                "\n",
+            ),
+        )
+        .unwrap();
+
+        let session = parse_session(&path).unwrap();
+        assert_eq!(session.recap, "Goal was X. Next: Y.");
+        assert_eq!(session.recap_at, "2026-03-20T10:05:00Z");
+        // system records must not move last_activity — that is what tells a
+        // current recap from one the session has since moved past.
+        assert_eq!(session.last_activity, "2026-03-20T10:00:00Z");
 
         std::fs::remove_dir_all(&dir).ok();
     }

@@ -184,6 +184,8 @@ def _hydrate_session(row: dict) -> ClaudeSession:
         # .get: rows written before the column existed are backfilled by the
         # daemon's next full sync, not by the migration.
         ai_title=row.get("ai_title", ""),
+        recap=row.get("recap", ""),
+        recap_at=row.get("recap_at", ""),
         started_at=row["started_at"],
         last_activity=row["last_activity"],
         total_input_tokens=row["total_input_tokens"],
@@ -829,6 +831,17 @@ def _is_interrupt_marker(data: dict) -> bool:
 _XML_WRAPPER_RE = re.compile(r"</?[a-z][-a-z]*>")
 
 
+# Claude ends a recap with its own affordance text; that is chrome, not recap.
+_RECAP_AFFORDANCE = "(disable recaps in /config)"
+
+
+def _clean_recap(text: str) -> str:
+    text = text.strip()
+    if text.endswith(_RECAP_AFFORDANCE):
+        text = text[: -len(_RECAP_AFFORDANCE)].strip()
+    return text
+
+
 def _strip_xml_wrappers(text: str) -> str:
     """Strip internal Claude Code XML wrapper tags from message text.
 
@@ -871,6 +884,8 @@ class ClaudeSession:
     project_path: str  # Decoded real path (e.g., "/home/kyle/dev/claude-orchestrator")
     title: str = ""
     ai_title: str = ""  # Claude Code's own title ("ai-title"); empty when `claude -n` named the session
+    recap: str = ""     # Claude's step-away recap ("away_summary"): goal, state, next step
+    recap_at: str = ""  # When that recap was written
     started_at: str = ""
     last_activity: str = ""
     total_input_tokens: int = 0
@@ -987,6 +1002,19 @@ class ClaudeSession:
             return self.ai_title
         # Extract something useful from the project path
         return self.project_path.replace(str(Path.home()), "~")
+
+    @property
+    def recap_is_current(self) -> bool:
+        """True when the recap still describes where this session stands.
+
+        away_summary is a system record, and system records deliberately do not
+        bump last_activity (see parse_session), so a recap written as you walked
+        away sits after it.  Once the session carries on, last_activity passes
+        recap_at and the recap is describing a place the session has left.
+        """
+        if not self.recap or not self.recap_at:
+            return False
+        return self.recap_at >= self.last_activity
 
     @property
     def age(self) -> str:
@@ -1135,6 +1163,16 @@ def parse_session(jsonl_path: Path) -> Optional[ClaudeSession]:
                 # the last record wins rather than the first.
                 if msg_type == "ai-title":
                     session.ai_title = data.get("aiTitle", "") or session.ai_title
+
+                # Claude's step-away recap: goal, state, and next step. A
+                # session that carries on past it moves last_activity beyond
+                # recap_at, which is how a reader tells a current recap from a
+                # stale one (see recap_is_current).
+                if msg_type == "system" and data.get("subtype") == "away_summary":
+                    recap = _clean_recap(data.get("content", "") or "")
+                    if recap:
+                        session.recap = recap
+                        session.recap_at = data.get("timestamp", "") or ""
 
                 # Extract session ID (first one wins as primary, but track all for resume detection)
                 sid = data.get("sessionId", "")
@@ -1329,6 +1367,14 @@ def refresh_session_tail(session: ClaudeSession, tail_bytes: int = 8192) -> bool
             # fresher ai-title than the full parse that built this session.
             if msg_type == "ai-title":
                 session.ai_title = data.get("aiTitle", "") or session.ai_title
+
+            # A recap is usually the last thing written before you walk away,
+            # so the tail is exactly where it turns up.
+            if msg_type == "system" and data.get("subtype") == "away_summary":
+                recap = _clean_recap(data.get("content", "") or "")
+                if recap:
+                    session.recap = recap
+                    session.recap_at = data.get("timestamp", "") or ""
 
             # See parse_session: system events (turn_duration, away_summary,
             # stop_hook_summary) are bookkeeping and must not bump
