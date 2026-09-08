@@ -59,20 +59,31 @@ def _ws_context_hash(ws: Workstream, sessions: list[ClaudeSession]) -> str:
     # Sort sessions by ID for stability
     for s in sorted(sessions, key=lambda s: s.session_id):
         msg = _extract_first_message(s)
-        parts.append(f"{s.session_id}:{msg[:100] if msg else ''}")
+        # The recap is in the hash as well as the summary: a session that has
+        # since gained one is materially new context, and without this the
+        # description would keep being re-derived from the opening message.
+        parts.append(f"{s.session_id}:{s.recap[:100]}:{msg[:100] if msg else ''}")
     raw = "\n".join(parts)
     return hashlib.sha256(raw.encode()).hexdigest()[:16]
 
 
 def _ws_session_context(ws: Workstream, sessions: list[ClaudeSession]) -> str:
-    """Build a compact summary of what's happening in a workstream's sessions."""
+    """Build a compact summary of what's happening in a workstream's sessions.
+
+    Claude's own recap of a session — goal, state, next step, written when you
+    stepped away — says where the work went.  The opening message only says
+    where it was aimed, so it is the fallback, not the first choice.
+    """
     lines = [f"{len(sessions)} sessions"]
     # Most recent sessions first, cap at 8
     recent = sorted(sessions, key=lambda s: s.last_activity or "", reverse=True)[:8]
     for s in recent:
+        if s.recap:
+            lines.append(f"- {s.recap[:300]}")
+            continue
         msg = _extract_first_message(s)
         if msg and len(msg) > 5:
-            lines.append(f"- {msg[:150]}")
+            lines.append(f"- (opened with) {msg[:150]}")
     return "\n".join(lines)
 
 
@@ -93,6 +104,10 @@ Recent session activity:
         blocks.append(block)
 
     return f"""You maintain one-sentence descriptions for workstreams on a developer dashboard.
+
+Session activity is given as Claude's own recap of each session where it wrote
+one — goal, state and next step as of when the developer stepped away — and as
+the session's opening message otherwise, marked "(opened with)".
 
 For each workstream below, look at the recent session activity and decide:
 - If the current description still accurately captures the workstream's purpose, respond with "keep"

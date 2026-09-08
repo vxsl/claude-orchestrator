@@ -17,9 +17,10 @@ from threads import Thread, ThreadActivity
 from state import (
     AppState, fuzzy_match, fuzzy_filter,
     extract_snippet, search_session_content, content_search,
+    latest_recap,
     SearchHit, SessionSearchResult, _path_matches_dir,
 )
-from sessions import SessionMessage
+from sessions import ClaudeSession, SessionMessage
 
 
 # ─── Fixtures ────────────────────────────────────────────────────────
@@ -68,6 +69,34 @@ def _make_session(session_id="abc123", project_path="/tmp/test", **kwargs):
 
 
 # ─── Filtering ───────────────────────────────────────────────────────
+
+class TestLatestRecap:
+    """A workstream's "where does this stand" is the newest recap still true."""
+
+    def _s(self, sid, recap="", recap_at="", last_activity="2026-03-20T10:00:00Z"):
+        return ClaudeSession(session_id=sid, project_dir="d", project_path="/p",
+                             recap=recap, recap_at=recap_at,
+                             last_activity=last_activity)
+
+    def test_picks_the_newest_current_one(self):
+        old = self._s("a", "older goal", "2026-03-20T11:00:00Z")
+        new = self._s("b", "newer goal", "2026-03-20T18:00:00Z")
+        assert latest_recap([old, new]) is new
+        assert latest_recap([new, old]) is new
+
+    def test_a_session_that_carried_on_does_not_qualify(self):
+        """Newer, but its session moved past it — it describes a place the
+        work has already left."""
+        stale = self._s("a", "moved on from this", "2026-03-20T18:00:00Z",
+                        last_activity="2026-03-20T20:00:00Z")
+        good = self._s("b", "still true", "2026-03-20T12:00:00Z")
+        assert latest_recap([stale, good]) is good
+
+    def test_none_when_nothing_stands(self):
+        assert latest_recap([]) is None
+        assert latest_recap([self._s("a")]) is None
+        assert latest_recap([self._s("a", "x", "2026-03-20T09:00:00Z")]) is None
+
 
 class TestFiltering:
     def test_filter_all(self, populated_state):

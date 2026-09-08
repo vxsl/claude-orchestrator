@@ -1004,6 +1004,20 @@ class ClaudeSession:
         return self.project_path.replace(str(Path.home()), "~")
 
     @property
+    def next_step(self) -> str:
+        """The "Next: …" clause Claude ends most recaps with, or "".
+
+        101 of the 178 recaps on this machine carry one, which makes it the
+        closest thing a transcript has to a stated intention.  Exposed rather
+        than acted on: orch does not turn it into a todo — `orch sessions
+        --json` hands it to whoever wants it (work-arcs).
+        """
+        if not self.recap:
+            return ""
+        m = re.search(r"\bNext:\s*(.+)", self.recap, re.S)
+        return " ".join(m.group(1).split()) if m else ""
+
+    @property
     def recap_is_current(self) -> bool:
         """True when the recap still describes where this session stands.
 

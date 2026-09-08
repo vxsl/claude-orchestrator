@@ -134,21 +134,36 @@ def _clip(text: str, limit: int) -> str:
 
 
 def _session_json(s) -> dict:
-    """The scriptable view of a discovered Claude session."""
+    """The scriptable view of a discovered Claude session.
+
+    recap/next_step are Claude's own step-away summary, carried verbatim.
+    ``recap_is_current`` is false once the session has carried on past it, so a
+    reader that wants only what still stands can filter on it.  orch does not
+    turn next_step into a todo — it hands it over.
+    """
     return {
         "session_id": s.session_id,
         "title": s.display_name,
+        "ai_title": s.ai_title,
         "project_path": s.project_path,
         "git_branch": s.git_branch,
         "is_live": bool(s.is_live),
         "last_activity": s.last_activity,
         "message_count": s.message_count,
         "last_assistant_message_text": _clip(s.last_assistant_message_text, 300),
+        "recap": s.recap,
+        "recap_at": s.recap_at,
+        "recap_is_current": s.recap_is_current,
+        "next_step": s.next_step,
     }
 
 
-def _ws_json(ws: Workstream) -> dict:
-    """The scriptable view of a workstream."""
+def _ws_json(ws: Workstream, recap_session=None) -> dict:
+    """The scriptable view of a workstream.
+
+    ``recap`` is the workstream-level rollup: the freshest still-standing recap
+    across its sessions (see state.latest_recap), or null when it has none.
+    """
     # Archived todos are neither pending nor done — they left the board.
     live = [t for t in ws.todos if not t.archived]
     return {
@@ -167,6 +182,12 @@ def _ws_json(ws: Workstream) -> dict:
         },
         "auto_running": ws.auto_running,
         "auto_current_todo_id": ws.auto_current_todo_id,
+        "recap": None if recap_session is None else {
+            "session_id": recap_session.session_id,
+            "text": recap_session.recap,
+            "at": recap_session.recap_at,
+            "next_step": recap_session.next_step,
+        },
     }
 
 
@@ -206,7 +227,16 @@ def cmd_list(args):
     streams = store.sorted(streams, sort_by)
 
     if getattr(args, "json", False):
-        _emit_json([_ws_json(w) for w in streams])
+        # Sessions are only read for --json: the human listing does not show
+        # the rollup, and a discovery pass is not free.
+        from actions import find_sessions_for_ws
+        from sessions import discover_sessions
+        from state import latest_recap
+        all_sessions = discover_sessions(min_messages=1)
+        _emit_json([
+            _ws_json(w, latest_recap(find_sessions_for_ws(w, all_sessions)))
+            for w in streams
+        ])
         return
 
     if not streams:
@@ -1704,7 +1734,11 @@ examples:
 --json writes a JSON array and nothing else to stdout \u2014 no color, no
 footer \u2014 with any error on stderr. Fields: id, name, category,
 archived, repo_path, links[], todos{pending,done}, auto_running,
-auto_current_todo_id.
+auto_current_todo_id, recap.
+
+recap is the workstream rollup: the freshest recap across its sessions that
+its own session has not carried on past, as {session_id, text, at,
+next_step}, or null. Claude writes these when you step away.
 """)
     p_list.add_argument("-c", "--category", choices=[c.value for c in Category],
                        help="Filter by category")
@@ -1806,8 +1840,14 @@ token usage, message count, and last activity.
 
 --json writes a JSON array and nothing else to stdout \u2014 no color, no
 footer \u2014 with any error on stderr. Fields: session_id, title,
-project_path, git_branch, is_live, last_activity, message_count,
-last_assistant_message_text (clipped to 300 chars).
+ai_title, project_path, git_branch, is_live, last_activity, message_count,
+last_assistant_message_text (clipped to 300 chars), recap, recap_at,
+recap_is_current, next_step.
+
+recap is Claude's own "goal / state / next step" summary, written when you
+step away; next_step is its "Next: ..." clause. recap_is_current is false
+once the session carried on past the recap \u2014 filter on it for what still
+stands. orch exposes these rather than acting on them.
 """)
     p_sessions.add_argument("-p", "--project", help="Filter by project path substring")
     p_sessions.add_argument("-n", "--limit", type=int, default=20,

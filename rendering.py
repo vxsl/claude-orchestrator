@@ -1450,10 +1450,25 @@ def render_ws_meta(ws, sessions: list) -> str:
     return "  ".join(parts)
 
 
-def render_ws_body_lines(ws, active_todos: list) -> list[str]:
-    """Detail body panel lines: external links, todo summary, timestamps
-    (port of DetailScreen._render_body, one markup string per line)."""
+def render_ws_body_lines(ws, active_todos: list, recap_session=None,
+                         width: int = 0) -> list[str]:
+    """Detail body panel lines: where the work stands, external links, todo
+    summary, timestamps (port of DetailScreen._render_body, one markup string
+    per line).
+
+    ``recap_session`` is the workstream's rollup — the session holding its
+    freshest still-standing recap (state.latest_recap) — and leads the panel
+    when there is one, because "where does this stand" is the question the
+    detail view is opened to answer.
+    """
     lines: list[str] = []
+    if recap_session is not None and recap_session.recap:
+        lines.append(f"[bold {C_BLUE}]Where this stands[/bold {C_BLUE}] "
+                     f"[{C_DIM}]{recap_session.age} ago · "
+                     f"{recap_session.session_id[:8]}[/{C_DIM}]")
+        for line in _wrap_plain(recap_session.recap, max(30, (width or 80) - 2)):
+            lines.append(f"  [{C_MID}]{_rich_escape(line)}[/{C_MID}]")
+        lines.append("")
     ext_links = [lnk for lnk in ws.links
                  if lnk.kind not in ("worktree", "file", "claude-session")]
     if ext_links:

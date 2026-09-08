@@ -45,7 +45,8 @@ from rendering import (
 )
 from state import (
     AppState, auto_unshelve_sessions, content_search, fuzzy_match,
-    fuzzy_match_positions, group_detail_sessions, map_notifications_to_sessions,
+    fuzzy_match_positions, group_detail_sessions, latest_recap,
+    map_notifications_to_sessions,
 )
 from threads import ThreadActivity, load_last_seen, mark_thread_seen, save_last_seen, session_activity
 
@@ -1063,7 +1064,11 @@ class DetailView(View):
         return f"[bold {C_PURPLE}]{_rich_escape(self.ws.name)}[/bold {C_PURPLE}]"
 
     def _body_lines(self) -> list[str]:
-        lines = render_ws_body_lines(self.ws, AppState.active_todos(self.ws))
+        lines = render_ws_body_lines(
+            self.ws, AppState.active_todos(self.ws),
+            recap_session=latest_recap(self._all_sessions),
+            width=self._session_line_width(),
+        )
         if self._has_repo():
             lines.append("")
             lines.append(f"[{C_YELLOW}]t[/{C_YELLOW}][{C_DIM}]: tig (fullscreen) — "

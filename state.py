@@ -857,6 +857,20 @@ def auto_unshelve_sessions(ws, sessions) -> bool:
     return bool(unshelved)
 
 
+def latest_recap(sessions) -> ClaudeSession | None:
+    """The session holding a workstream's freshest still-standing recap.
+
+    Claude writes a "goal / state / next step" recap when you step away; a
+    workstream's answer to "where does this stand" is the newest one that has
+    not been overtaken by its own session carrying on (see
+    ``ClaudeSession.recap_is_current``).  Returns None when nothing qualifies.
+    """
+    current = [s for s in sessions if s.recap_is_current]
+    if not current:
+        return None
+    return max(current, key=lambda s: s.recap_at)
+
+
 def _drop_zombie_sessions(sessions):
     """Filter out sessions that have never received a message and are no longer live.
 

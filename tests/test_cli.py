@@ -105,7 +105,29 @@ class TestSessionsJson:
             "last_activity": "2026-08-26T07:00:00Z",
             "message_count": 12,
             "last_assistant_message_text": "did the thing",
+            "ai_title": "",
+            "recap": "",
+            "recap_at": "",
+            "recap_is_current": False,
+            "next_step": "",
         }]
+
+    def test_recap_and_next_step_ride_along(self, capsys):
+        """work-arcs reads these; orch exposes them rather than acting on them."""
+        s = _session(recap="Goal was X; done. Next: restart orch and confirm.",
+                     recap_at="2026-08-26T08:00:00Z",
+                     last_activity="2026-08-26T07:00:00Z")
+        with patch("sessions.discover_sessions", return_value=[s]):
+            cmd_sessions(_sessions_args(json=True))
+        row = json.loads(capsys.readouterr().out)[0]
+        assert row["recap"] == "Goal was X; done. Next: restart orch and confirm."
+        assert row["next_step"] == "restart orch and confirm."
+        assert row["recap_is_current"] is True
+
+    def test_a_session_that_carried_on_flags_its_recap_stale(self):
+        s = _session(recap="Goal was X.", recap_at="2026-08-26T07:00:00Z",
+                     last_activity="2026-08-26T09:00:00Z")
+        assert _session_json(s)["recap_is_current"] is False
 
     def test_empty_is_an_empty_array_not_a_message(self, capsys):
         with patch("sessions.discover_sessions", return_value=[]):
@@ -150,7 +172,8 @@ class TestListJson:
 
     def test_payload_is_the_whole_of_stdout(self, tmp_path, capsys):
         store, ws = self._store(tmp_path)
-        with patch("cli.Store", return_value=store):
+        with patch("cli.Store", return_value=store), \
+                patch("sessions.discover_sessions", return_value=[]):
             cmd_list(_list_args(json=True))
         out = capsys.readouterr().out
         assert "\x1b" not in out
@@ -166,7 +189,36 @@ class TestListJson:
             "todos": {"pending": 2, "done": 1},
             "auto_running": True,
             "auto_current_todo_id": "abc12345",
+            "recap": None,
         }]
+
+    def test_rollup_is_the_workstreams_freshest_standing_recap(self, tmp_path, capsys):
+        """One line for "where does this stand", for a caller that has no
+        business walking every session itself."""
+        store, ws = self._store(tmp_path)
+        # Linked explicitly: directory matching needs the path to exist on disk,
+        # which is not what this test is about.
+        ws.add_link("claude-session", SID)
+        s = _session(recap="Goal was X; done. Next: open the MR.",
+                     recap_at="2026-08-26T08:00:00Z",
+                     last_activity="2026-08-26T07:00:00Z")
+        with patch("cli.Store", return_value=store), \
+                patch("sessions.discover_sessions", return_value=[s]):
+            cmd_list(_list_args(json=True))
+        recap = json.loads(capsys.readouterr().out)[0]["recap"]
+        assert recap["text"] == "Goal was X; done. Next: open the MR."
+        assert recap["next_step"] == "open the MR."
+        assert recap["session_id"] == s.session_id
+
+    def test_rollup_ignores_a_recap_its_session_moved_past(self, tmp_path, capsys):
+        store, ws = self._store(tmp_path)
+        ws.add_link("claude-session", SID)
+        s = _session(recap="Goal was X.", recap_at="2026-08-26T07:00:00Z",
+                     last_activity="2026-08-26T09:00:00Z")
+        with patch("cli.Store", return_value=store), \
+                patch("sessions.discover_sessions", return_value=[s]):
+            cmd_list(_list_args(json=True))
+        assert json.loads(capsys.readouterr().out)[0]["recap"] is None
 
     def test_archived_todos_count_as_neither(self, tmp_path):
         _, ws = self._store(tmp_path)
@@ -174,14 +226,16 @@ class TestListJson:
 
     def test_empty_is_an_empty_array_not_a_message(self, tmp_path, capsys):
         store = Store(path=tmp_path / "data.json")
-        with patch("cli.Store", return_value=store):
+        with patch("cli.Store", return_value=store), \
+                patch("sessions.discover_sessions", return_value=[]):
             cmd_list(_list_args(json=True))
         assert json.loads(capsys.readouterr().out) == []
 
     def test_filters_still_apply(self, tmp_path, capsys):
         store, _ = self._store(tmp_path)
         store.add(Workstream(name="Personal thing", category=Category.PERSONAL))
-        with patch("cli.Store", return_value=store):
+        with patch("cli.Store", return_value=store), \
+                patch("sessions.discover_sessions", return_value=[]):
             cmd_list(_list_args(json=True, category="personal"))
         payload = json.loads(capsys.readouterr().out)
         assert [w["name"] for w in payload] == ["Personal thing"]

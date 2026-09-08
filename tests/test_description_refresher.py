@@ -10,6 +10,7 @@ from models import Category, Store, Workstream
 from sessions import ClaudeSession
 from description_refresher import (
     _ws_context_hash,
+    _ws_session_context,
     _load_cache,
     _save_cache,
     refresh_descriptions,
@@ -27,6 +28,35 @@ def _make_session(sid="sess-001", project="/home/kyle/dev/foo", last_activity="2
         last_activity=last_activity,
         message_count=5,
     )
+
+
+class TestRecapAsContext:
+    """Claude's recap says where a session went; its opening message only says
+    where it was aimed."""
+
+    def test_recap_is_used_over_the_opening_message(self, tmp_path):
+        ws = Workstream(name="ws")
+        s = _make_session()
+        s.recap = "Goal was the engine rebuild; done and committed."
+        s.first_message = "can you look at the parser"
+        ctx = _ws_session_context(ws, [s])
+        assert "Goal was the engine rebuild" in ctx
+        assert "(opened with)" not in ctx
+
+    def test_opening_message_is_the_fallback(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("description_refresher._extract_first_message",
+                            lambda s: "can you look at the parser")
+        ctx = _ws_session_context(Workstream(name="ws"), [_make_session()])
+        assert "(opened with) can you look at the parser" in ctx
+
+    def test_a_new_recap_reopens_the_workstream_for_evaluation(self):
+        """Without this the description keeps being re-derived from the
+        opening message even after Claude has summarised the session."""
+        ws = Workstream(name="ws")
+        s = _make_session()
+        before = _ws_context_hash(ws, [s])
+        s.recap = "Goal was the engine rebuild; done and committed."
+        assert _ws_context_hash(ws, [s]) != before
 
 
 @pytest.fixture
@@ -90,8 +120,8 @@ def test_skip_when_no_sessions(store, cache_dir):
     store.add(ws)
 
     with patch("description_refresher._call_llm") as mock_llm:
-        count = refresh_descriptions(store, [])
-        assert count == 0
+        updates = refresh_descriptions(store, [])
+        assert updates == []
         mock_llm.assert_not_called()
 
 
@@ -111,8 +141,8 @@ def test_skip_when_context_unchanged(store, cache_dir):
     }})
 
     with patch("description_refresher._call_llm") as mock_llm:
-        count = refresh_descriptions(store, sessions)
-        assert count == 0
+        updates = refresh_descriptions(store, sessions)
+        assert updates == []
         mock_llm.assert_not_called()
 
 
@@ -131,8 +161,8 @@ def test_skip_when_cooldown_active(store, cache_dir):
     }})
 
     with patch("description_refresher._call_llm") as mock_llm:
-        count = refresh_descriptions(store, sessions)
-        assert count == 0
+        updates = refresh_descriptions(store, sessions)
+        assert updates == []
         mock_llm.assert_not_called()
 
 
@@ -145,13 +175,14 @@ def test_refresh_updates_description(store, cache_dir):
 
     with patch("description_refresher._call_llm") as mock_llm:
         mock_llm.return_value = {ws.id: "new description of the work"}
-        count = refresh_descriptions(store, sessions)
+        updates = refresh_descriptions(store, sessions)
 
-    assert count == 1
-    # Reload from store to verify persistence
+    assert updates == [(ws.id, "new description of the work")]
+    # refresh_descriptions runs on a background thread and deliberately does
+    # not write — the caller applies these on the main thread. See its
+    # docstring for why a store.update() from here would race.
     store.load()
-    updated = store.get(ws.id)
-    assert updated.description == "new description of the work"
+    assert store.get(ws.id).description == "old desc"
 
 
 def test_refresh_keeps_description_on_keep(store, cache_dir):
@@ -163,9 +194,9 @@ def test_refresh_keeps_description_on_keep(store, cache_dir):
 
     with patch("description_refresher._call_llm") as mock_llm:
         mock_llm.return_value = {ws.id: "keep"}
-        count = refresh_descriptions(store, sessions)
+        updates = refresh_descriptions(store, sessions)
 
-    assert count == 0
+    assert updates == []
     store.load()
     assert store.get(ws.id).description == "good desc"
 
@@ -203,11 +234,11 @@ def test_refresh_after_cooldown_expired(store, cache_dir):
 
     with patch("description_refresher._call_llm") as mock_llm:
         mock_llm.return_value = {ws.id: "refreshed description"}
-        count = refresh_descriptions(store, sessions)
+        updates = refresh_descriptions(store, sessions)
 
-    assert count == 1
+    assert updates == [(ws.id, "refreshed description")]
     store.load()
-    assert store.get(ws.id).description == "refreshed description"
+    assert store.get(ws.id).description == "old"  # caller's job to apply
 
 
 def test_refresh_skips_archived(store, cache_dir):
@@ -218,8 +249,8 @@ def test_refresh_skips_archived(store, cache_dir):
     sessions = [_make_session("s1", "/home/kyle/dev/foo")]
 
     with patch("description_refresher._call_llm") as mock_llm:
-        count = refresh_descriptions(store, sessions)
-        assert count == 0
+        updates = refresh_descriptions(store, sessions)
+        assert updates == []
         mock_llm.assert_not_called()
 
 
@@ -232,8 +263,8 @@ def test_llm_failure_is_graceful(store, cache_dir):
 
     with patch("description_refresher._call_llm") as mock_llm:
         mock_llm.return_value = {}
-        count = refresh_descriptions(store, sessions)
+        updates = refresh_descriptions(store, sessions)
 
-    assert count == 0
+    assert updates == []
     store.load()
     assert store.get(ws.id).description == "original"

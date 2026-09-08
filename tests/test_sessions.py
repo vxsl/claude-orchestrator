@@ -87,6 +87,26 @@ class TestClaudeSessionDisplay:
                           title="orch:ul")
         assert s.display_name == "orch:ul"
 
+    def test_next_step_is_the_recaps_next_clause(self):
+        s = ClaudeSession(session_id="t", project_dir="d", project_path="/p",
+                          recap="Goal was X; done and committed. "
+                                "Next: restart orch and confirm.")
+        assert s.next_step == "restart orch and confirm."
+
+    def test_next_step_collapses_a_wrapped_clause(self):
+        s = ClaudeSession(session_id="t", project_dir="d", project_path="/p",
+                          recap="Goal was X.\nNext: push the branch\nand open its MR.")
+        assert s.next_step == "push the branch and open its MR."
+
+    def test_next_step_empty_when_the_recap_states_none(self):
+        s = ClaudeSession(session_id="t", project_dir="d", project_path="/p",
+                          recap="Cleaned up the metric code and reviewed the rest.")
+        assert s.next_step == ""
+
+    def test_next_step_empty_without_a_recap(self):
+        s = ClaudeSession(session_id="t", project_dir="d", project_path="/p")
+        assert s.next_step == ""
+
     def test_age_unknown(self):
         s = ClaudeSession(session_id="test", project_dir="d", project_path="/p")
         assert s.age == "unknown"
